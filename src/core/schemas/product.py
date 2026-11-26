@@ -6,9 +6,9 @@ All classes are re-exported from src.core.schemas for backward compatibility.
 
 from typing import Annotated, Any, ClassVar
 
+from adcp.types import BuyingMode, TargetingOverlay
 from adcp.types import ProductCard as LibraryProductCard
 from adcp.types import ProductCardDetailed as LibraryProductCardDetailed
-from adcp.types import TargetingOverlay
 
 # The legacy arm is imported from ``adcp.types.legacy``, the module that contains ONLY it.
 # See the note in ``_base.py`` on why the module and not the ``adcp.types`` facade. All five
@@ -24,7 +24,8 @@ from adcp.types.legacy import LegacyGetProductsResponse as LibraryGetProductsRes
 from adcp.types.legacy import LegacyPlacement as LibraryPlacement
 from adcp.types.legacy import LegacyProduct as LibraryProduct
 from adcp.types.legacy import LegacyProductFilters as LibraryFilters
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, ValidationError, model_validator
+from pydantic_core import InitErrorDetails, PydanticCustomError
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.schemas._base import (
@@ -220,10 +221,9 @@ class ProductMediaBuySupportRequirements(SchemaDependencies, LibraryProductMedia
 
 
 class GetProductsRequest(SchemaDependencies, BuyerRequest, LibraryGetProductsRequest):
-    """Extends library GetProductsWholesaleRequest (the pinned SDK: GetProductsRequest is a union alias).
+    """Extends the pinned library ``GetProductsRequest``.
 
-    Base class: GetProductsWholesaleRequest (brief optional, buying_mode='wholesale').
-    We widen buying_mode to str|None so callers aren't forced into a single mode.
+    ``buying_mode`` is the pinned enum made optional (#2710, D1).
 
     Library provides: account, brand, brief, buyer_campaign_ref, catalog,
     context, ext, fields, filters, pagination, property_list, refine.
@@ -257,14 +257,56 @@ class GetProductsRequest(SchemaDependencies, BuyerRequest, LibraryGetProductsReq
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # Widen buying_mode from Literal['wholesale'] to str|None (we accept any mode or none)
-    buying_mode: str | None = Field(  # type: ignore[assignment]
-        None,
-        description="Buyer intent: 'brief' (publisher curates) or 'wholesale' (buyer applies own audiences)",
+    # Optional, where the pin requires it: get-products-request.json says sellers receiving a
+    # pre-v3 request without buying_mode "SHOULD default to 'brief'", and a missing mode takes
+    # the brief path (#2710, D1). A mode that IS sent must be one the pinned enum lists (#2117).
+    # ``narrowed_from`` keeps the pin's own declaration, description included; only the default
+    # (and so ``required``) differs.
+    buying_mode: BuyingMode | None = narrowed_from(  # type: ignore[assignment]
+        LibraryGetProductsRequest, "buying_mode", default=None
     )
 
     # media-buy/get-products-request.json's own ``dependencies``.
     _SCHEMA_DEPENDENCIES = {"catalog": ("brand",), "if_pricing_version": ("if_wholesale_feed_version",)}
+
+    #: Per mode, the companion it requires and the ones it rules out. get-products-request.json
+    #: states these in field descriptions only ("Required when buying_mode is 'brief'. Must not
+    #: be provided when buying_mode is 'wholesale' or 'refine'"; refine "Only valid when
+    #: buying_mode is 'refine'"), and get_products.mdx makes refine required in refine mode.
+    _MODE_COMPANIONS: ClassVar[dict[BuyingMode, tuple[str | None, tuple[str, ...]]]] = {
+        BuyingMode.brief: ("brief", ("refine",)),
+        BuyingMode.wholesale: (None, ("brief", "refine")),
+        BuyingMode.refine: ("refine", ("brief",)),
+    }
+
+    @model_validator(mode="after")
+    def _enforce_mode_companions(self) -> "GetProductsRequest":
+        """Refuse a companion the sent ``buying_mode`` requires and lacks, or rules out and has.
+
+        A request without ``buying_mode`` is checked against nothing: the pin says a pre-v3
+        request without it "SHOULD default to 'brief'", and it keeps the brief path (#2710, D1).
+        Each refusal is located on the field, so the boundary answers INVALID_REQUEST naming it.
+        """
+        if self.buying_mode is None:
+            return self
+        required, ruled_out = self._MODE_COMPANIONS[self.buying_mode]
+        mode = self.buying_mode.value
+        errors = [
+            InitErrorDetails(
+                type=PydanticCustomError(
+                    "buying_mode_companion", "not allowed when buying_mode is {mode}", {"mode": mode}
+                ),
+                loc=(name,),
+                input=mode,
+            )
+            for name in ruled_out
+            if getattr(self, name) is not None
+        ]
+        if required is not None and getattr(self, required) is None:
+            errors.append(InitErrorDetails(type="missing", loc=(required,), input=mode))
+        if errors:
+            raise ValidationError.from_exception_data(type(self).__name__, errors)
+        return self
 
     # Narrowed to the local classes, each of which carries its schema's ``dependencies`` or
     # holds one that does.

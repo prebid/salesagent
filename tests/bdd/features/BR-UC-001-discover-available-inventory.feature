@@ -344,22 +344,33 @@ Feature: BR-UC-001 Discover Available Inventory
   Scenario Outline: Extension *d - buying mode constraint violation - <violation>
     Given the Buyer is authenticated with a valid principal_id
     When the Buyer Agent sends a get_products request with <invalid_fields>
-    Then the operation should fail with error code "VALIDATION_ERROR"
-    And the error code should be "VALIDATION_ERROR"
+    Then the operation should fail with error code "INVALID_REQUEST"
+    And the response error field is <field>
     And the error should include "suggestion" field
     # POST-F1: System state is unchanged
     # POST-F2: Buyer knows which constraint was violated
     # POST-F3: Buyer knows how to fix the request
+    # LOCAL CORRECTION (mirror upstream in adcp-req): the code lines asserted VALIDATION_ERROR,
+    # and the broken constraint was named only in an unread error_message column. The
+    # companion rules are written in get-products-request.json's field descriptions, so a
+    # request breaking one "violates schema constraints": INVALID_REQUEST in
+    # enums/error-code.json (VALIDATION_ERROR is for checks "beyond schema validation").
+    # The <field> column is the member the refusal names, graded on errors[0].field.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json pointer=/properties/brief
+
+    # LOCAL CORRECTION (mirror upstream in adcp-req): the "missing buying_mode (v3 client)" row is
+    # dropped: a request without buying_mode cannot be told apart from a pre-v3 one (this seller
+    # serves major 3 only, so a client that declares major 2 is refused VERSION_UNSUPPORTED),
+    # and the pin says such a request SHOULD default to 'brief'. This seller does (#2710 D1).
 
     Examples:
-      | violation                              | invalid_fields                                                    | error_message                                              |
-      | missing buying_mode (v3 client)        | no buying_mode field                                              | buying_mode is required                                    |
-      | brief mode without brief               | buying_mode=brief, no brief field                                 | brief is required when buying_mode is 'brief'              |
-      | wholesale mode with brief              | buying_mode=wholesale, brief present                              | brief must not be provided when buying_mode is 'wholesale' |
-      | wholesale mode with refine             | buying_mode=wholesale, refine present                             | refine must not be provided when buying_mode is 'wholesale'|
-      | refine mode without refine array       | buying_mode=refine, no refine array                               | refine array is required when buying_mode is 'refine'      |
-      | refine mode with brief                 | buying_mode=refine, brief present, refine present                 | brief must not be provided when buying_mode is 'refine'    |
-      | brief mode with refine                 | buying_mode=brief, brief present, refine present                  | refine must not be provided when buying_mode is 'brief'    |
+      | violation                              | invalid_fields                                                    | field       |
+      | brief mode without brief               | buying_mode=brief, no brief field                                 | brief       |
+      | wholesale mode with brief              | buying_mode=wholesale, brief present                              | brief       |
+      | wholesale mode with refine             | buying_mode=wholesale, refine present                             | refine      |
+      | refine mode without refine array       | buying_mode=refine, no refine array                               | refine      |
+      | refine mode with brief                 | buying_mode=refine, brief present, refine present                 | brief       |
+      | brief mode with refine                 | buying_mode=brief, brief present, refine present                  | refine      |
 
   @T-UC-001-inv-001 @invariant @BR-RULE-001 @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-001 INV-1 holds - require_auth policy with authenticated caller
@@ -845,24 +856,32 @@ Feature: BR-UC-001 Discover Available Inventory
     # ----------------------------------------------------------
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
+    # LOCAL CORRECTION (mirror upstream in adcp-req): "request proceeds to <mode> pipeline"
+    # named a routing no wire shows, and the error rows graded message text. A mode sent
+    # with its companions is "success"; a companion the mode requires and lacks, or rules
+    # out and carries, is INVALID_REQUEST naming that companion (get-products-request.json
+    # field descriptions, enums/error-code.json); refine=[] breaks refine's minItems.
+
     Examples: Valid partitions
       | partition         | outcome                          |
-      | brief_mode        | request proceeds to brief pipeline |
-      | wholesale_mode    | request proceeds to wholesale pipeline |
+      | brief_mode        | success                          |
+      | wholesale_mode    | success                          |
       | refine_mode       | request proceeds to refine pipeline |
       | pre_v3_default    | request defaults to brief pipeline |
 
     Examples: Invalid partitions
       | partition                    | outcome                                       |
       | missing_buying_mode          | error: buying_mode is required                 |
-      | unknown_value                | error: buying_mode must be one of enum values  |
-      | brief_mode_missing_brief     | error: brief required for brief mode           |
-      | brief_mode_with_refine       | error: refine prohibited for brief mode        |
-      | wholesale_with_brief         | error: brief prohibited for wholesale mode     |
-      | wholesale_with_refine        | error: refine prohibited for wholesale mode    |
-      | refine_mode_missing_refine   | error: refine required for refine mode         |
-      | refine_mode_empty_refine     | error: refine array must have >= 1 entry       |
-      | refine_mode_with_brief       | error: brief prohibited for refine mode        |
+      # LOCAL CORRECTION (mirror upstream in adcp-req): a mode outside the pinned enum is a
+      # schema violation, INVALID_REQUEST naming buying_mode; the row graded message text.
+      | unknown_value                | error INVALID_REQUEST on buying_mode with suggestion |
+      | brief_mode_missing_brief     | error INVALID_REQUEST on brief with suggestion |
+      | brief_mode_with_refine       | error INVALID_REQUEST on refine with suggestion |
+      | wholesale_with_brief         | error INVALID_REQUEST on brief with suggestion |
+      | wholesale_with_refine        | error INVALID_REQUEST on refine with suggestion |
+      | refine_mode_missing_refine   | error INVALID_REQUEST on refine with suggestion |
+      | refine_mode_empty_refine     | error INVALID_REQUEST on refine with suggestion |
+      | refine_mode_with_brief       | error INVALID_REQUEST on brief with suggestion |
 
   @T-UC-001-partition-brand-policy @partition @brand_manifest_policy @analysis-2026-03-09 @schema-v3.1
   Scenario Outline: brand_manifest_policy partition validation - <partition>
@@ -1188,21 +1207,41 @@ Feature: BR-UC-001 Discover Available Inventory
     # ----------------------------------------------------------
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
+    # LOCAL CORRECTION (mirror upstream in adcp-req): "valid" / "invalid" named no wire fact.
+    # A mode with its companions is "success"; a broken companion rule is INVALID_REQUEST
+    # naming the companion (get-products-request.json field descriptions, refine minItems).
+
     Examples: Boundary values
       | boundary_point                                                            | outcome   |
-      | buying_mode='brief' with brief present (valid brief mode)                 | valid     |
-      | buying_mode='wholesale' with no brief, no refine (valid wholesale mode)   | valid     |
+      | buying_mode='brief' with brief present (valid brief mode)                 | success |
+      | buying_mode='wholesale' with no brief, no refine (valid wholesale mode)   | success |
       | buying_mode='refine' with refine=[1 entry] (valid refine mode, minItems boundary) | valid |
       | buying_mode absent, pre-v3 client (defaulted to brief)                    | valid     |
       | buying_mode absent, v3 client (required field missing)                    | invalid   |
-      | buying_mode='auction' (unknown enum value)                                | invalid   |
-      | buying_mode='brief', brief absent (required companion missing)            | invalid   |
-      | buying_mode='brief', refine present (prohibited companion present)        | invalid   |
-      | buying_mode='wholesale', brief present (prohibited companion present)     | invalid   |
-      | buying_mode='wholesale', refine present (prohibited companion present)    | invalid   |
-      | buying_mode='refine', refine absent (required companion missing)          | invalid   |
-      | buying_mode='refine', refine=[] (minItems:1 boundary violation)           | invalid   |
-      | buying_mode='refine', brief present (prohibited companion present)        | invalid   |
+      # LOCAL CORRECTION (mirror upstream in adcp-req): "invalid" named no wire fact; a mode
+      # outside the pinned enum is INVALID_REQUEST naming buying_mode.
+      | buying_mode='auction' (unknown enum value)                                | error INVALID_REQUEST on buying_mode with suggestion |
+      | buying_mode='brief', brief absent (required companion missing)            | error INVALID_REQUEST on brief with suggestion |
+      | buying_mode='brief', refine present (prohibited companion present)        | error INVALID_REQUEST on refine with suggestion |
+      | buying_mode='wholesale', brief present (prohibited companion present)     | error INVALID_REQUEST on brief with suggestion |
+      | buying_mode='wholesale', refine present (prohibited companion present)    | error INVALID_REQUEST on refine with suggestion |
+      | buying_mode='refine', refine absent (required companion missing)          | error INVALID_REQUEST on refine with suggestion |
+      | buying_mode='refine', refine=[] (minItems:1 boundary violation)           | error INVALID_REQUEST on refine with suggestion |
+      | buying_mode='refine', brief present (prohibited companion present)        | error INVALID_REQUEST on brief with suggestion |
+
+  @T-UC-001-buying-mode-enum @invariant @BR-RULE-079 @error
+  Scenario: buying_mode outside the pinned enum is refused
+    Given the Buyer is authenticated with a valid principal_id
+    When the Buyer Agent sends a get_products request with buying_mode=auction, brief present
+    Then the operation should fail with error code "INVALID_REQUEST"
+    And the response error field is buying_mode
+    And the error should include "suggestion" field
+    # LOCALLY-ADDED beside the generated buying_mode partition and boundary outlines, which
+    # carry the same case as one row each but cannot be bound until their other rows have
+    # behaviour (#2710). get-products-request.json at v3.2.7 types buying_mode as the enum
+    # brief / wholesale / refine, so any other value "violates schema constraints":
+    # INVALID_REQUEST (enums/error-code.json), naming the field.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json pointer=/properties/buying_mode
 
   @T-UC-001-boundary-brand-policy @boundary @brand_manifest_policy @analysis-2026-03-09 @schema-v3.1
   Scenario Outline: brand_manifest_policy boundary validation - <boundary_point>

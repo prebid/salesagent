@@ -108,9 +108,13 @@ def given_no_search_criterion(ctx: dict) -> None:
     Asserts the absence on the BUILT document rather than trusting the overrides: a
     sibling Given that added a brief would silently turn this scenario into a success
     and the error assertions would then grade nothing.
+
+    ``buying_mode`` goes too: the baseline's "brief" mode requires a brief, so keeping it
+    would make this a SCHEMA refusal (INVALID_REQUEST on brief) before the seller's own
+    check runs. Without a mode the request keeps the pre-v3 default (#2710).
     """
     overrides = ctx.setdefault(_OVERRIDES, {})
-    overrides.update(brief=OMIT, brand=OMIT, filters=OMIT)
+    overrides.update(buying_mode=OMIT, brief=OMIT, brand=OMIT, filters=OMIT)
     payload = GetProductsRequestFactory.payload(**overrides)
     assert not any(k in payload for k in ("brief", "brand", "filters")), (
         f"the scenario claims no search criterion, but the request still carries one: {payload!r}"
