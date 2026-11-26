@@ -79,6 +79,40 @@ Feature: UC-003 update_media_buy — one request is one atomic mutation (local)
     Then get_media_buys reports package "pkg_001" with budget 6000
     And get_media_buys reports media buy "mb_existing" at a revision greater than 7
 
+  # The same boundary across a package's library creatives and another package's inline
+  # creatives (update_media_buy.mdx @ v3.2.7 line 29: "No package, assignment, library
+  # creative, or MediaBuy field from the rejected update may change", the same unit read
+  # the other way). Every package's creatives are applied before any budget, in request
+  # order, so pkg_001's assignment replacement is written before pkg_002's inline creatives
+  # are synced. That sync reads the seller's format catalogue, and a catalogue read on a
+  # session of its own ended the update's transaction, rolling back pkg_001's replacement
+  # while the rest of the request was stored (#2647). The budget is what moves the
+  # revision: an assignment write alone does not.
+  @T-UC-003-local-atomic-assignments-and-inline-creatives @post-s1 @post-s2
+  Scenario: one update that replaces a package's library creatives and uploads another package's inline creatives stores both
+    Given the tenant is configured for auto-approval
+    And the media buy "mb_existing" is in "active" status with packages "pkg_001" and "pkg_002"
+    And package "pkg_001" holds a budget of 5000 and is not paused
+    And package "pkg_002" holds a budget of 5000 and is not paused
+    And an earlier update assigned library creative "cr_library_before" to package "pkg_001"
+    And the Buyer's library holds the approved display creative "cr_library_after"
+    And the media buy "mb_existing" is at revision 7
+    And a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    And the request updates these packages, in order:
+    | package_id | field                | value            |
+    | pkg_001    | creative_assignments | cr_library_after |
+    | pkg_001    | budget               | 6000             |
+    | pkg_002    | creatives            | inline-cr-002    |
+    When the Buyer Agent sends the update_media_buy request
+    Then the response status should be "completed"
+    When the Buyer Agent reads media buy "mb_existing" back with get_media_buys
+    Then the package "pkg_001" should report creative approvals for exactly ["cr_library_after"]
+    And the package "pkg_002" should report creative approvals for exactly ["inline-cr-002"]
+    And get_media_buys reports package "pkg_001" with budget 6000
+    And get_media_buys reports media buy "mb_existing" at a revision greater than 7
+
   # update_media_buy.mdx @ v3.2.7, Compatibility transaction boundary: "The seller validates
   # the complete post-update state before applying any field. [...] No package, assignment,
   # library creative, or MediaBuy field from the rejected update may change." pkg_001's pause

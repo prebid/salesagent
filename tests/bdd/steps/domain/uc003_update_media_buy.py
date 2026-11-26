@@ -535,7 +535,8 @@ def given_request_no_updatable_fields(ctx: dict) -> None:
 #: T-UC-003-ext-w is xfailed (#1417). canceled and start_time are package-update.json
 #: properties (adcp v3.2.7), sent as written: start_time's literal "asap" is the value the
 #: package-scope row exists to show refused (``not: {const: asap}``), so it is not resolved
-#: as a date token.
+#: as a date token. creative_assignments and creatives take a comma-separated list of creative
+#: ids: library creatives assigned at weight 1, and inline display creatives, respectively.
 _SUPPORTED_PACKAGE_FIELDS = frozenset(
     {
         "package_id",
@@ -547,6 +548,8 @@ _SUPPORTED_PACKAGE_FIELDS = frozenset(
         "canceled",
         "start_time",
         "pacing",
+        "creative_assignments",
+        "creatives",
     }
 )
 
@@ -566,6 +569,10 @@ def _set_package_field(pkg_update: dict[str, Any], field: str, value: str) -> No
         pkg_update[field] = as_bool(value)
     elif field in ("targeting_overlay", "catalogs"):
         pkg_update[field] = json.loads(value)
+    elif field == "creative_assignments":
+        pkg_update[field] = [{"creative_id": cid.strip(), "weight": 1.0} for cid in value.split(",")]
+    elif field == "creatives":
+        pkg_update[field] = [_inline_creative_payload(cid.strip(), "Inline Creative") for cid in value.split(",")]
     else:
         pkg_update[field] = value
 
@@ -1709,6 +1716,13 @@ def given_earlier_library_assignment(ctx: dict, creative_id: str, package_id: st
     _approved_display_creative(ctx, creative_id)
     ctx["env"]._commit_factory_data()
     _send_earlier_update(ctx, package_id, creative_assignments=[{"creative_id": creative_id, "weight": 1.0}])
+
+
+@given(parsers.parse('the Buyer\'s library holds the approved display creative "{creative_id}"'))
+def given_library_display_creative(ctx: dict, creative_id: str) -> None:
+    """An approved display creative in the buyer's library, assigned to no package yet."""
+    _approved_display_creative(ctx, creative_id)
+    ctx["env"]._commit_factory_data()  # noqa: SLF001 — the harness's commit seam, as the earlier-update Givens use
 
 
 @given(parsers.parse('an earlier update gave package "{package_id}" the catalogs {catalogs}'))
