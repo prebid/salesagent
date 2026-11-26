@@ -31,7 +31,6 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from typing import Any
-from urllib.parse import urlsplit
 
 from flask import Flask, abort, current_app, request
 
@@ -52,21 +51,13 @@ def csrf_exempt[F: Callable[..., Any]](view: F) -> F:
     return view
 
 
-def _request_origin() -> str:
+def request_origin() -> str:
     """The origin the request was addressed to, as ``scheme://host[:port]``.
 
     In production ``ProxyFix`` has already applied ``X-Forwarded-Proto`` and
     ``X-Forwarded-Host``, so this is the public origin the browser used.
     """
     return f"{request.scheme}://{request.host}".lower()
-
-
-def _normalised_origin(value: str) -> str | None:
-    """``scheme://host[:port]`` of an ``Origin`` header, or ``None`` if it isn't one."""
-    parts = urlsplit(value.strip())
-    if not parts.scheme or not parts.netloc:
-        return None
-    return f"{parts.scheme}://{parts.netloc}".lower()
 
 
 def is_same_origin_request() -> bool:
@@ -78,7 +69,7 @@ def is_same_origin_request() -> bool:
     origin = request.headers.get("Origin")
     if origin is not None:
         # "null" (sandboxed frames, some redirects) is never this origin.
-        return _normalised_origin(origin) == _request_origin()
+        return origin.strip().lower() == request_origin()
 
     return True
 

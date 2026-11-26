@@ -31,6 +31,7 @@ from src.core.domain_config import get_super_admin_domain
 from src.core.http_utils import authorized_domain
 from src.core.json_validators import checked_authorized_domain
 from src.core.operator_errors import SuperAdminDomainRefused, TenantNotFound
+from src.core.schemas.advertising_policy import AdvertisingPolicy
 
 AuthorizedListColumn = Literal["authorized_domains", "authorized_emails"]
 AddOutcome = Literal["added", "duplicate", "missing_tenant"]
@@ -118,6 +119,15 @@ class TenantConfigRepository(Repository):
             setattr(tenant, column, value)
         tenant.updated_at = datetime.now(UTC)
         return True
+
+    def save_advertising_policy(self, policy: AdvertisingPolicy) -> bool:
+        """Store *policy* as the tenant's complete advertising policy, the one ``get_products`` enforces.
+
+        The one writer of the column: the admin Policy page and the tenant management API
+        both save through here. Returns ``False`` when the tenant does not exist; the caller
+        owns the transaction and commits.
+        """
+        return self.update_tenant(advertising_policy=policy)
 
     # ------------------------------------------------------------------
     # Authorized-list mutation (atomic)
