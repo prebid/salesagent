@@ -111,15 +111,18 @@ class CreativeRepository(SessionEffectsMixin, Repository):
     # Single Creative lookups
     # ------------------------------------------------------------------
 
-    def get_by_id(self, creative_id: str, principal_id: str) -> Creative | None:
-        """Get a creative by its ID and principal within the tenant."""
-        return self._session.scalars(
-            select(Creative).where(
-                Creative.tenant_id == self._tenant_id,
-                Creative.principal_id == principal_id,
-                Creative.creative_id == creative_id,
-            )
-        ).first()
+    def get_by_id(self, creative_id: str, principal_id: str, *, lock: bool = False) -> Creative | None:
+        """Get a creative by its ID and principal within the tenant.
+
+        With *lock*, the row is read ``FOR UPDATE``: another writer of it waits until this
+        unit ends, and this read waits for one that holds it, then sees what it committed.
+        """
+        stmt = select(Creative).where(
+            Creative.tenant_id == self._tenant_id,
+            Creative.principal_id == principal_id,
+            Creative.creative_id == creative_id,
+        )
+        return self._session.scalars(stmt.with_for_update() if lock else stmt).first()
 
     def get_by_ids(self, creative_ids: list[str], principal_id: str) -> list[Creative]:
         """Get multiple creatives by their IDs for a principal within the tenant.

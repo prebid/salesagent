@@ -281,6 +281,9 @@ class LocalOrigin:
     chunk_size: int = 64 * 1024
     headers: tuple[tuple[str, str], ...] = ()
     sequence: list[OriginResponse] = field(default_factory=list)
+    #: Run on the origin's thread once a request is recorded, before it is answered: what
+    #: happens elsewhere while the caller waits on this origin.
+    on_request: Callable[[], None] | None = None
 
     @property
     def base_url(self) -> str:
@@ -460,6 +463,7 @@ class LocalOrigin:
         self.total_bytes = 0
         self.headers = ()
         self.sequence.clear()
+        self.on_request = None
 
 
 class ProgrammableOriginHandler(BaseHTTPRequestHandler):
@@ -478,6 +482,8 @@ class ProgrammableOriginHandler(BaseHTTPRequestHandler):
         body = self.rfile.read(content_length) if content_length else b""
 
         origin.record(self.command, self.path, self.headers, body)
+        if origin.on_request is not None:
+            origin.on_request()
 
         answer = origin.next_answer()
         if answer.delay_seconds:

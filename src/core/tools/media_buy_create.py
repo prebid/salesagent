@@ -1673,10 +1673,12 @@ def push_creative_to_existing_buy(
                 return CreativePushFailure(f"Creative {creative_id} is not trafficked: {refusal}", refusal)
             # Grouped while the unit is open: its rows detach when it commits.
             package_assignments = _package_assignments_by_creative(matching, packages, carriers)[creative_id]
+            revision = creative.updated_at
 
         # The html5 bundle is fetched from the buyer's host with nothing open, as the approval
         # fetches it, so no session waits on a counterparty (#2652). The read and the write are
-        # two units for that reason; the creative is read again for the write.
+        # two units for that reason; the write reads the creative again, and pushes it only if
+        # it is still the revision read here.
         try:
             carriers = run_async_in_sync_context(_with_html5_bundles(adapter, carriers, ()))
         except AdCPSalesAgentError as refusal:
@@ -1686,6 +1688,7 @@ def push_creative_to_existing_buy(
             tenant_id=tenant_id,
             principal_id=buy_principal_id,
             creative_id=creative_id,
+            revision=revision,
             media_buy_id=media_buy_id,
             platform_order_id=platform_order_id,
             package_assignments=[
@@ -1708,24 +1711,38 @@ def _upload_to_live_order(
     tenant_id: str,
     principal_id: str,
     creative_id: str,
+    revision: datetime | None,
     media_buy_id: str,
     platform_order_id: str,
     package_assignments: list[PackageAssignmentDict],
 ) -> CreativePushFailure | None:
     """The write phase of :func:`push_creative_to_existing_buy`: upload the creative to the booked order.
 
-    Opens its own unit, reads the creative again (the push's read unit has closed), uploads it
-    on *package_assignments* through *upload* (the adapter's ``add_creative_assets``), and
-    persists the adapter's enrichment. Returns None on success,
-    and the failure otherwise.
+    Opens its own unit and reads the creative again, locked, since the push's read unit has
+    closed. It pushes only the revision the read unit built *package_assignments* from: a
+    creative whose ``updated_at`` is no longer *revision*, or that left review's cleared
+    states, was revised or re-reviewed in between (a buyer's resync stamps ``updated_at`` and
+    returns changed content to ``pending_review``), and is withheld. docs/creative/
+    task-reference/sync_creatives.mdx (v3.2.7), Creative revisions: "A revised creative under
+    re-review is ineligible for delivery like any other pending_review creative until it
+    re-reaches approved". Otherwise it uploads the creative on *package_assignments* through
+    *upload* (the adapter's ``add_creative_assets``) and persists the adapter's enrichment.
+
+    The lock is held through the upload and the enrichment write, so a resync of the creative
+    waits for this unit instead of being overwritten by it. The unit writes no other row, so it
+    waits on no lock while it holds this one. Returns None on success, and the failure otherwise.
     """
     from src.core.database.repositories.uow import AdminCreativeUoW
 
     with AdminCreativeUoW(tenant_id) as uow:
         assert uow.creatives is not None
-        creative = uow.creatives.get_by_id(creative_id, principal_id)
+        creative = uow.creatives.get_by_id(creative_id, principal_id, lock=True)
         if not creative:
             return CreativePushFailure(f"Creative {creative_id} not found")
+        if creative.updated_at != revision or creative.status not in CLEARED_TO_SERVE:
+            return CreativePushFailure(
+                f"Creative {creative_id} changed while it was pushed (status={creative.status}); not trafficked"
+            )
         asset = _build_adapter_asset_from_creative(creative, package_assignments)
 
         try:

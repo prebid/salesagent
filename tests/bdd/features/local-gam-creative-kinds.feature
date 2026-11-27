@@ -458,6 +458,21 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
     And Google Ad Manager created that creative at size 300x250
     And Google Ad Manager associated that creative with line items "9000002"
 
+  # The push reads the approved creative, fetches its bundle with nothing open, then uploads in
+  # a second unit. A revision the buyer commits while the bundle is fetched returns the creative
+  # to review (docs/creative/task-reference/sync_creatives.mdx, v3.2.7, Creative revisions: "A
+  # revised creative under re-review is ineligible for delivery like any other pending_review
+  # creative until it re-reaches approved"), so the push of the approved revision is withheld,
+  # not uploaded beside the revision under review.
+  @T-UC-002-local-gam-creative-retroactive-push-revised-during-fetch @extension
+  Scenario: An html5 creative the buyer revises while the seller fetches its bundle is not pushed to the booked line item
+    Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '{"format_options": [{"format_kind": "html5", "format_option_id": "html5_300x250", "params": {"width": 300, "height": 250}}]}'
+    And the buyer holds a buy booked in Google Ad Manager as order "8000003" in status "active" whose package "pkg-live" is line item "9000003" accepting 300x250
+    And the buyer's creative "cr-revised-bundle", under review, an html5 creative bundled by the buyer's bundle host, which the buyer revises while the seller fetches it, with backup image "https://cdn.example.com/backup.png", is assigned to package "pkg-live" of the live media buy
+    When the seller approves creative "cr-revised-bundle"
+    Then the buyer's revision of creative "cr-revised-bundle" committed while the seller fetched its bundle
+    And Google Ad Manager created no creative
+
   # F5 (PR #2582 review): the line item's placeholders are narrowed by a second reader of the
   # stored row, which takes the first sized asset; for html5 that is the backup image, 320x50, a
   # size the option does not declare (formats/canonical/html5.json: the bundle is what is

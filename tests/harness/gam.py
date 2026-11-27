@@ -16,7 +16,7 @@ be made into declares that, with its own reason.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from googleads.ad_manager import AdManagerClient as _AD_MANAGER_CLIENT
@@ -166,7 +166,28 @@ def _hold_on_the_configured_network(self: Any, gam_id: str, image_url: str) -> s
 _BUNDLE_HOST = "pub-psatest.com"
 
 
-def _serve_from_the_publisher_origin(self: Any, bundle: bytes | None) -> str:
+def _serve_from_a_loopback_origin(self: Any, bundle: bytes | None, on_fetch: Callable[[], None] | None) -> str:
+    """``serve_html5_bundle`` in this process: a loopback origin over TLS serves *bundle*'s bytes as the zip.
+
+    With no *bundle* the host does not answer: it closes every connection before a status line.
+    Bytes that are no zip archive (an HTML page) are answered 200 all the same. *on_fetch* runs
+    on the origin's thread when the seller's fetch arrives, before it is answered.
+    """
+    from tests.helpers.tls_material import start_tls_origin
+
+    self._reach_the_bundle_host()
+    origin = start_tls_origin(self._guard, "html5 bundle origin")
+    origin.on_request = on_fetch
+    if bundle is None:
+        origin.close_without_responding()
+    else:
+        origin.respond_with(200, body=bundle, content_type="application/zip")
+    return f"{origin.base_url}/bundle.zip"
+
+
+def _serve_from_the_publisher_origin(
+    self: Any, bundle: bytes | None, on_fetch: Callable[[], None] | None = None
+) -> str:
     """``serve_html5_bundle`` on e2e: the bundle is a file ``publisher-origin`` serves, at a per-scenario path.
 
     ``publisher-origin`` serves a dialer only the files written under that dialer's address,
@@ -175,6 +196,11 @@ def _serve_from_the_publisher_origin(self: Any, bundle: bytes | None) -> str:
     bytes: an HTML page written there is answered 200 like a zip. With no *bundle* nothing is
     written, and the path answers 404 (``publisher_authorization.py``): the seller fetches no
     bundle there either.
+
+    ``publisher-origin`` runs nothing when a file is fetched, so a bundle with *on_fetch* is
+    served from this process's loopback origin instead. Only a fetch this process makes, the
+    seller's approval, reaches it; the live server's fetch on create does not, and its scenario
+    then sees no *on_fetch* run.
     """
     import shutil
     import socket
@@ -182,6 +208,8 @@ def _serve_from_the_publisher_origin(self: Any, bundle: bytes | None) -> str:
 
     from tests.harness.publisher_authorization import PUBLISHER_FILES_DIR
 
+    if on_fetch is not None:
+        return _serve_from_a_loopback_origin(self, bundle, on_fetch)
     self._reach_the_bundle_host()
     key = uuid.uuid4().hex
     runner_files = PUBLISHER_FILES_DIR / socket.gethostbyname(socket.gethostname())
@@ -639,22 +667,32 @@ class GamSellerMixin:
         self._guard("html5 bundle egress hatch", hatch.stop)
 
     @realize_e2e(_serve_from_the_publisher_origin)
-    def serve_html5_bundle(self, bundle: bytes | None) -> str:
-        """Serve *bundle*'s bytes, whatever they are, as the zip from a loopback origin over TLS; return its URL.
+    def serve_html5_bundle(self, bundle: bytes | None, on_fetch: Callable[[], None] | None = None) -> str:
+        """Serve *bundle* from the buyer's bundle host, which the seller fetches it from; return its URL.
 
-        The buyer's bundle host, which the seller fetches the bundle from (``_reach_the_bundle_host``).
-        With no *bundle* the host does not answer: it closes every connection before a status line.
-        Bytes that are no zip archive (an HTML page) are answered 200 all the same.
+        In this process the host is a loopback origin (:func:`_serve_from_a_loopback_origin`).
+        *on_fetch* runs while the seller's fetch waits on the host.
         """
-        from tests.helpers.tls_material import start_tls_origin
+        return _serve_from_a_loopback_origin(self, bundle, on_fetch)
 
-        self._reach_the_bundle_host()
-        origin = start_tls_origin(self._guard, "html5 bundle origin")
-        if bundle is None:
-            origin.close_without_responding()
-        else:
-            origin.respond_with(200, body=bundle, content_type="application/zip")
-        return f"{origin.base_url}/bundle.zip"
+    def commit_buyer_revision(self, creative_id: str, principal_id: str) -> None:
+        """Commit what the buyer's revision of *creative_id* commits: the row back under review, its revision stamped.
+
+        A content-bearing resync stamps ``updated_at`` and returns the creative to
+        ``pending_review`` (``_update_existing_creative``: "an accepted content-bearing
+        unversioned update enters the ordinary review lifecycle"). Committed in a unit of its
+        own, as the buyer's sync is, on whichever thread calls this.
+        """
+        from datetime import UTC, datetime
+
+        from src.core.database.repositories.uow import AdminCreativeUoW
+
+        with AdminCreativeUoW(self._tenant_id) as uow:
+            assert uow.creatives is not None
+            creative = uow.creatives.get_by_id(creative_id, principal_id)
+            assert creative is not None, f"creative {creative_id} is not stored for principal {principal_id}"
+            creative.status = "pending_review"
+            creative.updated_at = datetime.now(UTC)
 
     @realize_e2e(_a_network_asset_is_held)
     def gam_asset_is_the_bundle(self, asset: Mapping[str, Any], bundle: bytes) -> bool:

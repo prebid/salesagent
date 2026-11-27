@@ -319,9 +319,12 @@ def sync_creatives(
                 with creative_repo.savepoint():
                     # Check if creative already exists (always check for upsert/patch behavior)
                     # SECURITY: Must filter by principal_id to prevent cross-principal modification
+                    # Locked: a push uploading the creative holds the row until its enrichment
+                    # is written, so this update starts from what the push wrote, never from a
+                    # copy read before it (_upload_to_live_order).
                     existing_creative = None
                     if creative.creative_id:
-                        existing_creative = creative_repo.get_by_id(creative.creative_id, principal_id)
+                        existing_creative = creative_repo.get_by_id(creative.creative_id, principal_id, lock=True)
 
                     # The identity this item names, read ONCE: it is what the row stores and
                     # what an operator's review record names (``label``), whichever arm the

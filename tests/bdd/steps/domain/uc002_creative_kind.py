@@ -13,6 +13,7 @@ JSON on every transport.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Any
 
 from pytest_bdd import given, parsers, then
@@ -420,7 +421,8 @@ def given_live_booked_buy(
         r'(?:a display_tag carrying the tag URL "(?P<tag_url>[^"]+)"'
         r'|a (?P<width>\d+)x(?P<height>\d+) image showing "(?P<image_url>[^"]+)"'
         r'(?: in the reference format "(?P<unserved_format>[^"]+)", which the creative agent does not serve)?'
-        r'|an html5 creative bundled by the buyer\'s bundle host, with backup image "(?P<backup_url>[^"]+)"), '
+        r"|an html5 creative bundled by the buyer's bundle host"
+        r'(?P<revised>, which the buyer revises while the seller fetches it)?, with backup image "(?P<backup_url>[^"]+)"), '
         r'is assigned to (?:packages? "(?P<package_ids>[^"]+)" of the live media buy|the media buy awaiting approval)$'
     )
 )
@@ -433,6 +435,7 @@ def given_creative_assigned_to_buy(
     height: str | None,
     image_url: str | None,
     unserved_format: str | None,
+    revised: str | None,
     backup_url: str | None,
     package_ids: str | None,
 ) -> None:
@@ -442,7 +445,9 @@ def given_creative_assigned_to_buy(
     to the buy before the product's option changed (approved). Either way it was never pushed:
     the seller's approval of the creative, or of the buy, is what pushes it. An html5 bundle's
     zip is served by the buyer's bundle host (``serve_html5_bundle``), and its bytes are kept
-    to compare with what the ad server receives.
+    to compare with what the ad server receives. A bundle the buyer revises while the seller
+    fetches it has the buyer's revision committed while the fetch waits on the host
+    (:func:`_revision_on_fetch`).
 
     An image in a reference format the creative agent does not serve was stored when the agent
     still declared it as an image format, and the product still lists that reference. Neither
@@ -460,7 +465,8 @@ def given_creative_assigned_to_buy(
         kind, assets = "display_tag", build_assets(display_tag_spec("tag_url", url=tag_url))
     elif backup_url is not None:
         ctx["html5_bundle"] = html5_zip_bundle()
-        bundle_url = env.serve_html5_bundle(ctx["html5_bundle"])
+        on_fetch = None if revised is None else _revision_on_fetch(ctx, creative_id)
+        bundle_url = env.serve_html5_bundle(ctx["html5_bundle"], on_fetch=on_fetch)
         kind, assets = "html5", build_assets(*html5_bundle_specs(bundle_url, backup_url=backup_url))
     else:
         kind, assets = "image", _image_assets(int(str(width)), int(str(height)), str(image_url))
@@ -480,6 +486,28 @@ def given_creative_assigned_to_buy(
     for package_id in packages:
         CreativeAssignmentFactory(creative=creative, media_buy=media_buy, package_id=package_id)
     env._commit_factory_data()
+
+
+def _revision_on_fetch(ctx: dict, creative_id: str) -> Callable[[], None]:
+    """What runs when the seller fetches *creative_id*'s bundle: the buyer's revision of it commits.
+
+    Recorded in ``ctx["revised_during_fetch"]`` once committed, so a Then can tell a revision
+    that committed from a fetch that never arrived or a revision that failed.
+    """
+    principal_id = ctx["principal"].principal_id
+
+    def revise() -> None:
+        ctx["env"].commit_buyer_revision(creative_id, principal_id)
+        ctx.setdefault("revised_during_fetch", []).append(creative_id)
+
+    return revise
+
+
+@then(parsers.parse('the buyer\'s revision of creative "{creative_id}" committed while the seller fetched its bundle'))
+def then_revision_committed_during_fetch(ctx: dict, creative_id: str) -> None:
+    """The seller's fetch of the bundle reached the buyer's host, and the revision it set off committed."""
+    revised = ctx.get("revised_during_fetch", [])
+    assert revised == [creative_id], f"expected one committed revision of {creative_id}; committed: {revised}"
 
 
 @given(
