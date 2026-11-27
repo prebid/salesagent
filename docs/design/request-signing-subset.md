@@ -25,7 +25,11 @@ paths that can produce an `AgentResolution`:
 | path | how the location is established |
 |---|---|
 | the brand.json walk (`_resolution_for`) | the SDK resolves a `jwks_uri`; a resolution naming anything but the derived location is REFUSED with `request_signature_jwks_untrusted` and a cooldown, so the counterparty's operator gets a diagnosable answer rather than a key that never matches |
-| the counterparty registry (`build_registry_resolution`) | the location is DERIVED, not declared, so a config entry cannot name one the walk would refuse |
+| the test counterparty's accepted JWKS (`build_pinned_resolution`) | the location is DERIVED from the counterparty's `agent_url`, not declared, so the `signed_requests_grading` record cannot name one the walk would refuse |
+
+The counterparty itself is chosen by the keyid of the `sig1` label, the one the checklist
+verifies (security.mdx L1209): the bearer's principal when a bearer resolved one, otherwise
+the principal the tenant onboarded that keyid for (`principal_signing_keyids`).
 
 **What follows, and is the whole point:** `identity.key_origins` is not consulted. The map
 exists to declare where keys live when location can vary, and here it cannot — with one
@@ -61,7 +65,7 @@ what keeps the `required_when` trigger list from firing on itself.
 **Deleted:** `_expected_key_origins`; the `expected_key_origins=` argument;
 `_BrandJsonJwksResolver` (it existed only to engage the SDK's step-7 key-origin check, which
 needs the map we no longer pass — keeping it bought a `UserWarning` on every verified
-request); `CounterpartyRegistryEntry.jwks_uri` and `.key_origin` (both derivable);
+request); a declared `jwks_uri` and `key_origin` on pinned keys (both derivable);
 `tests/unit/test_expected_key_origins.py`;
 `test_request_signature_discovery.py::TestKeyOriginMissingIsGraded`.
 
@@ -259,6 +263,36 @@ from the pin first, and the vectors already agree with them.
 The half that landed with the narrowings: nothing now accepts a posture we do not enforce, so
 `to_verifier_capability` is no longer a lossy projection — every bucket a tenant can declare
 is a field `VerifierCapability` carries, and `bucket_for` compensates for nothing.
+
+## 4. A signed request names its tenant by the `Host` alone — LANDED
+
+A request names its tenant by the `Host` or by `x-adcp-tenant`; a signed one (it carries
+`Signature` or `Signature-Input`, with or without a bearer) by the `Host` only
+(`resolved_identity._detect_tenant`). The tenant scopes the keyid lookup and the posture, and
+the header is not a covered component, so a party holding an undelivered signed request could
+change only the header and have it verified in any other tenant that onboarded the same keyid.
+security.mdx L1172-1174 forbids exactly that: a verifier "MUST NOT attribute identity,
+authorization, account selection, resource access, or task ownership on the basis of ...
+unsigned session-continuity or routing metadata". The `Host` is covered, through `@authority`
+(L1162). Covering the header instead is not available: "Signers MUST NOT cover additional
+headers without coordination" (L1168).
+
+A signed request whose `Host` names no tenant gets the refusal every request naming no seller
+gets, `TENANT_UNDEFINED` from `_addressed_tenant`. The spec does not decide between that and
+`request_signature_key_unknown`; L1629 gives the latter to a keyid missing from the signer's
+JWKS, which presupposes a tenant whose onboarding records were searched. One refusal path was
+kept. Graded by `@T-UC-006-local-signing-tenant-by-header`.
+
+**Cost to the in-process vector run.** Four vectors dial an IPv6-literal `Host` (positive
+011, 012, 015 and negative 031). No tenant can be served at a dotless host with a signing
+posture, because its derived identity is `http` and a non-empty bucket obliges an `https`
+`brand_json_url`, so those requests name no seller and are refused before the checklist. They
+were reachable only through the header. `test_signing_conformance_vectors.py` now grades them
+at the verifier seam (`test_ipv6_authority_vector_meets_its_expected_outcome_at_the_verifier`):
+the production capture records the vector's wire request, and `verify_inbound_signature` gets
+the conformance tenant's context and bearer principal, so each vector still meets its own
+`expected_outcome` with real crypto. The storyboard runner already reports all four
+ungradable over HTTP.
 
 ## What did not move, and why it looks like it should have
 

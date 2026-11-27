@@ -691,7 +691,7 @@ def _drain_grading_replay_rows() -> None:
 
     THE TWO PROTOCOL RUNS SHARE ONE DEPLOYMENT AND ONE REPLAY STORE, and vector
     ``020-rate-abuse`` deliberately drives ``test-ed25519-2026`` to its per-keyid cap. The
-    ``replay_ttl_overrides`` clamp drains those rows between VECTORS, which is what it was
+    test counterparty's ``replay_ttl_seconds`` clamp drains those rows between VECTORS, which is what it was
     sized for; it does not drain them between PROTOCOL RUNS, because the second run starts
     seconds after the first ends rather than a TTL later.
 
@@ -707,12 +707,12 @@ def _drain_grading_replay_rows() -> None:
     """
     from sqlalchemy import delete
 
-    from scripts.setup.storyboard_signing import counterparty_registry
+    from scripts.setup.storyboard_signing import counterparty_kids
     from src.core.database.database_session import get_db_session
     from src.core.database.models import ReplayNonce
 
     with get_db_session() as session:
-        session.execute(delete(ReplayNonce).where(ReplayNonce.keyid.in_(sorted(counterparty_registry()))))
+        session.execute(delete(ReplayNonce).where(ReplayNonce.keyid.in_(counterparty_kids())))
         session.commit()
 
 

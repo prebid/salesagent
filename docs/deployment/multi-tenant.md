@@ -17,7 +17,9 @@ A request names its tenant in one of two ways:
    declares one, and the column refuses `NULL`. The comparison ignores the port and the letter case,
    so `acme.example.com`, `ACME.example.com`, and `acme.example.com:8443` all reach the same tenant.
 2. An `x-adcp-tenant` header carrying the tenant id, for a caller that addresses a tenant directly
-   rather than through the host it is served at. The test suites and the CLI use it.
+   rather than through the host it is served at. The test suites and the CLI use it. A request
+   signed under RFC 9421 (it carries `Signature` or `Signature-Input`) can't use it: the header is
+   not covered by the signature, so a signed request names its tenant by the `Host` alone.
 
 The application refuses a request that names neither, with `CONFIGURATION_ERROR` and recovery
 `terminal`. The deployment cannot tell which seller the request is for, so it answers instead of

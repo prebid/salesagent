@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# The storyboard agent's signed-requests test-kit configuration, exported.
+# The storyboard agent's one signed-requests test-kit setting, exported: the
+# pre-revoked keyid (ADCP_SIGNING_REVOKED_KEYIDS, vector 017).
 #
 # SOURCE THIS, never execute it: the whole point is to put variables into the
 # environment `docker compose` interpolates from. Both bring-up paths call it, for
@@ -8,20 +9,17 @@
 #   scripts/test-stack.sh cmd_up       (host stack)
 #   run_all_tests.sh                   (in-network stack)
 #
-# It must run at BRING-UP, not with the other storyboard seeding in tox: these are
-# settings the server process reads from its own environment at boot
+# It must run at BRING-UP, not with the other storyboard seeding in tox: this is a
+# setting the server process reads from its own environment at boot
 # (src/core/config.py SigningSettings), so a value produced after the container
-# started reaches nothing. The tenant half of the same contract IS seeded later, from
-# [testenv:storyboard], because the database can be written at any time.
+# started reaches nothing. The database half of the same contract (the test
+# counterparty's grading record and its onboarded keyids) IS seeded later, from [testenv:storyboard], because the
+# database can be written at any time.
 #
-# Values are DERIVED by scripts/setup/storyboard_signing.py from the vendored
-# conformance keys and the test-kit's own thresholds — see that module for what each
-# one satisfies.
+# The value is DERIVED by scripts/setup/storyboard_signing.py from the test kit.
 #
-# A failure here is FATAL rather than silent. Without these the storyboard agent
-# trusts no counterparty, and every signed vector is refused at checklist step 7 with
-# request_signature_key_unknown — 20+ graded checks failing for a reason that looks
-# like a verifier bug and is actually a missing export.
+# A failure here is FATAL rather than silent. Without it vector 017's revoked key is
+# not refused at checklist step 9, and the vector grades as a verifier defect.
 
 _sb_root="$( cd "$( dirname "${BASH_SOURCE[0]}" )/../.." && pwd )"
 

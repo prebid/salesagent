@@ -88,10 +88,10 @@ graded by a POSITIVE observable rather than by the absence of a rejection.
         and ``_map_agent_resolver_error`` reads back out — exactly this code — after
         which ``_FailedDiscoveryJwksResolver`` (:174) raises at checklist step 7.
         Tier 3 is the SECOND consumer of the same document and is simply not reached
-        on this input — the walk fails first. The registry branch cannot produce this
-        code at all: with no ``agent_url`` there is no walk, and an unmatched keyid
-        yields the generic ``request_signature_key_unknown``. So a regression that
-        resolved this key from config instead of from the published trust root —
+        on this input — the walk fails first. The pinned branch cannot produce this
+        code at all: the test counterparty's accepted JWKS replaces the walk, and this
+        principal carries no grading record. So a regression that resolved this key from pinned
+        keys instead of from the published trust root —
         which would otherwise yield a byte-identical 2xx AND an identical metric
         increment — is visible here and nowhere else in this module.]
   Every 401 is read with ``rejection_code()`` (``tests/helpers/signing.py``), which
@@ -100,10 +100,10 @@ graded by a POSITIVE observable rather than by the absence of a rejection.
 
 **DOES NOT PROVE.**
 
-* The REGISTRY key-trust source (``settings.signing.counterparty_registry``). It is
-  consulted only when ``agent_url`` is falsy (``_resolution_for`` :511-545), i.e.
-  exactly when no trust root was walked, and that branch reaches no Tier 3 — so it
-  cannot satisfy this module's title and is not graded here.
+* The PINNED key-trust source (the test counterparty's ``signed_requests_grading`` record).
+  It applies only to the test-kit counterparty, which walks no trust root and
+  reaches no Tier 3 — so it cannot satisfy this module's title and is not graded here
+  (the request-signing BDD scenarios grade it).
 * The MCP and A2A naming surfaces for the accepted leg. The refused-leg sibling
   grades MCP; the accepted leg's novel evidence is the checklist-pass branch, which
   is transport-independent once the operation is named — all three transports reach
@@ -147,24 +147,14 @@ before/after window spanning two legs reads 2 and a window around either can be
 satisfied by the other. Each leg below passes an explicit distinct ``key_id=``, and the
 label match filters on it — that uniqueness is what makes "exactly 1" a real claim.
 
-**Two traps in ``signed_headers``, both closed below.**
-
-1. It signs ``f"{origin}{path}"``. ``src.core.signing.capture._target_uri`` (:226-249)
-   rebuilds the authority from the ``Host`` header nginx forwards verbatim and the
-   scheme from ``X-Forwarded-Proto``, and ``_run_verifier`` passes that reconstructed
-   ``exchange.url`` to the SDK rather than letting ``verify_starlette_request`` derive
-   its own. So the signed origin must be the real TLS netloc INCLUDING the port. Hence
-   the ``origin=`` argument.
-2. ``request_headers`` unconditionally injects ``x-adcp-tenant: "sig_tenant"``, an
-   in-process tenant id that does not exist in the e2e database. ``_detect_tenant``
-   (``src/core/resolved_identity.py`` :230) resolves the ``Host`` header FIRST and only
-   falls back to that hint, so this tenant does resolve either way here — but a header
-   asserting a DIFFERENT tenant than the one being addressed is a lie inside the signed
-   byte range, and one reordering of that ladder away from loading the wrong tenant,
-   reading an empty posture, collapsing the bucket to ``none`` and taking the
-   :333-335 UNVERIFIED pass-through: a green 2xx with zero verification, this module's
-   own disease. Overridden with ``extra={"x-adcp-tenant": _TENANT_ID}``
-   (``headers.update(extra)`` wins the merge).
+**One trap in ``signed_headers``, closed below.** It signs ``f"{origin}{path}"``.
+``src.core.signing.capture._target_uri`` (:226-249) rebuilds the authority from the
+``Host`` header nginx forwards verbatim and the scheme from ``X-Forwarded-Proto``, and
+``_run_verifier`` passes that reconstructed ``exchange.url`` to the SDK rather than letting
+``verify_starlette_request`` derive its own. So the signed origin must be the real TLS netloc
+INCLUDING the port. Hence the ``origin=`` argument, whose authority is also the ``Host`` sent:
+a signed request names its tenant by the ``Host`` alone (``_detect_tenant``), and the tenant
+is provisioned at that netloc.
 
 **Host-routing collision.** ``ix_tenants_virtual_host`` is UNIQUE and every signing
 e2e module provisions at the SAME TLS netloc. A distinct ``_TENANT_ID``/``_SLUG``
@@ -184,9 +174,9 @@ go red when the thing it grades is broken. Four mutations must be run by hand an
 observed results recorded HERE, replacing this paragraph, before the leg is called
 green:
 
-1. revert the ``x-adcp-tenant`` override on the accepted leg -> the metric delta must
-   go to 0 WHILE the three controls still pass. That is the proof the metric is
-   load-bearing rather than redundant with them;
+1. sign the accepted leg under a kid the counterparty does not publish -> the metric
+   delta must go to 0 WHILE the three controls still pass. That is the proof the metric
+   is load-bearing rather than redundant with them;
 2. point leg (iv) at ``brand.json`` instead of ``brand-unlisted.json`` -> it must stop
    401ing;
 3. un-tamper leg (ii) -> it must stop 401ing;
@@ -376,13 +366,9 @@ async def test_a_signed_request_from_a_walked_counterparty_is_accepted_and_count
             # Content-Type is signed as well as sent: signed_headers hands the SAME
             # header mapping to the signer and to the caller, so the signature covers
             # the bytes the server reads AND the header that tells it how to read them.
-            #
-            # Trap 2 (module docstring): request_headers injects the in-process
-            # "sig_tenant" hint, which names a tenant that does not exist in this
-            # database. Override it with the tenant actually being addressed.
-            extra={"x-adcp-tenant": _TENANT_ID, "Content-Type": "application/json"},
+            extra={"Content-Type": "application/json"},
             key_id=kid,
-            # Trap 1: the signature covers @target-uri, and capture._target_uri rebuilds
+            # The trap: the signature covers @target-uri, and capture._target_uri rebuilds
             # the authority from the Host header nginx forwards verbatim — port included.
             origin=signed_origin,
         )
@@ -499,7 +485,7 @@ async def test_a_signed_request_from_a_walked_counterparty_is_accepted_and_count
             # _map_agent_resolver_error reads back out as the code below, after which
             # _FailedDiscoveryJwksResolver raises at checklist
             # step 7. Every other assertion in this module stays green if the key were
-            # resolved from the registry instead — including the metric delta, which would
+            # resolved from pinned keys instead — including the metric delta, which would
             # be byte-identical.
             unlisted = await client.post(
                 _ADCP_PATH, content=_REQUEST_BODY, headers=_sign(unlisted_key, _UNLISTED_TOKEN, _UNLISTED_KID)

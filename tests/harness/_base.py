@@ -864,6 +864,10 @@ class BaseTestEnv:
         # override that omits the declaration leaks ``signed`` into the body —
         # that defect has happened; the declaration is the contract.
         self._signed_dispatch: SignatureRealization = False
+        # Whether ``wire_request`` names this env's tenant by ``x-adcp-tenant`` on the
+        # dialed origin's own ``Host`` instead of by the tenant's ``Host``. Set only by
+        # :meth:`name_tenant_by_header`, for the scenario that grades the header.
+        self._names_tenant_by_header = False
 
     # -- Transport mode -----------------------------------------------------
 
@@ -1383,6 +1387,46 @@ class BaseTestEnv:
         if self.__dict__.get("_signing") is None:
             self.__dict__["_signing"] = build_signing_capability(self)
         return self.__dict__["_signing"]
+
+    def name_tenant_by_header(self) -> None:
+        """Address this env's tenant by ``x-adcp-tenant`` on a ``Host`` that names no tenant.
+
+        Every other wire request names the tenant by its ``Host`` (``wire_request``). This
+        one dials the transport's default origin (``testserver`` in process, the stack's
+        own address over e2e) and carries the tenant id in the header, so the request
+        differs from the ``Host``-routed one by how it names its seller and nothing else.
+        """
+        self._names_tenant_by_header = True
+
+    def onboard_signing_keyid(self) -> None:
+        """Onboard this env's signing key for its own principal (the keyid -> agent mapping)."""
+        from tests.harness.signing_capability import onboard_signing_keyid
+
+        onboard_signing_keyid(self)
+
+    def onboard_buyer_agent_key_for_another_counterparty(self, tenant: Any) -> None:
+        """Onboard this env's signing key for a different principal of *tenant*."""
+        from tests.harness.signing_capability import onboard_buyer_agent_key_for_another_counterparty
+
+        onboard_buyer_agent_key_for_another_counterparty(self, tenant)
+
+    def attach_agent_url(self, agent_url: str | None) -> str:
+        """Record *agent_url* (``None``: no agent URL) on this env's principal; return its token."""
+        from tests.harness.signing_capability import attach_agent_url
+
+        return attach_agent_url(self, agent_url)
+
+    def declare_signed_requests_grading(self, *, replay_cap: int | None = None) -> None:
+        """Make this env's principal the signed-requests test counterparty accepting this env's keys."""
+        from tests.harness.signing_capability import declare_signed_requests_grading
+
+        declare_signed_requests_grading(self, replay_cap=replay_cap)
+
+    def declare_another_signed_requests_test_counterparty(self, *, replay_cap: int) -> None:
+        """Make a different principal of this env's tenant the test counterparty, with its own key."""
+        from tests.harness.signing_capability import declare_another_signed_requests_test_counterparty
+
+        declare_another_signed_requests_test_counterparty(self, replay_cap=replay_cap)
 
     def repoint_signing_agent_url(self, agent_url: str) -> Any:
         """Move this buyer's PUBLISHED ``agent_url`` to *agent_url*, keeping its key.
@@ -2592,15 +2636,15 @@ class BaseTestEnv:
            wire carries and is refused as ``request_signature_digest_mismatch`` —
            a fixture bug wearing a verifier bug's clothes, the trap
            ``tests/helpers/signing.py`` warns about in its own docstring.
-        2. **Once the env CAN sign, EVERY request carries the credential and the
-           tenant hint, signed or not.** Otherwise ``signed=False`` is not a
-           control: with no ``x-adcp-tenant`` the middleware never resolves the
-           tenant whose posture was declared, falls to the ``none`` bucket and
-           answers 200 — which reads as "unsigned was accepted" when in truth the
-           verifier was never engaged. Measured on the first spike run, where it
-           produced exactly that false green.
+        2. **Once the env CAN sign, EVERY request carries the credential and names
+           the env's tenant by its ``Host``, signed or not.** A signed request names
+           its tenant by the ``Host`` alone (``resolved_identity._detect_tenant``:
+           the signature covers ``@authority``, and ``x-adcp-tenant`` is unsigned
+           routing metadata, security.mdx L1172-1174), so the request dials the
+           tenant's own host and signs for it. The unsigned control does the same,
+           or ``signed=False`` would differ from ``True`` by more than the signature.
         3. **One identity, on the spec-canonical header** (owner decision D3/D4), and
-           ONE tenant hint — the env's own, set here so no leg can send a different one.
+           ONE tenant — the env's own, set here so no leg can name a different one.
            ``signed_headers``/``request_headers`` put the capability's token in
            ``Authorization: Bearer`` and set no ``x-adcp-auth``: the alias appears
            nowhere in the pinned 3.1 schemas, and the pinned SDK calls Bearer "the
@@ -2617,15 +2661,16 @@ class BaseTestEnv:
         signature was computed over is byte-identical to the one sent — rule 1
         applied to headers instead of to the body.
 
-        *origin* is the scheme+authority the signature's ``@target-uri`` covers,
-        and defaults to the in-process ASGI client's ``http://testserver`` — right
-        for the three in-process legs and wrong for the one that leaves the
-        process. The capture's ``_target_uri`` (``src/core/signing/capture.py``) rebuilds
-        the authority from the ``Host`` header the proxy forwards VERBATIM, so an e2e
-        caller must pass the real origin INCLUDING THE PORT or the signature
-        covers a different target-uri than the verifier reconstructs and is
-        refused as ``request_signature_invalid`` — a fixture bug wearing a
-        verifier bug's clothes.
+        *origin* is the origin the leg dials, and defaults to the in-process ASGI
+        client's ``http://testserver`` — right for the three in-process legs and
+        wrong for the one that leaves the process. Its host is replaced by the
+        tenant's (rule 2); its scheme and port are kept, because the capture's
+        ``_target_uri`` (``src/core/signing/capture.py``) rebuilds the authority from
+        the ``Host`` header the proxy forwards VERBATIM, so an e2e caller must pass
+        the real origin INCLUDING THE PORT or the signature covers a different
+        target-uri than the verifier reconstructs and is refused as
+        ``request_signature_invalid`` — a fixture bug wearing a verifier bug's
+        clothes.
 
         *credentialed* exists for exactly one case, and it is a case rule 2 does
         not cover: grading the REFUSAL. security.mdx :1269 says an unsigned
@@ -2639,8 +2684,8 @@ class BaseTestEnv:
 
         *signed* is a REALIZATION, not a flag
         (:data:`tests.helpers.signing.SIGNATURE_REALIZATIONS`). This is the one place
-        any leg signs, so it is the one place the four realizations are spelled out,
-        and every leg gets all four for free:
+        any leg signs, so it is the one place the seven realizations are spelled out,
+        and every leg gets all seven for free:
 
         * ``False`` — no signature headers at all;
         * ``True`` — a real signature over exactly the bytes returned;
@@ -2656,7 +2701,10 @@ class BaseTestEnv:
         * ``"unknown_key"`` — a real signature over exactly the bytes returned, under a
           ``keyid`` the trust root does not publish;
         * ``"wrong_key"`` — a signature over exactly the bytes returned, under the published
-          ``keyid``, by a private key other than the published one.
+          ``keyid``, by a private key other than the published one;
+        * ``"extra_label"`` — the ``True`` signature with
+          :func:`~tests.helpers.signing.prepend_unverified_label` applied: a second,
+          unverified label ahead of ``sig1`` naming a key nobody onboarded.
 
         Rule 2 above holds for all of them: the credential and the tenant hint are carried
         whether or not a signature is, so a realization is the ONLY variable.
@@ -2667,13 +2715,15 @@ class BaseTestEnv:
         import json as _json
 
         from tests.helpers.signing import (
+            ASGI_CLIENT_ORIGIN,
             MALFORMED_SIGNATURE_HEADERS,
-            WIRE_ORIGIN,
             keypair_for,
+            prepend_unverified_label,
             realization,
             request_headers,
             signed_headers,
             tampered_signing_body,
+            tenant_origin,
         )
 
         # Re-checked here rather than trusted from ``call_via``: this seam is also
@@ -2686,29 +2736,35 @@ class BaseTestEnv:
         # empty JSON document: it must sign — and send — zero bytes, or the
         # content-digest covers a ``{}`` the wire does not carry.
         raw = b"" if body is None else _json.dumps(body).encode()
-        # The tenant hint names THIS env's tenant on every leg. ``request_headers``
-        # otherwise injects the module-level ``sig_tenant``, which is a lie for any
-        # env whose tenant comes from its own Givens — and a lie inside the signed
-        # byte range, one ladder reordering away from collapsing the posture bucket
-        # to ``none`` and answering an unverified pass-through with a 200. Stated
-        # once here rather than per-leg, so no leg can forget it (``RestE2EDispatcher``
-        # used to carry its own copy).
-        merged = {"Content-Type": "application/json", "x-adcp-tenant": self._tenant_id, **(extra or {})}
+        # WHERE the request goes names THIS env's tenant, on every leg: the tenant's own
+        # host on the dialed origin's scheme and port, sent as the ``Host`` and signed as
+        # ``@authority``. Stated once here rather than per-leg, so no leg can name a
+        # different tenant (``RestE2EDispatcher`` used to carry its own copy).
+        # ``name_tenant_by_header`` keeps the dialed origin and names the tenant by
+        # ``x-adcp-tenant`` instead.
+        address: dict[str, Any] = {"origin": origin or ASGI_CLIENT_ORIGIN}
+        if self._names_tenant_by_header:
+            address["tenant_header"] = self._tenant_id
+        else:
+            host = self._tenant_virtual_host()
+            assert host is not None, f"tenant {self._tenant_id!r} has no row to read its virtual_host from"
+            address["origin"] = tenant_origin(address["origin"], host)
+        merged = {"Content-Type": "application/json", **(extra or {})}
         if signed is False:
-            return raw, request_headers(token, merged)
+            return raw, request_headers(token, merged, **address)
         if signed == "malformed":
             # No real signature is computed at all: the shape under test is headers
             # that cannot be PARSED, and a parseable one beside them would be graded
             # instead. Merged onto the same base every other realization carries, so
             # the malformed request differs from the True control by the signature
             # headers alone.
-            return raw, {**request_headers(token, merged), **MALFORMED_SIGNATURE_HEADERS}
+            return raw, {**request_headers(token, merged, **address), **MALFORMED_SIGNATURE_HEADERS}
         # ``"tampered"`` signs over a MUTATED COPY and sends the caller's own bytes;
         # ``True`` signs over exactly what it sends. One call, because everything else
         # about the two — key, kid, origin, method, header set — must be identical or
         # the mismatch would not be attributable to the body.
         signed_over = tampered_signing_body(raw) if signed == "tampered" else raw
-        return raw, signed_headers(
+        headers = signed_headers(
             keypair_for(f"{capability.key_id}-other")[0] if signed == "wrong_key" else capability.private_key,
             token,
             # ``@method`` is inside the signature base, so a signature made as
@@ -2718,8 +2774,11 @@ class BaseTestEnv:
             body=signed_over,
             extra=merged,
             key_id=f"{capability.key_id}-unpublished" if signed == "unknown_key" else capability.key_id,
-            origin=origin or WIRE_ORIGIN,
+            **address,
         )
+        # ``"extra_label"`` is the ``True`` signature plus one unverified label ahead of it,
+        # so the two differ by that label alone.
+        return raw, prepend_unverified_label(headers) if signed == "extra_label" else headers
 
     def call_rest(self, **kwargs: Any) -> Any:
         """Call the REST endpoint and parse the response.

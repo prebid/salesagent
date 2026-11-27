@@ -149,19 +149,19 @@ import pytest
 from adcp.signing.canonical import build_signature_base, parse_signature_input_header, split_structured_field
 from adcp.signing.digest import content_digest_matches
 
+from src.core.http_utils import hostname_of
 from tests.factories import PrincipalFactory, TenantFactory
 from tests.factories.account import seed_default_account
 from tests.factories.principal import plaintext_token_for
 from tests.harness._base import BareIntegrationEnv
 from tests.helpers.app_state import preserved_global_app_state
-from tests.helpers.asgi_wire import WireResponse, build_scope, send_wire_request
+from tests.helpers.asgi_wire import WireResponse, build_scope, send_asgi_messages, send_wire_request, whole_body
 from tests.helpers.metrics import assert_counter_delta
 from tests.helpers.signing import (
     COUNTERPARTY_AGENT_URL,
     FAILED_METRIC,
     VERIFIED_METRIC,
     VERIFIER_RESULT,
-    counterparty_key,
     declared_posture,
     rejection_code,
     signing_config,
@@ -197,16 +197,10 @@ pytestmark = [pytest.mark.requires_db, pytest.mark.xdist_group("adcp_replay")]
 #: (see the ``xdist_group`` note above). The counterparty it signs AS is the
 #: shared one — same ``agent_url``, same key origin, same jwks_uri.
 _TENANT_ID = "b3_conformance_tenant"
-_AGENT_HOST = "b3-conformance-seller.example.com"
 _PRINCIPAL_ID = "b3_conformance_principal"
 
-#: Above the kit's ``min_replay_ttl_seconds: 10`` and ``max_interval_seconds: 5``,
-#: and above the vectors' 60s signature window, so ``016``'s two submissions cannot
-#: both be accepted because the first entry expired between them.
-_REPLAY_TTL_SECONDS = 70.0
-
-#: ``negative/020``'s cap, scoped through the PRODUCTION config knob so it is
-#: process-local and cannot reach another xdist worker.
+#: ``negative/020``'s cap, carried by this test principal's grading record so it reaches
+#: no other counterparty and no other xdist worker.
 _RATE_ABUSE_CAP = 3
 
 _ED25519_KEYID = "test-ed25519-2026"
@@ -216,6 +210,33 @@ _VECTORS = load_signing_vectors()
 _NEGATIVES = sorted(vid for vid, plan in TRANSPLANT.items() if plan.outcome is Outcome.REJECTED)
 _POSITIVES = sorted(vid for vid, plan in TRANSPLANT.items() if plan.outcome is Outcome.ACCEPTED)
 
+
+def _wire_host(vector_id: str) -> str:
+    """The ``Host`` this vector puts on the wire: its own where it ships one, else its URL's."""
+    shipped = _VECTORS[vector_id]["request"]["headers"]
+    return next(
+        (value for name, value in shipped.items() if name.lower() == "host"),
+        urlsplit(TRANSPLANT[vector_id].wire_url).netloc,
+    )
+
+
+#: The host the seller is served at when the vector's own host cannot be a tenant's.
+_SELLER_HOST = "seller.example.com"
+
+#: The rows whose ``Host`` is an IPv6 literal, GRADED AT THE VERIFIER SEAM rather than
+#: through the router. A signed request names its tenant by the ``Host`` alone, and this
+#: seller cannot declare a signing posture at an IPv6 literal: ``canonical_agent_url``
+#: derives ``http`` for a dotless host, and every one of these vectors declares a non-empty
+#: ``required_for``, which obliges an ``https`` ``identity.brand_json_url``. Through the
+#: router the request would name no seller and never reach the checklist. So
+#: :func:`test_ipv6_authority_vector_meets_its_expected_outcome_at_the_verifier` captures the
+#: vector's wire request with the production capture and hands it to
+#: ``verify_inbound_signature`` with the conformance tenant (served at :data:`_SELLER_HOST`)
+#: and its bearer principal: real crypto, the vector's own ``expected_outcome``. The
+#: storyboard runner skips all four over HTTP (031 ``transport_ungradable``, the positives
+#: ``mcp_mode_flattens_url_edges``).
+_VERIFIER_SEAM_ROWS = sorted(vid for vid in TRANSPLANT if "." not in hostname_of(_wire_host(vid)))
+
 #: The rows whose wire URL names no ``TOOLS[...].rest`` binding, so the router 404s them
 #: and ``_resolve_identity`` — and therefore the verifier — never runs. NOT dropped:
 #: :func:`test_unrouted_rows_never_reach_the_verifier` drives the four positives among
@@ -223,8 +244,8 @@ _POSITIVES = sorted(vid for vid, plan in TRANSPLANT.items() if plan.outcome is O
 #: the live route table by :func:`test_every_row_names_the_route_the_plan_claims`. See
 #: the module docstring for where each one's obligation is graded instead.
 _UNROUTED = sorted(vid for vid, plan in TRANSPLANT.items() if not plan.route_named)
-_DRIVEN_POSITIVES = [vid for vid in _POSITIVES if TRANSPLANT[vid].route_named]
-_DRIVEN_NEGATIVES = [vid for vid in _NEGATIVES if TRANSPLANT[vid].route_named]
+_DRIVEN_POSITIVES = [vid for vid in _POSITIVES if TRANSPLANT[vid].route_named and vid not in _VERIFIER_SEAM_ROWS]
+_DRIVEN_NEGATIVES = [vid for vid in _NEGATIVES if TRANSPLANT[vid].route_named and vid not in _VERIFIER_SEAM_ROWS]
 #: The vector whose SUBJECT is a posture a 3.2 verifier cannot hold, so it describes an
 #: agent this seller is not.
 #:
@@ -358,16 +379,15 @@ def _wire_headers(vector_id: str, token: str | None) -> list[tuple[str, str]]:
     ships its own (``positive/015``, ``negative/031``) that line IS the graded input and goes
     on the wire alone: synthesising a second would turn ``031``'s malformed authority into a
     repeated-``Host`` refusal, a different check.
-    ``x-adcp-tenant`` names the tenant for the IPv6 and IDN authorities that name
-    none. NEITHER is a covered component in ANY vector, so neither can disturb a
-    signature; the same is true of ``Authorization``, which is why the credential can
-    be added without re-signing anything on its account.
+    That ``Host`` is also what names the tenant (:func:`_wire_host`): a signed request
+    names its tenant by the ``Host`` alone, so the tenant is seeded at the host the vector
+    dials. ``Authorization`` is not a covered component in ANY vector, which is why the
+    credential can be added without re-signing anything on its account.
     """
-    plan = TRANSPLANT[vector_id]
     shipped = _VECTORS[vector_id]["request"]["headers"]
-    headers: list[tuple[str, str]] = [("x-adcp-tenant", _TENANT_ID)]
+    headers: list[tuple[str, str]] = []
     if not any(name.lower() == "host" for name in shipped):
-        headers.insert(0, ("host", urlsplit(plan.wire_url).netloc))
+        headers.append(("host", _wire_host(vector_id)))
     if token is not None:
         headers.append(("Authorization", f"Bearer {token}"))
     headers.extend(shipped.items())
@@ -483,7 +503,7 @@ def conformance_app() -> Iterator[tuple[Any, Any]]:
         yield app, client.portal
 
 
-def _seed_tenant() -> Any:
+def _seed_tenant(vector_id: str) -> Any:
     """The SELLER, which exists whether or not this vector's caller authenticated.
 
     Seeded for every vector since #1291 D1, because the posture is now a REAL stored
@@ -491,12 +511,16 @@ def _seed_tenant() -> Any:
     caller carries no principal token (``negative/001``, ``/027``, ``/028``) still need a
     seller to have declared one.
 
-    ``virtual_host`` is DOTTED so ``canonical_agent_url`` derives ``https://``: a
-    non-empty bucket obliges an ``identity.brand_json_url`` that the pin fixes to
-    ``^https://``, so on a single-label host the declaration would be refused and every
-    vector would grade the refusal path instead of the checklist.
+    Served at the host the vector dials (:func:`_wire_host`, port aside), because a signed
+    request names its tenant by the ``Host`` alone; at :data:`_SELLER_HOST` for the rows
+    whose host no tenant can hold (:data:`_VERIFIER_SEAM_ROWS`). The host is DOTTED, so
+    ``canonical_agent_url`` derives ``https://``: a non-empty bucket obliges an
+    ``identity.brand_json_url`` that the pin fixes to ``^https://``, so on a single-label
+    host the declaration would be refused and the vector would grade the refusal path
+    instead of the checklist.
     """
-    return TenantFactory(tenant_id=_TENANT_ID, subdomain="seller", virtual_host=_AGENT_HOST)
+    host = _SELLER_HOST if vector_id in _VERIFIER_SEAM_ROWS else hostname_of(_wire_host(vector_id))
+    return TenantFactory(tenant_id=_TENANT_ID, subdomain="seller", virtual_host=host)
 
 
 def _account_natural_keys_named_by_vectors() -> set[tuple[str, str | None, bool | None]]:
@@ -547,7 +571,7 @@ def _seed_accounts_named_by_vectors(principal_id: str) -> None:
         )
 
 
-def _seed_principal(tenant: Any) -> str:
+def _seed_principal(tenant: Any, plan: VectorPlan, vector: dict[str, Any]) -> str:
     """The counterparty's Principal, carrying the ``agent_url`` key resolution reads.
 
     ``_resolve_identity`` resolves this row from the Bearer value and hands
@@ -560,8 +584,22 @@ def _seed_principal(tenant: Any) -> str:
     plaintext, so ``plaintext_token_for`` is what both the factory and this caller
     compute — the same derivation ``tests/utils/database_helpers.py`` and the harness
     use, never a second one written here.
+
+    The principal is the ``signed_requests`` test counterparty: its record carries the
+    vector's JWKS, the TTL clamp the kit's keyids need, and, for ``020``, the cap the vector
+    drives the keyid to.
     """
-    PrincipalFactory(tenant=tenant, principal_id=_PRINCIPAL_ID, agent_url=COUNTERPARTY_AGENT_URL)
+    from scripts.setup.storyboard_signing import GRADING_REPLAY_TTL_SECONDS
+    from src.core.signing.grading import SignedRequestsGrading
+
+    grading = SignedRequestsGrading(
+        jwks=_jwks_for(vector),
+        replay_cap=_RATE_ABUSE_CAP if plan.harness_state is HarnessState.CAP_OVERRIDE else None,
+        replay_ttl_seconds=GRADING_REPLAY_TTL_SECONDS,
+    )
+    PrincipalFactory(
+        tenant=tenant, principal_id=_PRINCIPAL_ID, agent_url=COUNTERPARTY_AGENT_URL, signed_requests_grading=grading
+    )
     return plaintext_token_for(_PRINCIPAL_ID)
 
 
@@ -607,11 +645,12 @@ def _forget(env: BareIntegrationEnv, pairs: list[tuple[str, str]]) -> None:
 
 def _claim(env: BareIntegrationEnv, pairs: list[tuple[str, str]]) -> None:
     """Claim these exact ``(keyid, nonce)`` rows through the production repository."""
+    from scripts.setup.storyboard_signing import GRADING_REPLAY_TTL_SECONDS
     from src.core.database.repositories.replay_nonce import ReplayNonceRepository
 
     repository = ReplayNonceRepository(env.get_session())
     for keyid, nonce in pairs:
-        assert not repository.claim(keyid, nonce, _REPLAY_TTL_SECONDS), (
+        assert not repository.claim(keyid, nonce, GRADING_REPLAY_TTL_SECONDS), (
             f"cap-filler nonce {nonce!r} was already live for {keyid!r} — the fixture would be "
             "measuring a leftover row rather than the cap it just established"
         )
@@ -652,12 +691,12 @@ def _frozen_verifier_clock(reference_now: float) -> Iterator[None]:
 
 @contextmanager
 def _config_for(plan: VectorPlan) -> Iterator[None]:
-    """Establish the case's pre-state through PRODUCTION config seams only.
+    """Establish the case's deployment pre-state through the PRODUCTION config seam.
 
-    ``017``'s revocation and ``020``'s cap are CONFIG on this deployment, not
-    white-box injection: ``SigningSettings.revoked_keyids``'s own docstring says "Set to
-    ``test-revoked-2026`` on the conformance-grading deployment", and
-    ``per_keyid_cap_overrides`` says "test-kit counterparties -> 100".
+    ``017``'s revocation is CONFIG on this deployment, not white-box injection:
+    ``SigningSettings.revoked_keyids``'s own docstring says "Set to ``test-revoked-2026``
+    on the conformance-grading deployment". ``020``'s cap is the grading record's
+    (:func:`_seed_principal`).
 
     Through :func:`tests.helpers.signing.signing_config`, which substitutes the whole
     ``SigningSettings`` the verifier reads per request off ``get_settings().signing``
@@ -667,10 +706,6 @@ def _config_for(plan: VectorPlan) -> Iterator[None]:
     """
     with signing_config(
         revoked_keyids="test-revoked-2026" if plan.harness_state is HarnessState.REVOKED_KID else "",
-        per_keyid_cap_overrides=(
-            {_ED25519_KEYID: _RATE_ABUSE_CAP} if plan.harness_state is HarnessState.CAP_OVERRIDE else {}
-        ),
-        replay_ttl_overrides={_ED25519_KEYID: _REPLAY_TTL_SECONDS},
     ):
         yield
 
@@ -688,13 +723,13 @@ def _vector_case(vector_id: str) -> Iterator[tuple[BareIntegrationEnv, str | Non
         # with N placeholder entries"). The keyid stays ``test-ed25519-2026`` — renaming
         # it would mutate a graded ``Signature-Input`` byte and need the JWKS reseeded
         # under a new kid. These pairs are deleted by exact match afterwards, and the
-        # cap itself is a process-local config override, so neither can leak to a
+        # cap itself is this test principal's grading record, so neither can leak to a
         # sibling module on another worker.
         pairs = pairs + [(_ED25519_KEYID, f"b3-cap-{index:02d}") for index in range(_RATE_ABUSE_CAP)]
 
     with BareIntegrationEnv(tenant_id=_TENANT_ID, principal_id=_PRINCIPAL_ID) as env:
-        tenant = _seed_tenant()
-        token = _seed_principal(tenant) if plan.credential is Credential.PRINCIPAL_TOKEN else None
+        tenant = _seed_tenant(vector_id)
+        token = _seed_principal(tenant, plan, vector) if plan.credential is Credential.PRINCIPAL_TOKEN else None
         if token is not None:
             # Tied to the principal because the grant has to name one. The three vectors
             # that present no token resolve no principal and so could not reach account
@@ -706,7 +741,6 @@ def _vector_case(vector_id: str) -> Iterator[tuple[BareIntegrationEnv, str | Non
         try:
             with (
                 declared_posture(tenant_id=_TENANT_ID, **_advertisable(vector["verifier_capability"])),
-                counterparty_key(_jwks_for(vector)),
                 _config_for(plan),
                 _frozen_verifier_clock(vector["reference_now"]),
                 verifier_spy() as calls,
@@ -921,8 +955,9 @@ def test_every_vector_is_accounted_for() -> None:
     three disjoint groups, and each group names the test that drives it:
     :func:`test_positive_vector_is_verified_by_the_real_verifier`,
     :func:`test_negative_vector_is_rejected_with_the_spec_code` (plus
-    :func:`test_replayed_nonce_vector` for ``016``), and
-    :func:`test_unrouted_rows_never_reach_the_verifier`. The counts are LITERAL so that
+    :func:`test_replayed_nonce_vector` for ``016``),
+    :func:`test_unrouted_rows_never_reach_the_verifier`, and
+    :func:`test_ipv6_authority_vector_meets_its_expected_outcome_at_the_verifier`. The counts are LITERAL so that
     a row moving between groups has to be moved here too, with a reason.
     """
     assert len(_POSITIVES) == 15, _POSITIVES
@@ -937,8 +972,17 @@ def test_every_vector_is_accounted_for() -> None:
         "positive/010-percent-encoded-slash-preserved",
     ], f"the set of rows that cannot reach the resolver changed: {_UNROUTED}"
 
-    assert len(_DRIVEN_POSITIVES) == 11, _DRIVEN_POSITIVES
-    assert len(_SINGLE_SHOT_NEGATIVES) == 29, "016 runs its own two-submission test; 018 is profile-inapplicable"
+    assert _VERIFIER_SEAM_ROWS == [
+        "negative/031-malformed-host-authority",
+        "positive/011-ipv6-authority",
+        "positive/012-ipv6-authority-default-port-stripped",
+        "positive/015-bracketed-ipv6-host-with-port",
+    ], f"the set of rows graded at the verifier seam changed: {_VERIFIER_SEAM_ROWS}"
+
+    assert len(_DRIVEN_POSITIVES) == 8, _DRIVEN_POSITIVES
+    assert len(_SINGLE_SHOT_NEGATIVES) == 28, (
+        "016 runs its own two-submission test; 018 is profile-inapplicable; 031 is graded at the verifier seam"
+    )
     assert _PROFILE_INAPPLICABLE == ["negative/018-digest-covered-when-forbidden"], (
         f"the set of vectors whose posture a 3.2 verifier cannot hold changed: {_PROFILE_INAPPLICABLE}"
     )
@@ -948,6 +992,7 @@ def test_every_vector_is_accounted_for() -> None:
         | {_REPLAY_PAIR_VECTOR}
         | set(_UNROUTED)
         | set(_PROFILE_INAPPLICABLE)
+        | set(_VERIFIER_SEAM_ROWS)
     )
     assert driven == set(_VECTORS), f"vectors driven by no test at all: {sorted(set(_VECTORS) - driven)}"
 
@@ -1019,6 +1064,91 @@ def test_unrouted_rows_never_reach_the_verifier(vector_id, integration_db, confo
             f"{vector_id}: got a signature challenge {rejection_code(response)!r} from a request "
             "that never reached the resolver"
         )
+
+
+@pytest.mark.parametrize("vector_id", _VERIFIER_SEAM_ROWS)
+def test_ipv6_authority_vector_meets_its_expected_outcome_at_the_verifier(
+    vector_id, integration_db, conformance_app
+) -> None:
+    """The vector's own ``expected_outcome``, graded by the real verifier below the router.
+
+    Why not through the router: :data:`_VERIFIER_SEAM_ROWS`. The vector's wire request goes
+    through the production capture (``SignedExchangeCapture``), exactly as the app would
+    record it, and the captured exchange is handed to ``verify_inbound_signature`` with what
+    the resolver would hand it for the conformance tenant: its ``TenantContext``, the bearer's
+    principal, and the tenant-bound keyid lookup. Everything else is the module's per-vector
+    case: the declared posture, the frozen clock, real Ed25519 over the transplanted URL.
+
+    ``negative/031`` expects, at
+    ``dist/compliance/3.2.7/test-vectors/request-signing/negative/031-malformed-host-authority.json``
+    L28-31 (adcp ``v3.2.7``, 8d1d3244b): ``"expected_outcome": {"success": false,
+    "error_code": "request_target_uri_malformed", "failed_step": 10}``. The three positives
+    expect ``"success": true``. Asserted as the positive and negative tests assert them: a
+    positive returns the bearer's principal with a ``VerifiedSigner`` for the vector's keyid,
+    and a negative raises the vector's code.
+    """
+    from functools import partial
+
+    from src.core.auth_utils import get_principal_by_signing_keyid, get_principal_from_token
+    from src.core.exceptions import AdCPRequestSignatureError
+    from src.core.signing.capture import SignatureSubject
+    from src.core.signing.verifier import verify_inbound_signature
+    from src.core.tenant_context import TenantContext
+
+    app, portal = conformance_app
+    plan = TRANSPLANT[vector_id]
+    expected = _VECTORS[vector_id]["expected_outcome"]
+
+    with _vector_case(vector_id) as (_env, token, calls):
+        exchange = _captured_exchange(portal, vector_id, token)
+        assert exchange is not None and exchange.presents_signature(), (
+            f"{vector_id}: the production capture recorded no signed exchange for {plan.wire_url!r}"
+        )
+        principal = get_principal_from_token(token, _TENANT_ID)
+        assert principal is not None, f"{vector_id}: the vector's bearer resolves no principal"
+        verify = partial(
+            verify_inbound_signature,
+            # None of the four bodies registers webhook credentials.
+            SignatureSubject(operation=plan.expected_operation, registers_credentials=False, exchange=exchange),
+            headers=exchange.headers(),
+            tenant=TenantContext.load(_TENANT_ID),
+            principal=principal,
+            signer_by_keyid=partial(get_principal_by_signing_keyid, tenant_id=_TENANT_ID),
+        )
+
+        if not expected["success"]:
+            with pytest.raises(AdCPRequestSignatureError) as refusal:
+                verify()
+            assert str(refusal.value.error_code) == expected["error_code"], (
+                f"{vector_id}: refused {refusal.value.error_code!r}, the vector expects {expected['error_code']!r}"
+            )
+            return
+
+        keyid = str(_signature_params(_VECTORS[vector_id])["keyid"])
+        verified = verify()
+        assert verified is not None and verified.principal_id == _PRINCIPAL_ID, (
+            f"{vector_id}: the verifier returned {verified!r}, not the bearer's principal"
+        )
+        assert calls, f"{vector_id}: the SDK verifier never ran — a positive that grades nothing"
+        signer = calls[-1].get(VERIFIER_RESULT)
+        assert signer is not None and signer.key_id == keyid, (
+            f"{vector_id}: no VerifiedSigner for {keyid!r} came back from the SDK verifier ({signer!r})"
+        )
+
+
+def _captured_exchange(portal: Any, vector_id: str, token: str | None) -> Any:
+    """The vector's wire request as ``SignedExchangeCapture`` records it, before any routing."""
+    from src.core.signing.capture import SignedExchangeCapture, captured_exchange
+
+    headers, body = _wire_request(vector_id, token)
+    scope = build_scope(_VECTORS[vector_id]["request"]["method"], TRANSPLANT[vector_id].wire_url, headers)
+    seen: dict[str, Any] = {}
+
+    async def record(inner_scope: Any, _receive: Any, _send: Any) -> None:
+        seen["exchange"] = captured_exchange(inner_scope)
+
+    portal.call(lambda: send_asgi_messages(SignedExchangeCapture(record), scope, whole_body(body)))
+    return seen.get("exchange")
 
 
 def test_unknown_keyid_vector_resolves_the_counterparty_before_failing(integration_db, conformance_app) -> None:

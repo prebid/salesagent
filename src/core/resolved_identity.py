@@ -9,6 +9,7 @@ This eliminates isinstance checks and auth extraction inside business logic.
 import logging
 from collections.abc import Callable, Mapping
 from enum import StrEnum
+from functools import partial
 from typing import Literal, overload
 
 from adcp.types import AccountReference, AccountReferenceById
@@ -223,7 +224,7 @@ def _signature_credential(
     subject: SignatureSubject | None,
     *,
     headers: Mapping[str, str],
-    tenant: TenantContext | None,
+    tenant: TenantContext,
     principal: Principal | None,
 ) -> Principal | None:
     """Read the request's RFC 9421 signature, and return the caller after it.
@@ -232,38 +233,32 @@ def _signature_credential(
     resolved one from its bearer; the principal the signature ESTABLISHES when it did not.
     Raises ``AdCPRequestSignatureError`` when the verifier refuses.
 
-    A verified signature establishes exactly one fact — "the request was issued by the agent
-    whose ``jwks_uri`` contains the ``keyid``" (security.mdx § Agent identity) — and
-    names that agent by the ``agents[]`` entry the verifier already used to fetch the JWKS. It
-    is a publication coordinate the verifier controlled end to end, never a buyer-asserted
-    field, so looking a principal up by it is exactly as sound as looking one up by a token
-    hash.
+    The verifier is handed a lookup bound to this tenant: the counterparty the tenant
+    onboarded the request's keyid for (security.mdx L1323-L1325). It verifies the
+    signature against that counterparty's keys and returns the counterparty only when the
+    signature verified, so the principal a signature establishes is the one whose keys
+    verified it (L1452), identified once.
 
     ONLY when the bearer resolved none. A request carrying both credentials is answered on
     its bearer, so a signature can never silently re-identify an authenticated caller as
     somebody else.
     """
-    from src.core.auth_utils import get_principal_by_agent_url
+    from src.core.auth_utils import get_principal_by_signing_keyid
     from src.core.signing.verifier import verify_inbound_signature
 
     if subject is None:
         return principal
-    signer = verify_inbound_signature(subject, headers=headers, tenant=tenant, principal=principal)
-    if principal is not None or signer is None or not signer.agent_url or tenant is None:
-        return principal
-
-    established = get_principal_by_agent_url(signer.agent_url, tenant.tenant_id)
-    if established is None:
-        logger.warning(
-            "A request signature verified for agent_url %r but tenant %r has no principal "
-            "onboarded at it, so the caller stays anonymous",
-            signer.agent_url,
-            tenant.tenant_id,
-        )
-    return established
+    verified = verify_inbound_signature(
+        subject,
+        headers=headers,
+        tenant=tenant,
+        principal=principal,
+        signer_by_keyid=partial(get_principal_by_signing_keyid, tenant_id=tenant.tenant_id),
+    )
+    return principal if principal is not None else verified
 
 
-def _detect_tenant(headers: Mapping[str, str]) -> str | None:
+def _detect_tenant(headers: Mapping[str, str], *, signed: bool) -> str | None:
     """The tenant_id this request NAMES, or ``None``. NO row is loaded.
 
     Identification only. The token check is scoped by tenant_id, so which tenant cannot be
@@ -277,6 +272,15 @@ def _detect_tenant(headers: Mapping[str, str]) -> str | None:
        explicitly rather than by the host it is served at: the test suites, the CLI, a
        support tool. Unverified — an id naming no tenant fails at the principal lookup that
        is scoped by it.
+
+    A *signed* request has the first way in only. security.mdx L1172-1174: a verifier "MUST
+    NOT attribute identity, authorization, account selection, resource access, or task
+    ownership on the basis of ... unsigned ... routing metadata". The header is not a
+    covered component, and the keyid lookup and the posture are both scoped by the tenant,
+    so a party holding an undelivered signed request could point it at any other tenant
+    that onboarded the same keyid. The ``Host`` is covered, through ``@authority``. Signed
+    means the request carries ``Signature`` or ``Signature-Input``, with or without a
+    bearer (``HttpExchange.presents_signature``, the one definition).
 
     TWO means two, and a second spelling of either is not a redundancy: two readers of one
     fact disagree, and then one request resolves to two different tenants depending on which
@@ -299,7 +303,7 @@ def _detect_tenant(headers: Mapping[str, str]) -> str | None:
     host = _get_header_case_insensitive(headers, "host") or ""
     tenant_id = tenant_id_for(virtual_host=host) if host else None
 
-    if not tenant_id:
+    if not tenant_id and not signed:
         tenant_id = _get_header_case_insensitive(headers, "x-adcp-tenant")
 
     return tenant_id
@@ -480,7 +484,11 @@ def _resolve_identity(
     #
     # The cost is a tenant lookup for an anonymous caller. A seller that enforces signing
     # never had that saving available: the posture has to be read to answer the request.
-    tenant = _addressed_tenant(headers)
+    #
+    # A SIGNED request names its tenant by the Host alone, never by ``x-adcp-tenant``: the
+    # header is unsigned routing metadata, and the tenant scopes both the keyid lookup and
+    # the posture (``_detect_tenant``).
+    tenant = _addressed_tenant(headers, signed=presented_signature)
 
     # Step 3: the SELLER's policy. A public tool's row does not require a credential, but
     # the tenant it addresses may (brand_manifest_policy "require_auth" on get_products,
@@ -626,11 +634,12 @@ def identity_of(tenant_id: str, principal_id: str, account_id: str | None = None
     return AccountIdentity(principal=principal, tenant=tenant, account=_load_account(account_ref, tenant_id, principal))
 
 
-def _addressed_tenant(headers: Mapping[str, str]) -> TenantContext:
+def _addressed_tenant(headers: Mapping[str, str], *, signed: bool) -> TenantContext:
     """The seller this request addresses, or a refusal.
 
     There are two ways to say which seller a request is for -- the ``Host`` the seller
-    declares it is served at, and an explicit ``x-adcp-tenant``. A request that does
+    declares it is served at, and an explicit ``x-adcp-tenant`` -- and a *signed* request
+    has only the first (``_detect_tenant``). A request that does
     neither, or that names something this deployment does not serve, is not a request with
     a missing field: there is no seller to apply any rule of, including the rule that would
     reject it. So it is refused here, at the point the question is asked, with the code the
@@ -647,17 +656,23 @@ def _addressed_tenant(headers: Mapping[str, str]) -> TenantContext:
     """
     from src.core.exceptions import AdCPTenantUndefinedError
 
-    tenant_id = _detect_tenant(headers)
+    tenant_id = _detect_tenant(headers, signed=signed)
     tenant = TenantContext.load(tenant_id) if tenant_id else None
     if tenant is None:
-        named = _get_header_case_insensitive(headers, "x-adcp-tenant") or _get_header_case_insensitive(headers, "host")
+        host = _get_header_case_insensitive(headers, "host")
+        header = _get_header_case_insensitive(headers, "x-adcp-tenant")
         # Raised FROM the LookupError, not handed to ``internal_detail``: the boundary logs
         # ``exc_info=error``, which formats the error's ``__cause__`` chain, and an attribute
         # is not in that chain -- so the attribute form writes the host nowhere at all. The
         # operator needs the address that was dialled; the buyer must not be told it back.
-        raise AdCPTenantUndefinedError() from LookupError(
-            f"request named {named!r}; this deployment serves no tenant at it"
-        )
+        if signed:
+            reason = (
+                f"signed request named host {host!r}, which no tenant is served at; "
+                f"its x-adcp-tenant {header!r} is not read for a signed request"
+            )
+        else:
+            reason = f"request named {header or host!r}; this deployment serves no tenant at it"
+        raise AdCPTenantUndefinedError() from LookupError(reason)
     return tenant
 
 
@@ -694,4 +709,4 @@ def public_identity_for(headers: Mapping[str, str]) -> PublicIdentity:
     ``_addressed_tenant`` every tool goes through: the caller gets CONFIGURATION_ERROR
     rather than a card describing nobody.
     """
-    return PublicIdentity(principal=None, tenant=_addressed_tenant(headers))
+    return PublicIdentity(principal=None, tenant=_addressed_tenant(headers, signed=False))

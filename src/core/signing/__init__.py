@@ -18,6 +18,7 @@ Where each piece lives:
                         ``webhook_signing`` block (derived, outbound)
 :mod:`.capture`         the HTTP message an inbound signature covers
 :mod:`.verifier`        THE inbound verifier, called by ``_resolve_identity``
+:mod:`.grading`         the signed_requests test counterparty's record (the test kit's relaxations)
 :mod:`.replay_store`    the Postgres-backed nonce store the SDK checklist calls
 :mod:`.revocation`      checklist step 9, the counterparty's revocation list
 :mod:`.webhook_credentials`  the escalation read off the VALIDATED request

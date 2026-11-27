@@ -17,7 +17,7 @@ from __future__ import annotations
 import pytest
 from adcp.signing.agent_resolver import AgentResolution
 
-from src.core.signing.verifier import WELL_KNOWN_JWKS_PATH, _jwks_is_well_known, build_registry_resolution
+from src.core.signing.verifier import WELL_KNOWN_JWKS_PATH, _jwks_is_well_known, build_pinned_resolution
 
 _AGENT = "https://agent.example/mcp/"
 
@@ -58,14 +58,14 @@ def test_anywhere_else_is_refused(jwks_uri: str, why: str) -> None:
     assert not _jwks_is_well_known(_resolution(jwks_uri)), why
 
 
-def test_a_registry_entry_derives_the_location_rather_than_declaring_one() -> None:
+def test_pinned_keys_derive_the_location_rather_than_declaring_one() -> None:
     """The other path that produces a resolution answers the same question by construction.
 
-    A configured counterparty carries its JWKS inline and names no location, so the entry
-    cannot point its keys somewhere the walk would refuse -- the two paths cannot disagree
-    about where a counterparty's keys live.
+    A grading record carries its JWKS inline and names no location, so pinned keys cannot
+    point somewhere the walk would refuse -- the two paths cannot disagree about where a
+    counterparty's keys live.
     """
-    resolution = build_registry_resolution({"agent_url": _AGENT, "jwks": {"keys": []}})
+    resolution = build_pinned_resolution(_AGENT, {"keys": []})
 
     assert resolution.jwks_uri == f"https://agent.example{WELL_KNOWN_JWKS_PATH}"
     assert _jwks_is_well_known(resolution)

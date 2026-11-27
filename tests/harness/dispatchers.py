@@ -362,25 +362,23 @@ def _deliver_e2e_rest_signed(
     ``request_signature_digest_mismatch``. Once the env CAN sign, every request
     it makes — signed or not — goes through ``wire_request``, which owns the
     three rules a signed request obeys (serialize once and send exactly those
-    bytes; carry the same credential and tenant hint whether or not you sign; one
-    identity, on ``Authorization``). The fork is on ``can_sign``, not on
+    bytes; carry the same credential and name the tenant by its ``Host`` whether
+    or not you sign; one identity, on ``Authorization``). The fork is on ``can_sign``, not on
     ``signed``, so a signed and an unsigned dispatch differ by exactly the
     signature (owner decision D1's corollary); an env that cannot sign keeps the
     single upstream delivery implementation untouched.
 
     ONE thing is this leg's OWN and is stated here rather than inside that seam,
-    because only this leg has it: the ORIGIN is the live stack's, port included —
-    nginx forwards ``Host`` verbatim and ``_verify_url`` rebuilds the authority
-    from it, so the in-process default (``http://testserver``) would cover a
-    different ``@target-uri`` than the verifier reconstructs.
+    because only this leg has it: the dialed origin's scheme and PORT are the live
+    stack's — nginx forwards ``Host`` verbatim and ``_verify_url`` rebuilds the
+    authority from it, so the in-process default (``http://testserver``) would
+    cover a different ``@target-uri`` than the verifier reconstructs.
+    ``wire_request`` keeps them and puts the tenant's own host in front of them.
 
-    The tenant hint used to be this leg's too, for a reason that has since become
-    every leg's: the header named a module-level ``sig_tenant`` that does not
-    exist in the live database, and a header asserting a tenant other than the
-    one being addressed is a lie inside the signed byte range — one ladder
-    reordering away from collapsing the posture bucket to ``none``, an unverified
-    pass-through wearing a 200. ``wire_request`` now sets it for all four legs,
-    and nothing else is carried across from *credential*: there are no testing
+    Which tenant is named used to be this leg's too, for a reason that has since
+    become every leg's: the header named a module-level ``sig_tenant`` that does
+    not exist in the live database. ``wire_request`` now names the env's tenant
+    for all four legs, and nothing else is carried across from *credential*: there are no testing
     headers left to forward (the ``x-dry-run`` channel went with the testing
     hooks), so this leg passes no ``extra`` at all.
 

@@ -80,13 +80,6 @@ COUNTERPARTY_AGENT_URL = "https://buyer.example.com/a2a"
 #: The ``keyid`` the counterparty signs under.
 COUNTERPARTY_KID = "buyer-request-signing-1"
 
-#: The counterparty as a REGISTERED entry of
-#: :attr:`~src.core.config.SigningSettings.counterparty_registry` carries it (#1291 B4).
-#: Deliberately different from :data:`COUNTERPARTY_AGENT_URL` and its origin: the two
-#: resolution paths must be distinguishable at the assertion, so a test can say WHICH
-#: one supplied the key rather than only that some key was found.
-REGISTRY_AGENT_URL = "https://test-kit.example.com/a2a"
-
 #: An ``agent_url`` whose capabilities hop CANNOT BE REACHED, deterministically.
 #:
 #: The SDK resolves and validates the host SYNCHRONOUSLY before any socket is opened
@@ -131,11 +124,6 @@ REGISTRY_AGENT_URL = "https://test-kit.example.com/a2a"
 #: both the current map and a map that reads ``signature_code``.
 UNRESOLVABLE_AGENT_URL = "https://unreachable.invalid/a2a"
 
-#: The origin the in-process ASGI client dials. ``httpx``'s ASGI transport defaults to
-#: ``http://testserver``, and the signature covers ``@target-uri``, so a request signed
-#: against any other origin fails on its merits before the behavior under test is reached.
-WIRE_ORIGIN = "http://testserver"
-
 
 def wire_origin(url: str) -> str:
     """The scheme+authority of *url* — what a signature's ``@target-uri`` covers.
@@ -154,6 +142,21 @@ def wire_origin(url: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc.decode()}"
 
 
+def tenant_origin(origin: str, virtual_host: str) -> str:
+    """*origin* with its host replaced by the tenant's, keeping the scheme and the port.
+
+    A signed request names its tenant by the ``Host`` alone, so it dials the tenant's own
+    host. The scheme and port stay the dialed origin's because they say how the deployment
+    is reached (the e2e front's port, say), not which seller it is; the tenant lookup
+    matches the host name with the port aside (``tenant_lookup._same_host``).
+    """
+    import httpx
+
+    dialed = httpx.URL(origin)
+    host = httpx.URL(f"//{virtual_host}").host
+    return wire_origin(str(dialed.copy_with(host=host)))
+
+
 #: The seller tenant and the buyer's principal within it. Shared so the three
 #: in-process suites address the same rows. An env that SIGNS no longer takes its
 #: identity from here — it signs as its OWN tenant/principal
@@ -170,9 +173,21 @@ SIGNING_PRINCIPAL_ID = "sig_principal"
 #: deliberately derives ``http`` for localhost and single-label hosts, so on the default
 #: integration host every declaration :func:`declared_posture` writes would be REFUSED —
 #: and the suites would grade the refusal path while reading like they graded the
-#: declared one. Requests still reach this tenant by the ``x-adcp-tenant`` header
-#: (:func:`request_headers`), so the host is identity, not routing.
+#: declared one. It is also how a request reaches this tenant: :func:`request_headers`
+#: sends it as the ``Host``, because a signed request names its tenant by the ``Host``
+#: alone (``resolved_identity._detect_tenant``).
 SIGNING_AGENT_HOST = "seller-signing.example.com"
+
+#: The origin the in-process suites sign for and dial: :data:`SIGNING_AGENT_HOST` over the
+#: ASGI client's plain http. The signature covers ``@target-uri`` and ``@authority``, and
+#: the capture rebuilds both from the ``Host`` the request carries, so the ``Host`` sent
+#: is this origin's authority (:func:`request_headers`) rather than the client's default
+#: ``testserver``, which names no tenant.
+WIRE_ORIGIN = f"http://{SIGNING_AGENT_HOST}"
+
+#: The origin the in-process ASGI client dials when a request sets no ``Host`` of its own.
+#: ``httpx``'s ASGI transport defaults to it, and no tenant is served at it.
+ASGI_CLIENT_ORIGIN = "http://testserver"
 
 #: The ``get_adcp_capabilities`` AdCP surface. Auth-optional, so any 401 seen on it came
 #: from the verifier and not from the route's own auth dependency — which is why the
@@ -874,10 +889,10 @@ def counterparty_key(
     run the REAL verifier against real keys without a live counterparty — nothing
     about the outcome is faked.
 
-    Built via ``build_registry_resolution`` (#1291 B4) — the SAME production
-    constructor the configured counterparty registry uses — rather than a
-    second inline ``AgentResolution(...)`` here, so this fixture and the
-    registry fallback can never drift into two different resolution shapes.
+    Built via ``build_pinned_resolution`` — the SAME production constructor a
+    test counterparty's accepted JWKS uses — rather than a second inline
+    ``AgentResolution(...)`` here, so this fixture and the pinned path can never
+    drift into two different resolution shapes.
 
     A resolution seeded here lands in the SAME ``AGENT_RESOLUTION_CACHE`` a real
     brand.json walk populates, so ``_resolution_for`` tags it ``source="walk"``
@@ -892,27 +907,11 @@ def counterparty_key(
     resolution refuses to do — a helper that pokes a cache nothing reads makes every
     caller LOOK like it configured Tier 3 while configuring nothing.
     """
-    from src.core.signing.verifier import AGENT_RESOLUTION_CACHE, build_registry_resolution
+    from src.core.signing.verifier import AGENT_RESOLUTION_CACHE, build_pinned_resolution
 
-    resolution = build_registry_resolution({"agent_url": agent_url, "jwks": jwks})
+    resolution = build_pinned_resolution(agent_url, jwks)
     with seeded_cache_entry(AGENT_RESOLUTION_CACHE, agent_url, resolution):
         yield
-
-
-def registry_entry(
-    jwks: dict[str, Any],
-    *,
-    agent_url: str = REGISTRY_AGENT_URL,
-) -> dict[str, Any]:
-    """One entry of the configured counterparty registry (#1291 B4).
-
-    The same two values :func:`counterparty_key` seeds into the cache, because the
-    registry's whole job is to produce the SAME ``AgentResolution`` shape from config
-    instead of from the brand.json walk. Keeping one vocabulary for both is what lets
-    a test swap the resolution SOURCE while changing nothing else — and what makes it
-    visible if the two shapes ever drift apart.
-    """
-    return {"agent_url": agent_url, "jwks": jwks}
 
 
 @contextmanager
@@ -1368,10 +1367,55 @@ MALFORMED_SIGNATURE_HEADERS = {
 #:   ``request_signature_key_unknown`` at its key lookup;
 #: * ``"wrong_key"`` — a signature over the exact bytes sent, under the published ``keyid``, by a
 #:   private key other than the published one: ``request_signature_invalid``.
-SIGNATURE_REALIZATIONS: tuple[Any, ...] = (False, True, "malformed", "tampered", "unknown_key", "wrong_key")
+#:
+#: ``"extra_label"`` is a CORRECT signature with one more label in front of it: the
+#: ``True`` realization, then :func:`prepend_unverified_label`. security.mdx L1209 makes
+#: the verifier process exactly one label and ignore the rest, so the extra label must
+#: change nothing — including which counterparty the keyid selects.
+SIGNATURE_REALIZATIONS: tuple[Any, ...] = (
+    False,
+    True,
+    "malformed",
+    "tampered",
+    "unknown_key",
+    "wrong_key",
+    "extra_label",
+)
 
 #: The type every seam that carries a realization is annotated with.
-SignatureRealization = bool | Literal["malformed", "tampered", "unknown_key", "wrong_key"]
+SignatureRealization = bool | Literal["malformed", "tampered", "unknown_key", "wrong_key", "extra_label"]
+
+#: The keyid of the label :func:`prepend_unverified_label` adds. No Given onboards it and
+#: no JWKS publishes it, so a verifier that took the counterparty from this label would
+#: resolve no key.
+UNONBOARDED_KID = "unonboarded-request-signing-key"
+
+
+def prepend_unverified_label(headers: dict[str, str]) -> dict[str, str]:
+    """*headers* with a second label, ``sig2``, ahead of ``sig1`` in both signature headers.
+
+    Shaped after ``positive/004-multiple-signature-labels``: its own ``created``,
+    ``expires``, nonce, ``alg`` and ``tag``, and a well-formed ``sf-binary`` signature that
+    verifies nothing. Its keyid is :data:`UNONBOARDED_KID`. It goes FIRST, so a verifier
+    reading the first label in header order reads this one; the label the checklist
+    verifies is still ``sig1``, unchanged.
+    """
+    from uuid import uuid4
+
+    from adcp.signing import DEFAULT_TAG
+
+    signature_input = next(name for name in headers if name.lower() == "signature-input")
+    signature = next(name for name in headers if name.lower() == "signature")
+    created = int(time.time())
+    label = (
+        f'sig2=("@method" "@target-uri");created={created};expires={created + 300};'
+        f'nonce="{uuid4().hex}";keyid="{UNONBOARDED_KID}";alg="ed25519";tag="{DEFAULT_TAG}"'
+    )
+    return {
+        **headers,
+        signature_input: f"{label}, {headers[signature_input]}",
+        signature: f"sig2=:{'A' * 88}:, {headers[signature]}",
+    }
 
 
 def realization(signed: Any) -> SignatureRealization:
@@ -1390,7 +1434,11 @@ def realization(signed: Any) -> SignatureRealization:
     ``True``/``False`` but are not realizations, and a caller that produced an int
     where a realization belongs has a bug worth surfacing.
     """
-    if signed is True or signed is False or signed in ("malformed", "tampered", "unknown_key", "wrong_key"):
+    if (
+        signed is True
+        or signed is False
+        or signed in ("malformed", "tampered", "unknown_key", "wrong_key", "extra_label")
+    ):
         return signed
     raise ValueError(
         f"signed={signed!r} is not a signature realization. Pass one of "
@@ -1398,7 +1446,8 @@ def realization(signed: Any) -> SignatureRealization:
         "the exact bytes sent), 'malformed' (unparseable headers — a step-1 pre-check failure), "
         "'tampered' (a real signature over a different body — a checklist digest mismatch), "
         "'unknown_key' (a real signature under a keyid nobody publishes), "
-        "or 'wrong_key' (a signature its published key does not verify). "
+        "'wrong_key' (a signature its published key does not verify), "
+        "or 'extra_label' (a real signature with an unverified label ahead of it). "
         "Refusing rather than falling through to a correct signature, which would make a "
         "scenario grading a refusal pass on an acceptance."
     )
@@ -1442,9 +1491,29 @@ def tampered_signing_body(raw: bytes) -> bytes:
     return raw + b" "
 
 
-def request_headers(token: str | None, extra: dict[str, str] | None = None) -> dict[str, str]:
-    """Wire headers: tenant hint + optional bearer + whatever the test adds."""
-    headers = credential_headers(token=token, tenant=SIGNING_TENANT_ID)
+def request_headers(
+    token: str | None,
+    extra: dict[str, str] | None = None,
+    *,
+    origin: str = WIRE_ORIGIN,
+    tenant_header: str | None = None,
+) -> dict[str, str]:
+    """Wire headers: the ``Host`` of *origin* + optional bearer + whatever the test adds.
+
+    The ``Host`` is *origin*'s authority because that is what names the tenant: a signed
+    request is routed by its ``Host`` alone, and an unsigned one sent beside it must differ
+    from it by the signature and nothing else. *tenant_header* adds ``x-adcp-tenant`` beside
+    that ``Host``, for the one case that grades the header: a signed request whose ``Host``
+    names no tenant and whose header does.
+    """
+    import httpx
+
+    headers = credential_headers(
+        token=token,
+        host=httpx.URL(origin).netloc.decode(),
+        tenant=tenant_header,
+        host_resolves_nothing=tenant_header is not None,
+    )
     if extra:
         headers.update(extra)
     return headers
@@ -1511,10 +1580,11 @@ def signed_headers(
     extra: dict[str, str] | None = None,
     key_id: str = COUNTERPARTY_KID,
     origin: str = WIRE_ORIGIN,
+    tenant_header: str | None = None,
 ) -> dict[str, str]:
     """The full header set for one signed request to *path* at *origin*.
 
-    Merges the wire headers a signed request carries anyway (tenant hint, bearer,
+    Merges the wire headers a signed request carries anyway (the ``Host``, bearer,
     whatever the case needs) with the signature over exactly those headers and *body*
     — the ordering the signature depends on, since the base covers ``content-digest``
     and the headers the signer chose to sign. Every signing suite built this merge by
@@ -1536,8 +1606,12 @@ def signed_headers(
     Widened here rather than by inlining :func:`sign_wire_request` at the e2e call site
     for the reason this function's own docstring gives: a second copy of the merge that
     signs a slightly different URL looks like a verifier bug.
+
+    The ``Host`` sent is *origin*'s authority (:func:`request_headers`), so the request
+    names the tenant served at *origin* and the ``@authority`` the capture reads is the one
+    signed. *tenant_header* is :func:`request_headers`'.
     """
-    base = request_headers(token, extra)
+    base = request_headers(token, extra, origin=origin, tenant_header=tenant_header)
     return {
         **base,
         **sign_wire_request(
