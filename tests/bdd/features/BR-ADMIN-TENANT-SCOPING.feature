@@ -179,6 +179,16 @@ Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
     Then the page returns status 200
     And the suggestions list the default catalogue
 
+  # A default product the tenant already holds is marked as created, matched on its whole
+  # product id. The route used to compare the first character of each stored id.
+  @T-ADMIN-SCOPE-019 @auth @main-flow
+  Scenario: The product suggestions mark the default product the tenant already holds
+    Given the caller is an active member of the target tenant
+    And the target tenant holds a product under the default product id "run_of_site_display"
+    When the caller sends GET to the product suggestions API of the target tenant
+    Then the page returns status 200
+    And the suggestions list the default catalogue with only "run_of_site_display" marked as already created
+
   @T-ADMIN-SCOPE-010 @auth @main-flow
   Scenario Outline: An active member is redirected from the policy rules page to the policy page
     Given the caller is an active member of the target tenant

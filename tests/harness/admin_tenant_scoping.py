@@ -172,16 +172,24 @@ _DEFAULT_SUGGESTION_ORDER = (
 )
 
 
-def expected_suggestions_body() -> dict[str, Any]:
+def expected_suggestions_body(existing_ids: frozenset[str] = frozenset()) -> dict[str, Any]:
     """Today's body of ``GET .../products/suggestions`` with no query parameters.
 
-    Holds for a tenant whose catalogue shares no id with the default products (the seeded
-    product id is unique), so every suggestion is new, industry-neutral and unboosted.
+    *existing_ids* are the default product ids the tenant's catalogue holds: each of them is
+    marked ``already_exists``, and every other suggestion is new. With none, the catalogue
+    shares no id with the default products (the seeded product id is unique). Every
+    suggestion is industry-neutral and unboosted either way.
     """
     by_id = {product["product_id"]: product for product in get_default_products()}
     assert set(by_id) == set(_DEFAULT_SUGGESTION_ORDER), sorted(by_id)
+    assert existing_ids <= set(by_id), f"not a default product id: {sorted(existing_ids - set(by_id))}"
     suggestions = [
-        {**by_id[product_id], "already_exists": False, "is_industry_specific": False, "match_score": 100}
+        {
+            **by_id[product_id],
+            "already_exists": product_id in existing_ids,
+            "is_industry_specific": False,
+            "match_score": 100,
+        }
         for product_id in _DEFAULT_SUGGESTION_ORDER
     ]
     return {
@@ -267,6 +275,11 @@ class AdminTenantScopingEnv(AdminAccountEnv):
                 package["product_id"],
             )
         return self._target
+
+    def seed_target_product(self, product_id: str) -> None:
+        """A product of the target tenant under *product_id*, such as the id of a default product."""
+        with bound_factory_session() as session:
+            ProductFactory(tenant=session.get(Tenant, self.target.tenant_id), product_id=product_id)
 
     def seed_product_of_other_tenant(self, name: str) -> None:
         """Another tenant's product named *name*, under the product id the target tenant's media buy names."""

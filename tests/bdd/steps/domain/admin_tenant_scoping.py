@@ -80,6 +80,12 @@ def given_other_tenant_product(ctx: dict, name: str) -> None:
     _env(ctx).seed_product_of_other_tenant(name)
 
 
+@given(parsers.parse('the target tenant holds a product under the default product id "{product_id}"'))
+def given_target_holds_default_product(ctx: dict, product_id: str) -> None:
+    """One more catalogue product, under the id of a product the suggestions offer."""
+    _env(ctx).seed_target_product(product_id)
+
+
 @given("the caller is a super admin of a different tenant with no membership in the target tenant")
 def given_caller_super_admin_elsewhere(ctx: dict) -> None:
     """Logged in as a super admin at another tenant; the target holds no User row for the caller."""
@@ -155,12 +161,24 @@ def then_product_list_is_catalogue(ctx: dict) -> None:
     assert body == expected, f"Expected {expected!r}, got {body!r}"
 
 
+def _assert_suggestions_body(ctx: dict, existing_ids: frozenset[str]) -> None:
+    """Exactly today's body: every default product, in the handler's order, with its metadata,
+    and ``already_exists`` set for *existing_ids* alone."""
+    body = _require_admin_page(ctx).get_json()
+    expected = expected_suggestions_body(existing_ids)
+    assert body == expected, f"Expected {expected!r}, got {body!r}"
+
+
 @then("the suggestions list the default catalogue")
 def then_suggestions_are_defaults(ctx: dict) -> None:
-    """Exactly today's body: every default product, in the handler's order, with its metadata."""
-    body = _require_admin_page(ctx).get_json()
-    expected = expected_suggestions_body()
-    assert body == expected, f"Expected {expected!r}, got {body!r}"
+    """No default product is marked as already created."""
+    _assert_suggestions_body(ctx, frozenset())
+
+
+@then(parsers.parse('the suggestions list the default catalogue with only "{product_id}" marked as already created'))
+def then_suggestions_mark_existing(ctx: dict, product_id: str) -> None:
+    """*product_id* is marked as already created, and each of the other default products is not."""
+    _assert_suggestions_body(ctx, frozenset({product_id}))
 
 
 @then("the reloaded policy page of the target tenant shows the posted policy form")

@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from tests.factories import GAMInventoryFactory, ProductFactory, SyncJobFactory, TenantFactory
+from tests.factories import GAMInventoryFactory, SyncJobFactory, TenantFactory
 from tests.integration.link_validator import LinkValidator, format_broken_links_report
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -413,20 +413,6 @@ class TestAPIRoutes:
         tenant_id = test_tenant_with_data["tenant_id"]
         response = authenticated_admin_session.get(f"/api/tenant/{tenant_id}/products/suggestions")
         assert response.status_code == 200
-
-    def test_product_suggestions_mark_the_products_the_tenant_already_has(
-        self, authenticated_admin_session, factory_session
-    ):
-        """already_exists compares whole product ids; the read used to keep the first character of each."""
-        tenant = TenantFactory()
-        ProductFactory(tenant=tenant, product_id="run_of_site_display")
-
-        response = authenticated_admin_session.get(f"/api/tenant/{tenant.tenant_id}/products/suggestions")
-
-        assert response.status_code == 200
-        marked = {s["product_id"]: s["already_exists"] for s in response.get_json()["suggestions"]}
-        assert marked["run_of_site_display"] is True
-        assert marked["video_preroll"] is False
 
 
 class TestActivityStreamRoutes:
