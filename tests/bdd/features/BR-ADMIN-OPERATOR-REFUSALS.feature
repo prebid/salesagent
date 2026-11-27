@@ -365,6 +365,42 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
     And the JSON response has "success" as false
     And the JSON error is the "SlackWebhookNotConfigured" refusal
 
+  # A GAM call that fails is GAMCallFailed (src/adapters/gam/client.py): its detail is the
+  # sentence the fault was logged under, never GAM's own text. The refusal is the one Google
+  # gives a service-account key for a network it cannot reach. In-process, GAM is the stand-in
+  # network (tests/helpers/gam_client.py), which refuses getCurrentNetwork with that ApiError
+  # reason. On e2e the tenant carries the configured network's key
+  # (ToolingSettings.gam_suite_network) and keeps its own network code, so Google itself
+  # refuses (AdminAccountEnv.serve_gam_network); with no GAM network configured, as on CI
+  # (#2583), the Given declares itself unsupported.
+  @T-ADMIN-REFUSAL-041 @json @connection-test @gam
+  Scenario: A GAM connection test whose network lookup GAM refuses is answered as a failed GAM call
+    Given another tenant of this seller, onboarded to Google Ad Manager with a service account key
+    And Google Ad Manager refuses the current network lookup with "AuthenticationError.NETWORK_NOT_FOUND"
+    When the settings page tests that tenant's GAM connection with its service account
+    Then the page returns status 502
+    And the JSON response has "success" as false
+    And the JSON error is the "GAMCallFailed" refusal
+    And the JSON details are the logged failure "GAM current network lookup failed" with a reference
+    And the answer does not carry GAM's fault text
+
+  # The operator picked a network from several, so detection asks GAM who the refresh token's
+  # user is on it. In-process, the deployment's GAM OAuth client and Google's token exchange
+  # are stand-ins (AdminAccountEnv.serve_gam_oauth_client). On e2e the Given declares itself
+  # unsupported, even with a GAM network configured: no setting carries an OAuth client or a
+  # refresh token, and googleads sends the refresh to Google's own token endpoint.
+  @T-ADMIN-REFUSAL-044 @json @gam-oauth @gam
+  Scenario: A GAM network detection whose user lookup GAM refuses is answered as a failed GAM call
+    Given another tenant of this seller
+    And the deployment has a GAM OAuth client
+    And Google Ad Manager refuses the current user lookup with "QuotaError.EXCEEDED_QUOTA"
+    When the settings page detects that tenant's GAM network "12345678" with the refresh token "bdd-refresh-token"
+    Then the page returns status 502
+    And the JSON response has "success" as false
+    And the JSON error is the "GAMCallFailed" refusal
+    And the JSON details are the logged failure "GAM current user lookup failed" with a reference
+    And the answer does not carry GAM's fault text
+
   # Neither test deployment sets APPROXIMATED_API_KEY.
   @T-ADMIN-REFUSAL-028 @json @approximated
   Scenario: A DNS widget token on a deployment with no Approximated key is refused

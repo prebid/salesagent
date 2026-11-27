@@ -10,6 +10,7 @@ import json
 
 from pytest_bdd import given, parsers, then, when
 
+from src.core.operator_errors import logged_failure_pattern
 from tests.bdd.steps.domain.admin_accounts import (
     _answer_text,
     _datatable_to_form,
@@ -355,6 +356,59 @@ def then_json_details_are(ctx: dict, datatable: list) -> None:
     expected = [str(row[0]) for row in datatable[1:]]
     details = _require_admin_page(ctx).get_json().get("details")
     assert details == expected, f"Expected details {expected!r}, got {details!r}"
+
+
+@given("another tenant of this seller, onboarded to Google Ad Manager with a service account key")
+def given_another_tenant_on_gam_with_service_account_key(ctx: dict) -> None:
+    env = _env(ctx)
+    ctx["admin_other_tenant_id"] = env.seed_tenant()
+    env.onboard_gam_with_service_account_key(tenant_id=ctx["admin_other_tenant_id"])
+
+
+#: The stand-in network's keyword (``stub_gam_client``) that makes GAM refuse each lookup.
+_GAM_LOOKUP_FAULTS: dict[str, str] = {"network": "network_fault", "user": "user_fault"}
+
+
+@given(parsers.re(r'Google Ad Manager refuses the current (?P<lookup>network|user) lookup with "(?P<reason>[^"]+)"'))
+def given_gam_refuses_current_lookup(ctx: dict, lookup: str, reason: str) -> None:
+    ctx["gam_fault_reason"] = reason
+    _env(ctx).serve_gam_network(**{_GAM_LOOKUP_FAULTS[lookup]: reason})
+
+
+@given("the deployment has a GAM OAuth client")
+def given_gam_oauth_client(ctx: dict) -> None:
+    _env(ctx).serve_gam_oauth_client()
+
+
+@when(
+    parsers.parse(
+        'the settings page detects that tenant\'s GAM network "{network_code}" with the refresh token "{token}"'
+    )
+)
+def when_detect_named_gam_network(ctx: dict, network_code: str, token: str) -> None:
+    ctx["admin_page"] = _env(ctx).detect_gam_network(_other_tenant_id(ctx), token, network_code)
+
+
+@when("the settings page tests that tenant's GAM connection with its service account")
+def when_test_gam_connection_with_service_account(ctx: dict) -> None:
+    body = {"auth_method": "service_account"}
+    ctx["admin_page"] = _env(ctx).fetch_tenant_route(_other_tenant_id(ctx), "gam/test-connection", body)
+
+
+@then(parsers.parse('the JSON details are the logged failure "{context}" with a reference'))
+def then_json_details_are_logged_failure(ctx: dict, context: str) -> None:
+    """The one detail is what ``safe_error_message`` returns for *context*, with the reference it logged under."""
+    details = _require_admin_page(ctx).get_json().get("details")
+    assert isinstance(details, list) and len(details) == 1, f"Expected one detail, got {details!r}"
+    assert logged_failure_pattern(context).fullmatch(details[0]), (
+        f"Expected {context!r} with a reference, got {details[0]!r}"
+    )
+
+
+@then("the answer does not carry GAM's fault text")
+def then_answer_omits_gam_fault_text(ctx: dict) -> None:
+    reason = ctx["gam_fault_reason"]
+    assert reason not in _answer_text(ctx), f"The answer carries GAM's fault text {reason!r}"
 
 
 @given(parsers.parse('another tenant of this seller, authorizing the domain "{domain}"'))

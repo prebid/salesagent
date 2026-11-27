@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Account, Tenant
+from tests.harness._realize import e2e_unsupported, realize_e2e
 from tests.harness.admin_client import AdminClient, AdminResponse
 from tests.helpers.admin_session import admin_session_payload
 from tests.utils.database_helpers import bind_factories_to_session, create_tenant_with_timestamps
@@ -48,6 +49,19 @@ class AdminTransport(StrEnum):
 
     INTEGRATION = "admin_integration"  # Flask test_client, in-process
     E2E = "e2e_admin"  # requests.Session against the live stack
+
+
+#: Why the deployment's GAM OAuth client has no live-server realization. A configured GAM
+#: network does not supply one: its settings carry a service-account key.
+_NO_GAM_OAUTH_CLIENT_ON_E2E = e2e_unsupported(
+    "the live server has no GAM OAuth client and no refresh token for it: no setting carries "
+    "either, and googleads exchanges a refresh token at Google's fixed token endpoint, so no "
+    "stand-in can answer that exchange"
+)
+
+#: What Google answers the network lookup of a service-account key for a network that key
+#: cannot reach, as the stand-in network's keywords (``stub_gam_client``).
+_CONFIGURED_GAM_REFUSAL = {"network_fault": "AuthenticationError.NETWORK_NOT_FOUND"}
 
 
 def _product_edit_path(tenant_id: str, product_id: str) -> str:
@@ -105,13 +119,19 @@ class AdminAccountEnv:
         #: The in-process scripted model origin (:meth:`script_ai_connection_test`), once started.
         self._llm_origin: str | None = None
         #: What ``__exit__`` closes besides the client: the in-process origin and its variable,
-        #: and every deployment setting a Given patched onto this process's settings.
+        #: every deployment setting a Given patched onto this process's settings, and the
+        #: stand-in GAM network.
         self._in_process_cleanups = ExitStack()
 
     @property
     def mode(self) -> str:
         """Current transport mode: 'integration' or 'e2e'."""
         return self._mode
+
+    @property
+    def is_e2e(self) -> bool:
+        """Whether the routes run on the live server, which :func:`realize_e2e` setup branches on."""
+        return self._mode == "e2e"
 
     def __enter__(self) -> AdminAccountEnv:
         # Not a BaseTestEnv, so it keeps its own __enter__ — but it owes the same
@@ -354,11 +374,13 @@ class AdminAccountEnv:
             headers={"Content-Type": "application/json"},
         )
 
-    def detect_gam_network(self, tenant_id: str, refresh_token: str) -> AdminResponse:
-        """POST *refresh_token* to *tenant_id*'s GAM network detection, as the settings page does with fetch()."""
-        return self.client.request(
-            "post", f"/tenant/{tenant_id}/gam/detect-network", json={"refresh_token": refresh_token}
-        )
+    def detect_gam_network(self, tenant_id: str, refresh_token: str, network_code: str | None = None) -> AdminResponse:
+        """POST *refresh_token* to *tenant_id*'s GAM network detection, as the settings page does with fetch().
+
+        Given *network_code*, the request names the network the operator picked from several.
+        """
+        body = {"refresh_token": refresh_token} | ({"network_code": network_code} if network_code else {})
+        return self.client.request("post", f"/tenant/{tenant_id}/gam/detect-network", json=body)
 
     def post_adapter_update(self, tenant_id: str, body: dict[str, Any]) -> AdminResponse:
         """POST *body* to *tenant_id*'s adapter choice, as the settings page does with fetch()."""
@@ -577,16 +599,45 @@ class AdminAccountEnv:
         with self._seeding(tenant_id) as (_, tenant):
             catalog_first_publisher_leaderboard(tenant)
 
-    def onboard_gam(self, *, tenant_id: str | None = None, service_account_email: str | None = None) -> None:
+    def onboard_gam(
+        self,
+        *,
+        tenant_id: str | None = None,
+        service_account_email: str | None = None,
+        service_account_json: str | None = None,
+    ) -> None:
         """Leave *tenant_id* (this env's tenant by default) with the rows GAM onboarding writes.
 
-        The service account email is stored if given; GAM onboarding stores none.
+        The service account email is stored if given; GAM onboarding stores none. Given a
+        service account key, the tenant authenticates to GAM with it.
         """
         from tests.utils.tenant_setup import onboard_gam
 
         with self._seeding(tenant_id) as (_, tenant):
             config = onboard_gam(tenant, trafficker_id="bdd_trafficker")
             config.gam_service_account_email = service_account_email
+            if service_account_json is not None:
+                config.gam_auth_method = "service_account"
+                config.gam_service_account_json = service_account_json
+
+    def _onboard_gam_with_configured_key(self, *, tenant_id: str) -> None:
+        """The configured network's key, on a tenant that keeps the network code GAM onboarding writes."""
+        from tests.harness.gam_network import configured_network
+
+        self.onboard_gam(tenant_id=tenant_id, service_account_json=configured_network().service_account_json)
+
+    @realize_e2e(_onboard_gam_with_configured_key)
+    def onboard_gam_with_service_account_key(self, *, tenant_id: str) -> None:
+        """:meth:`onboard_gam` for *tenant_id*, authenticating to GAM with a service account key.
+
+        In-process the key is a throwaway one: the stand-in network (:meth:`serve_gam_network`)
+        reads no key. On e2e it is the configured network's key
+        (``ToolingSettings.gam_suite_network``), so the live server calls Google with a key
+        Google accepts, for the tenant's network code, which that key cannot reach.
+        """
+        from tests.helpers.gam_credentials import service_account_json
+
+        self.onboard_gam(tenant_id=tenant_id, service_account_json=service_account_json())
 
     def seed_running_inventory_sync(self, sync_id: str, *, tenant_id: str | None = None) -> None:
         """Store an inventory sync *sync_id* of *tenant_id* (this env's by default), started a moment ago, still running."""
@@ -864,3 +915,55 @@ class AdminAccountEnv:
                 patch.dict(os.environ, {"GOOGLE_GEMINI_BASE_URL": self._llm_origin})
             )
         return self._llm_origin
+
+    def _gam_refusal_of_configured_network(self, **network_answers: Any) -> None:
+        """Google itself gives the one refusal a tenant onboarded with the configured key gets.
+
+        The tenant's network code (``onboard_gam``'s) is no network the configured key can
+        reach, so Google refuses the network lookup with :data:`_CONFIGURED_GAM_REFUSAL`.
+        Any other answer has no realization here.
+        """
+        from tests.harness._realize import E2EUnsupportedSetup
+        from tests.harness.gam_network import configured_network
+
+        configured_network()
+        if network_answers != _CONFIGURED_GAM_REFUSAL:
+            raise E2EUnsupportedSetup(
+                f"the configured GAM network answers only {_CONFIGURED_GAM_REFUSAL!r} for the tenant's "
+                f"network code, not {network_answers!r}"
+            )
+
+    @realize_e2e(_gam_refusal_of_configured_network)
+    def serve_gam_network(self, **network_answers: Any) -> None:
+        """Every GAM client the admin app builds is one stand-in network, until ``__exit__``.
+
+        The stand-in is ``stub_gam_client``, patched where ``GamSellerMixin`` patches it;
+        *network_answers* are its keywords.
+        """
+        from unittest.mock import patch
+
+        from tests.harness.gam import GAM_CLIENT_PATCH
+        from tests.helpers.gam_client import stub_gam_client
+
+        client = stub_gam_client(**network_answers)
+        self._in_process_cleanups.enter_context(patch(GAM_CLIENT_PATCH["gam_client"], return_value=client))
+
+    # FIXME(#2755): realize the OAuth client on e2e from GAM_SUITE_OAUTH_* settings.
+    @realize_e2e(_NO_GAM_OAUTH_CLIENT_ON_E2E)
+    def serve_gam_oauth_client(self) -> None:
+        """The deployment has a GAM OAuth client, and Google accepts every refresh token for it, until ``__exit__``.
+
+        Patches the client id and secret onto this process's settings and stands in for
+        googleads' ``GoogleRefreshTokenClient``, so ``Refresh()`` calls nobody.
+        """
+        from unittest.mock import patch
+
+        from src.core.config import get_settings
+
+        gam_auth = get_settings().auth
+        for field, value in (
+            ("gam_oauth_client_id", "bdd-gam-oauth-client.apps.googleusercontent.com"),
+            ("gam_oauth_client_secret", "GOCSPX-bdd-gam-oauth-client-secret"),
+        ):
+            self._in_process_cleanups.enter_context(patch.object(gam_auth, field, value))
+        self._in_process_cleanups.enter_context(patch("googleads.oauth2.GoogleRefreshTokenClient"))
