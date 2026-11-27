@@ -12,6 +12,7 @@ import pytest
 # test_product_creation_integration.py) can access them. Both fixtures are
 # defined in tests/conftest_db.py (shared across suites).
 from tests.conftest_db import factory_session, integration_db  # noqa: F401
+from tests.e2e.conftest import docker_services_e2e, live_server, test_auth_token  # noqa: F401
 
 
 @pytest.fixture

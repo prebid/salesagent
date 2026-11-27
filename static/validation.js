@@ -52,21 +52,6 @@ const validators = {
         }
     },
 
-    // Principal ID validation
-    principalId: (value) => {
-        if (!value) return 'Principal ID is required';
-        if (!/^[a-zA-Z0-9_-]+$/.test(value)) {
-            return 'Principal ID can only contain letters, numbers, underscores, and hyphens';
-        }
-        if (value.length < 3) {
-            return 'Principal ID must be at least 3 characters long';
-        }
-        if (value.length > 50) {
-            return 'Principal ID must be less than 50 characters';
-        }
-        return null;
-    },
-
     // Network ID validation (numeric)
     networkId: (value) => {
         if (!value) return 'Network ID is required';
@@ -227,32 +212,6 @@ function initConfigFormValidation() {
     });
 }
 
-// Initialize validation for principal form
-function initPrincipalFormValidation() {
-    const form = document.querySelector('form[action*="/principals/create"]');
-    if (!form) return;
-
-    // Add real-time validation
-    addRealtimeValidation('principal_id', [validators.required, validators.principalId]);
-    addRealtimeValidation('name', [
-        validators.required,
-        validators.minLength(3),
-        validators.maxLength(100)
-    ]);
-
-    // Validate on submit
-    form.addEventListener('submit', (e) => {
-        const isValid = validateForm('principalForm', {
-            'principal_id': [validators.required, validators.principalId],
-            'name': [validators.required, validators.minLength(3), validators.maxLength(100)]
-        });
-
-        if (!isValid) {
-            e.preventDefault();
-        }
-    });
-}
-
 // Initialize validation for adapter setup forms
 function initAdapterFormValidation() {
     // GAM validation
@@ -284,7 +243,6 @@ function initUserFormValidation() {
 document.addEventListener('DOMContentLoaded', () => {
     initSlackFormValidation();
     initConfigFormValidation();
-    initPrincipalFormValidation();
     initAdapterFormValidation();
     initUserFormValidation();
 });

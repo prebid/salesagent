@@ -12,14 +12,18 @@ import pytest
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
-from tests.admin.browser_flow_helpers import browser_page, build_admin_test_session, login_as_tenant_admin
+from tests.admin.browser_flow_helpers import (
+    browser_page,
+    build_admin_test_session,
+    login_as_tenant_admin,
+    media_buy_for_task,
+)
 from tests.e2e.adcp_request_builder import build_adcp_media_buy_request, get_test_date_range, parse_tool_result
 from tests.helpers.credentials import credential_headers
 
 pytestmark = [
     pytest.mark.admin,
     pytest.mark.e2e,
-    pytest.mark.slow,
 ]
 
 TENANT_ID = "ci-test"
@@ -181,20 +185,6 @@ def _set_mock_manual_approval(live_server: dict[str, str], required: bool) -> No
             )
 
 
-def _get_principal_record(live_server: dict[str, str], principal_id: str) -> tuple[str, str, str] | None:
-    with psycopg2.connect(live_server["postgres"]) as conn:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT principal_id, name, access_token
-                FROM principals
-                WHERE tenant_id = %s AND principal_id = %s
-                """,
-                (TENANT_ID, principal_id),
-            )
-            return cursor.fetchone()
-
-
 def _get_media_buy_state(live_server: dict[str, str], media_buy_id: str) -> dict[str, str | None]:
     with psycopg2.connect(live_server["postgres"]) as conn:
         with conn.cursor() as cursor:
@@ -257,7 +247,11 @@ def _create_pending_media_buy(live_server: dict[str, str], auth_token: str) -> s
             ),
         )
     )
-    media_buy_id = create_result["media_buy_id"]
+    # AdCP 3.1.1 media-buy/create-media-buy-response.json, CreateMediaBuySubmitted:
+    # the wire response carries a task_id; media_buy_id arrives after approval.
+    assert create_result["status"] == "submitted"
+    assert "media_buy_id" not in create_result
+    media_buy_id = media_buy_for_task(live_server, TENANT_ID, create_result["task_id"])
     state = _get_media_buy_state(live_server, media_buy_id)
     assert state["media_buy_status"] == "pending_approval", (
         f"Expected pending approval media buy, got {state['media_buy_status']}"
@@ -298,6 +292,7 @@ def _fill_product_form(
     page.locator(f"input[name='selected_property_tags'][value='{property_selection['selection_value']}']").check()
 
 
+@pytest.mark.slow
 def test_add_product_browser_flow(docker_services_e2e, live_server, test_auth_token):
     """Create a product in the browser and verify downstream discoverability."""
     reference_product = _discover_reference_product(live_server, test_auth_token)
@@ -308,7 +303,7 @@ def test_add_product_browser_flow(docker_services_e2e, live_server, test_auth_to
 
     with browser_page(live_server["admin"]) as page:
         login_as_tenant_admin(page, TENANT_ID)
-        page.goto(f"/tenant/{TENANT_ID}/products/add", wait_until="networkidle")
+        page.goto(f"/tenant/{TENANT_ID}/products/add", wait_until="domcontentloaded")
         _fill_product_form(
             page,
             product_id=product_id,
@@ -319,7 +314,7 @@ def test_add_product_browser_flow(docker_services_e2e, live_server, test_auth_to
             property_selection=property_selection,
         )
         page.get_by_role("button", name="Create Product").click()
-        page.wait_for_url(f"**/tenant/{TENANT_ID}/products", wait_until="networkidle")
+        page.wait_for_url(f"**/tenant/{TENANT_ID}/products/", wait_until="domcontentloaded")
         page.wait_for_selector(f"text={product_id}")
 
     discovered = _lookup_product(live_server, test_auth_token, product_id)
@@ -327,6 +322,7 @@ def test_add_product_browser_flow(docker_services_e2e, live_server, test_auth_to
     assert discovered["delivery_measurement"]["provider"] == "comScore"
 
 
+@pytest.mark.slow
 def test_edit_product_browser_flow(docker_services_e2e, live_server, test_auth_token):
     """Edit a product in the browser and verify downstream discoverability changes."""
     reference_product = _discover_reference_product(live_server, test_auth_token)
@@ -347,13 +343,13 @@ def test_edit_product_browser_flow(docker_services_e2e, live_server, test_auth_t
 
     with browser_page(live_server["admin"]) as page:
         login_as_tenant_admin(page, TENANT_ID)
-        page.goto(f"/tenant/{TENANT_ID}/products/{product_id}/edit", wait_until="networkidle")
+        page.goto(f"/tenant/{TENANT_ID}/products/{product_id}/edit", wait_until="domcontentloaded")
         assert page.locator("#name").input_value() == original_name
         page.locator("#name").fill(updated_name)
         page.locator("#description").fill("Updated through browser UI E2E")
         page.locator("#delivery_measurement_provider").fill("IAS")
         page.get_by_role("button", name="Save Changes").click()
-        page.wait_for_url(f"**/tenant/{TENANT_ID}/products", wait_until="networkidle")
+        page.wait_for_url(f"**/tenant/{TENANT_ID}/products/", wait_until="domcontentloaded")
         page.wait_for_selector(f"text={updated_name}")
 
     discovered = _lookup_product(live_server, test_auth_token, product_id)
@@ -361,36 +357,17 @@ def test_edit_product_browser_flow(docker_services_e2e, live_server, test_auth_t
     assert discovered["delivery_measurement"]["provider"] == "IAS"
 
 
-def test_create_principal_browser_flow(docker_services_e2e, live_server):
-    """Create a principal in the browser and verify persisted state."""
-    principal_id = f"browser-principal-{uuid.uuid4().hex[:8]}"
-    principal_name = f"Browser Principal {uuid.uuid4().hex[:6]}"
-
-    with browser_page(live_server["admin"]) as page:
-        login_as_tenant_admin(page, TENANT_ID)
-        page.goto(f"/tenant/{TENANT_ID}/principals/create", wait_until="networkidle")
-        page.locator("#principal_id").fill(principal_id)
-        page.locator("#name").fill(principal_name)
-        page.get_by_role("button", name="Add Advertiser").click()
-        page.wait_for_url(f"**/tenant/{TENANT_ID}/settings*", wait_until="networkidle")
-        page.wait_for_selector(f"text={principal_name}")
-
-    record = _get_principal_record(live_server, principal_id)
-    assert record is not None, "Principal should be persisted"
-    assert record[1] == principal_name
-    assert len(record[2]) > 0, "Principal access token should be generated"
-
-
+@pytest.mark.slow
 def test_workflow_approval_browser_flow(docker_services_e2e, live_server, test_auth_token, restore_auto_approval):
     """Approve a pending media buy in the browser and verify the workflow outcome."""
     media_buy_id = _create_pending_media_buy(live_server, test_auth_token)
 
     with browser_page(live_server["admin"]) as page:
         login_as_tenant_admin(page, TENANT_ID)
-        page.goto(f"/tenant/{TENANT_ID}/media-buy/{media_buy_id}", wait_until="networkidle")
+        page.goto(f"/tenant/{TENANT_ID}/media-buy/{media_buy_id}", wait_until="domcontentloaded")
         assert page.locator("text=Manual Approval Required").count() > 0, "Media buy should require manual approval"
+        page.once("dialog", lambda dialog: dialog.accept())
         page.locator("#approveBtn").click()
-        page.wait_for_load_state("networkidle")
         page.wait_for_selector("#approveBtn", state="detached")
 
     state = _get_media_buy_state(live_server, media_buy_id)
@@ -398,6 +375,7 @@ def test_workflow_approval_browser_flow(docker_services_e2e, live_server, test_a
     assert state["media_buy_status"] != "pending_approval"
 
 
+@pytest.mark.slow
 def test_workflow_rejection_browser_flow(docker_services_e2e, live_server, test_auth_token, restore_auto_approval):
     """Reject a pending media buy in the browser and verify the terminal state."""
     media_buy_id = _create_pending_media_buy(live_server, test_auth_token)
@@ -405,12 +383,11 @@ def test_workflow_rejection_browser_flow(docker_services_e2e, live_server, test_
 
     with browser_page(live_server["admin"]) as page:
         login_as_tenant_admin(page, TENANT_ID)
-        page.goto(f"/tenant/{TENANT_ID}/media-buy/{media_buy_id}", wait_until="networkidle")
+        page.goto(f"/tenant/{TENANT_ID}/media-buy/{media_buy_id}", wait_until="domcontentloaded")
         assert page.locator("text=Manual Approval Required").count() > 0, "Media buy should require manual approval"
         page.get_by_role("button", name="Reject").click()
         page.locator("#reason").fill(rejection_reason)
         page.get_by_role("button", name="Reject Media Buy").click()
-        page.wait_for_load_state("networkidle")
         page.wait_for_selector("text=REJECTED")
         assert not page.locator("#approveBtn").count(), "Rejected media buy should not remain actionable"
 

@@ -101,6 +101,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc010_capabilities",
     "tests.bdd.steps.domain.uc011_accounts",
     "tests.bdd.steps.domain.admin_accounts",
+    "tests.bdd.steps.domain.admin_principals",
     "tests.bdd.steps.domain.admin_operator_refusals",
     "tests.bdd.steps.domain.admin_super_admin",
     "tests.bdd.steps.domain.admin_unexpected_errors",
@@ -6759,6 +6760,11 @@ _UC006_WIRED_SCENARIOS = frozenset(
 )
 
 ENV_ROUTES: list[EnvRoute] = [
+    EnvRoute(
+        tag="admin-principals",
+        when=lambda markers: "admin-principals" in markers,
+        env_builder=_env("tests.harness.admin_principal.AdminPrincipalEnv"),
+    ),
     # ── ADMIN (hand-authored admin UI features) ─────────────────────────────
     # T-ADMIN-* detects as the ADMIN bucket (storyboard_spec.detect_uc); the
     # bucket row serves BR-ADMIN-ACCOUNTS. BR-ADMIN-TENANT-SCOPING carries the

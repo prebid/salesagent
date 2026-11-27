@@ -9,13 +9,15 @@ To add an advertiser in the Admin UI, do the following:
 1. Open **Settings** and select the **Advertisers** section.
 2. Click **Add Advertiser**.
 3. Enter the advertiser details:
-   - **Advertiser ID**: The form requires a value made of letters, digits, underscores, and hyphens. The sales agent does not store it.
+   - **Advertiser ID**: 1 to 45 letters, numbers, underscores or hyphens, unique within the tenant. It cannot be changed later. `anonymous`, `unknown` and `admin` are reserved because audit records use them for actions no advertiser took.
    - **Advertiser Name**: The company name as it appears in reports.
    - **GAM Advertiser**: The GAM advertiser that owns this advertiser's campaigns. Only a Google Ad Manager tenant has this field.
 4. Click **Add Advertiser**.
 
-The sales agent assigns the principal ID itself: `prin_` followed by eight hexadecimal
-characters.
+The sales agent stores the submitted advertiser ID as its principal ID.
+
+Deleting an advertiser does not remove its ID from products restricted to it. An advertiser
+created later with the same ID can see those products.
 
 ### API token
 

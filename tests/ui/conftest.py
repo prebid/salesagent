@@ -64,8 +64,8 @@ def server_seeding(server_db_url):
 
     @contextmanager
     def seeding():
-        with production_db_pointed_at(server_db_url), bound_factory_session():
-            yield
+        with production_db_pointed_at(server_db_url), bound_factory_session() as session:
+            yield session
 
     return seeding
 

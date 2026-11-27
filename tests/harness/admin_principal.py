@@ -1,102 +1,99 @@
-"""Harness for the admin PRINCIPALS surface — the routes that issue tenant credentials.
-
-Sibling of :mod:`tests.harness.admin_accounts`, kept separate rather than bolted onto it:
-that env is named for accounts and owns account seeding and cleanup, and a principals
-method on it would be findable only by someone who already knew to look there.
-
-Integration transport only, deliberately. ``AdminAccountEnv`` carries both
-``integration`` and ``e2e`` because ``BR-ADMIN-ACCOUNTS.feature`` declares both and BDD
-parametrizes over them. Nothing drives this env from BDD yet, so an e2e mode here would be
-a transport with no caller — added when the BDD coverage that needs it is written, not
-before.
-
-Why this exists at all rather than the test reading the database itself:
-``tests/unit/test_architecture_repository_pattern.py`` forbids ``get_db_session()`` in test
-bodies and its allowlist only shrinks. DB access belongs in the harness, which is not
-scanned — the same split ``AdminAccountEnv.get_account_from_db`` already uses.
-"""
+"""Drive principal forms through the shared admin client and read their persisted state."""
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from typing import Any
 
-from src.core.database.database_session import get_db_session
 from src.core.database.models import AuditLog, Principal
-from tests.harness.admin_client import AdminClient, AdminResponse
+from src.core.database.repositories.principal import PrincipalRepository
+from tests.harness._base import BareIntegrationEnv
+from tests.harness.admin_client import AdminClient, AdminOperatorMixin, AdminResponse
+from tests.harness.database_faults import DatabaseFaultMixin
 
 
-class AdminPrincipalEnv:
-    """Drive the admin principals routes, and read what they wrote."""
-
-    DEFAULT_TENANT_ID = "admin_principal_tenant"
-
-    def __init__(self, *, tenant_id: str | None = None) -> None:
-        """Deliberately NOT a context manager.
-
-        ``tests/harness/test_harness_base.py`` allows ``__enter__``/``__exit__`` in exactly
-        two declared homes — ``BaseTestEnv``, which owns the one unwind guard, and
-        ``AdminAccountEnv``, a named and separately tested exception — and that list only
-        shrinks, so a third home is not the way to add an env. The rule is also right here
-        on its own terms: this env acquires nothing that needs releasing. Each request
-        opens a short-lived :class:`AdminClient` and closes it before returning, so there
-        is no resource for an unwind guard to protect and the lifecycle methods would have
-        been ceremony around a plain constructor.
-        """
-        self._tenant_id = tenant_id or self.DEFAULT_TENANT_ID
+class AdminPrincipalEnv(AdminOperatorMixin, DatabaseFaultMixin, BareIntegrationEnv):
+    """Principal creation, editing and token rotation on either admin transport."""
 
     @property
-    def tenant_id(self) -> str:
-        return self._tenant_id
+    def client(self) -> AdminClient:
+        return self.admin_client(self.tenant_id)
 
-    # ── seeding ────────────────────────────────────────────────────────────
+    def _enter_post(self) -> None:
+        self.ensure_tenant()
 
-    def seed_principal(self, *, principal_id: str) -> str:
-        """Create the tenant and one principal, returning the principal id.
+    def seed_principal(self, *, principal_id: str, tenant_id: str | None = None, **fields: Any) -> str:
+        from src.core.platform_mappings import mock_platform_mapping
+        from tests.factories import TenantFactory
 
-        Factories are bound to the session this method owns, every one of them, because
-        ``PrincipalFactory`` declares ``tenant = SubFactory(TenantFactory)`` and reaches
-        siblings (see :func:`tests.utils.database_helpers.bind_factories_to_session`).
-        """
-        from tests.factories import PrincipalFactory, TenantFactory
-        from tests.utils.database_helpers import bind_factories_to_session
-
-        with get_db_session() as session, bind_factories_to_session(session):
-            tenant = TenantFactory(tenant_id=self._tenant_id)
-            PrincipalFactory(tenant=tenant, principal_id=principal_id)
+        tenant_id = tenant_id or self.tenant_id
+        if tenant_id != self.tenant_id:
+            TenantFactory(tenant_id=tenant_id)
+        PrincipalRepository(self.get_session(), tenant_id).issue(
+            principal_id=principal_id,
+            name=fields.pop("name", "Existing advertiser"),
+            platform_mappings={"mock": mock_platform_mapping(principal_id)},
+            **fields,
+        )
+        self._commit_factory_data()
         return principal_id
 
-    # ── requests ───────────────────────────────────────────────────────────
+    def post_create(self, **fields: str) -> AdminResponse:
+        return self.admin_request(
+            self.tenant_id,
+            "post",
+            "principals/create",
+            data={"name": "Created Advertiser", "enable_mock": "1", **fields},
+        )
+
+    def post_edit(self, principal_id: str, **fields: str) -> AdminResponse:
+        return self.admin_request(self.tenant_id, "post", f"principals/{principal_id}/edit", data=fields)
+
+    def get_create_form(self) -> AdminResponse:
+        return self.admin_request(self.tenant_id, "get", "principals/create")
+
+    def follow(self, response: AdminResponse) -> AdminResponse:
+        return self.client.follow(response)
 
     def post_rotate_token(
-        self,
-        principal_id: str,
-        *,
-        authenticated: bool,
-        form: dict[str, str] | None = None,
+        self, principal_id: str, *, authenticated: bool, form: dict[str, str] | None = None
     ) -> AdminResponse:
-        """POST the rotate-token route, with or without an admin session."""
-        client = AdminClient()
-        try:
-            if authenticated:
-                client.authenticate(self._tenant_id)
-            return client.request(
-                "post", f"/tenant/{self._tenant_id}/principal/{principal_id}/rotate-token", data=form or {}
-            )
-        finally:
-            client.close()
+        if authenticated:
+            self.authenticate(self.tenant_id)
+        else:
+            self.admin_client(self.tenant_id)
+            self.clear_auth()
+        return self.admin_request(self.tenant_id, "post", f"principal/{principal_id}/rotate-token", data=form or {})
 
-    # ── reads ──────────────────────────────────────────────────────────────
+    def principals(self, *, name: str | None = None, tenant_id: str | None = None) -> list[Principal]:
+        session = self.get_session()
+        session.expire_all()
+        rows = PrincipalRepository(session, tenant_id or self.tenant_id).list_all()
+        return [row for row in rows if name is None or row.name == name]
 
-    def token_hash(self, principal_id: str) -> str:
-        """The STORED form of the principal's token.
+    def token_hash(self, principal_id: str) -> str | None:
+        session = self.get_session()
+        session.expire_all()
+        principal = PrincipalRepository(session, self.tenant_id).get(principal_id)
+        return principal.token_hash if principal is not None else None
 
-        The plaintext is never stored — ``credentials.hash_token`` is what the column
-        holds — so the hash is the only way to observe that a rotation happened.
-        """
-        with get_db_session() as session:
-            return session.scalars(select(Principal).filter_by(principal_id=principal_id)).one().token_hash
+    def audit_rows(self, operation: str, *, method: str | None = None) -> list[AuditLog]:
+        return [
+            row
+            for row in self.get_audit_logs(operation)
+            if row.operation == operation and (method is None or row.details.get("method") == method)
+        ]
 
-    def audit_rows(self, operation: str) -> list[AuditLog]:
-        """Every audit row this tenant holds for *operation*."""
-        with get_db_session() as session:
-            return list(session.scalars(select(AuditLog).filter_by(tenant_id=self._tenant_id, operation=operation)))
+    def unauthenticated_product_audit_principal(self) -> str:
+        """Read the identity written by a real anonymous product-discovery call."""
+        from tests.harness.client import AdCPTestClient
+        from tests.harness.transport import Transport
+
+        self.ensure_tenant(brand_manifest_policy="public")
+        self._commit_factory_data()
+        transport = Transport.E2E_REST if self.e2e_config else Transport.REST
+        result = AdCPTestClient(self).call(
+            "get_products", {"brief": "Available display inventory"}, transport, credential=self.credential(token=None)
+        )
+        assert result.is_success is True, result
+        (row,) = self.get_audit_logs("get_products")
+        return row.principal_id

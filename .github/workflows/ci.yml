@@ -412,8 +412,8 @@ jobs:
       # resolves. Do NOT publish a host port or add a host-reachable alias to
       # make it resolvable from outside — "nothing exposed" is the invariant
       # this stack is built on.
-      - name: Run E2E suite in-network
-        run: ./run_all_tests.sh e2e
+      - name: Run E2E and browser suites in-network
+        run: ./run_all_tests.sh e2e,ui
         env:
           DOCKER_BUILDKIT: 1
           COMPOSE_DOCKER_CLI_BUILD: 1

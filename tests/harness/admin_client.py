@@ -211,6 +211,8 @@ class AdminClient:
         response = self._http.request(
             method, f"{self._base_url}{path}", data=data, json=json, headers=headers, allow_redirects=False, timeout=60
         )
+        if "session" in response.cookies:
+            drop_stated_session_cookie(self._http)
         return AdminResponse.from_requests(response)
 
     def submit(
@@ -232,13 +234,13 @@ class AdminClient:
         headers: dict[str, str | None] = dict(BROWSER_PAGE_HEADERS if browser_headers is None else browser_headers)
         if from_page is not None:
             headers["Referer"] = f"{self.origin}{from_page}" if from_page.startswith("/") else from_page
-        response = self.request("post", path, data=data, headers=headers)
+        return self.follow(self.request("post", path, data=data, headers=headers))
+
+    def follow(self, response: AdminResponse) -> AdminResponse:
+        """Follow the form response's redirect, retaining its flash message."""
         location = response.headers.get("location")
         if not location:
             return response
-        if self._http is not None:
-            # The flash lives in the session the server just wrote; see the helper.
-            drop_stated_session_cookie(self._http)
         target = urlsplit(location)
         return self.request("get", target.path + (f"?{target.query}" if target.query else ""))
 
@@ -252,16 +254,17 @@ class AdminClient:
 
 
 def guarded_admin_client(
-    guard: Callable[[str, Callable[[], None]], None], base_url: str | None, tenant_id: str
+    guard: Callable[[str, Callable[[], None]], None], base_url: str | None, tenant_id: str | None
 ) -> AdminClient:
-    """An :class:`AdminClient` authenticated for *tenant_id*, closed by the env's *guard*.
+    """An :class:`AdminClient`, optionally authenticated for *tenant_id*, closed by *guard*.
 
     An env opens it on its first admin request, after every Given, so the in-process app is
     composed under the deployment a Given chose.
     """
     client = AdminClient(base_url)
     guard("admin_client", client.close)
-    client.authenticate(tenant_id)
+    if tenant_id is not None:
+        client.authenticate(tenant_id)
     return client
 
 
@@ -279,15 +282,29 @@ class AdminOperatorMixin:
     """
 
     _admin: AdminClient | None = None
+    _admin_auth_cleared: bool = False
 
     def admin_client(self, tenant_id: str) -> AdminClient:
-        """The operator's client for *tenant_id*, opened on first use, after factory rows commit."""
+        """The operator client, opened after factory rows commit, retaining sign-out state."""
         self._commit_factory_data()  # type: ignore[attr-defined]
         if self._admin is None:
             e2e_config = self.e2e_config  # type: ignore[attr-defined]
             base_url = e2e_config.base_url if e2e_config is not None else None
-            self._admin = guarded_admin_client(self._guard, base_url, tenant_id)  # type: ignore[attr-defined]
+            auth_tenant = None if self._admin_auth_cleared else tenant_id
+            self._admin = guarded_admin_client(self._guard, base_url, auth_tenant)  # type: ignore[attr-defined]
         return self._admin
+
+    def authenticate(self, tenant_id: str) -> None:
+        """Authenticate again after an explicit sign-out or tenant change."""
+        self._admin_auth_cleared = True
+        self.admin_client(tenant_id).authenticate(tenant_id)
+        self._admin_auth_cleared = False
+
+    def clear_auth(self) -> None:
+        """Clear the existing operator credentials without replacing the client."""
+        self._admin_auth_cleared = True
+        if self._admin is not None:
+            self._admin.clear_auth()
 
     def admin_request(
         self,
