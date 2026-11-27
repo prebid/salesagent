@@ -19,7 +19,10 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from src.adapters.base import AdapterCapabilities, AdServerAdapter
 
 # The ad-server boundary: the one seam worth patching in an approval test. Patched
 # on the defining module because ``execute_approved_media_buy`` resolves it as a
@@ -27,21 +30,20 @@ from typing import Any
 ADAPTER_BOUNDARY = "src.core.tools.media_buy_create._execute_adapter_media_buy_creation"
 
 
-def adapter_declaring(capabilities: Any) -> Any:
+def adapter_declaring(capabilities: AdapterCapabilities) -> AdServerAdapter:
     """An ad server adapter stand-in shaped by ``AdServerAdapter``, declaring *capabilities*.
 
-    Spec'd on the contract, so a call off it fails, and carrying an adapter's real
-    capabilities, so a gate on them is graded rather than answered by a truthy child mock.
-    ``orders_manager`` is GAM's, which the approval reads when an adapter has one.
+    Spec'd on the contract, so a call or an attribute off it fails, and carrying an adapter's
+    real capabilities, so a gate on them is graded rather than answered by a truthy child mock.
+    What one adapter builds beyond the contract, such as GAM's ``orders_manager``, is not here:
+    a test that models that adapter attaches it.
     """
-    from unittest.mock import MagicMock, create_autospec
+    from unittest.mock import create_autospec
 
     from src.adapters.base import AdServerAdapter
 
     adapter = create_autospec(AdServerAdapter, instance=True)
     adapter.capabilities = capabilities
-    adapter.orders_manager = MagicMock()
-    adapter.orders_manager.approve_order.return_value = True
     return adapter
 
 

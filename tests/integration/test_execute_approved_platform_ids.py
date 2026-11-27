@@ -25,12 +25,14 @@ field on the adapter's result, so it is passed as a keyword and nothing reaches 
 model to plant an attribute.
 """
 
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
-from unittest.mock import ANY, call, patch
+from unittest.mock import ANY, call, create_autospec, patch
 
 import pytest
 
 from src.adapters.base import AdapterCreateResult
+from src.adapters.gam.managers.orders import GAMOrdersManager
 from src.adapters.google_ad_manager import GoogleAdManager
 from src.adapters.mock_ad_server import MockAdServer
 from src.core.database.database_session import get_db_session, get_engine
@@ -226,20 +228,45 @@ def pending_media_buy_with_two_packages(integration_db):
         session.close()
 
 
-def _run_execute_approved(media_buy_id, tenant_id, adapter_response):
-    """Helper to run execute_approved_media_buy with mocked adapter."""
+def _approve_with(
+    adapter,
+    *,
+    media_buy_id: str,
+    tenant_id: str,
+    adapter_response: AdapterCreateResult,
+    asset: dict | None = None,
+):
+    """Run the approval with *adapter* standing in for the ad server, which books *adapter_response*.
+
+    The one patch stack in this module. Returns the approval's result and the ``get_adapter``
+    and ad-server-boundary stand-ins, so a test can grade which adapter each step ran on. The
+    creative gate is stubbed, and so is the asset builder when *asset* is given: the approval's
+    creative upload is the subject, not either of them.
+    """
+    builds_asset = (
+        patch("src.core.tools.media_buy_create._build_adapter_asset_from_creative", return_value=(asset, None))
+        if asset is not None
+        else nullcontext()
+    )
     with (
-        patch(
-            "src.core.tools.media_buy_create._execute_adapter_media_buy_creation",
-            return_value=adapter_response,
-        ),
+        patch(ADAPTER_BOUNDARY, return_value=adapter_response) as creation,
         patch("src.core.tools.media_buy_create._validate_creatives_before_adapter_call"),
-        patch(
-            "src.core.tools.media_buy_create.get_adapter",
-            return_value=type("MockAdapter", (), {"orders_manager": None})(),
-        ),
+        builds_asset,
+        patch("src.core.tools.media_buy_create.get_adapter", return_value=adapter) as get_adapter,
     ):
-        return run_approval(media_buy_id, tenant_id)
+        return run_approval(media_buy_id, tenant_id), get_adapter, creation
+
+
+def _gam_adapter():
+    """A ``GoogleAdManager`` stand-in: its capabilities, and the ``orders_manager`` only GAM builds.
+
+    ``AdServerAdapter`` declares no ``orders_manager``. The approval approves the order through
+    one when the adapter has it, and ``GoogleAdManager`` is the adapter that does.
+    """
+    adapter = adapter_declaring(GoogleAdManager.capabilities)
+    adapter.orders_manager = create_autospec(GAMOrdersManager, instance=True)
+    adapter.orders_manager.approve_order.return_value = True
+    return adapter
 
 
 class TestExecuteApprovedPlatformIds:
@@ -262,18 +289,12 @@ class TestExecuteApprovedPlatformIds:
             platform_line_item_ids={package_id: "GAM_LINE_ITEM_12345"},
         )
 
-        with (
-            patch(
-                "src.core.tools.media_buy_create._execute_adapter_media_buy_creation",
-                return_value=adapter_response,
-            ),
-            patch("src.core.tools.media_buy_create._validate_creatives_before_adapter_call"),
-            patch(
-                "src.core.tools.media_buy_create.get_adapter",
-                return_value=type("MockAdapter", (), {"orders_manager": None})(),
-            ),
-        ):
-            result = run_approval(media_buy_id, tenant_id)
+        result, *_ = _approve_with(
+            adapter_declaring(MockAdServer.capabilities),
+            media_buy_id=media_buy_id,
+            tenant_id=tenant_id,
+            adapter_response=adapter_response,
+        )
 
         assert result.ok, f"execute_approved_media_buy failed: {result.error_msg}"
 
@@ -312,7 +333,12 @@ class TestExecuteApprovedPlatformIdsEdgeCases:
             platform_line_item_ids={"pkg_A": "LINE_ITEM_A", "pkg_B": "LINE_ITEM_B"},
         )
 
-        result = _run_execute_approved(media_buy_id, tenant_id, adapter_response)
+        result, *_ = _approve_with(
+            adapter_declaring(MockAdServer.capabilities),
+            media_buy_id=media_buy_id,
+            tenant_id=tenant_id,
+            adapter_response=adapter_response,
+        )
         assert result.ok, f"execute_approved_media_buy failed: {result.error_msg}"
 
         from sqlalchemy import select
@@ -339,7 +365,12 @@ class TestExecuteApprovedPlatformIdsEdgeCases:
             platform_line_item_ids={"nonexistent_pkg": "LINE_ITEM_999"},
         )
 
-        result = _run_execute_approved(media_buy_id, tenant_id, adapter_response)
+        result, *_ = _approve_with(
+            adapter_declaring(MockAdServer.capabilities),
+            media_buy_id=media_buy_id,
+            tenant_id=tenant_id,
+            adapter_response=adapter_response,
+        )
         assert result.ok, f"Should succeed even if package not found: {result.error_msg}"
 
     def test_empty_platform_line_item_ids_dict(self, pending_media_buy_with_package):
@@ -354,7 +385,12 @@ class TestExecuteApprovedPlatformIdsEdgeCases:
             platform_line_item_ids={},
         )
 
-        result = _run_execute_approved(media_buy_id, tenant_id, adapter_response)
+        result, *_ = _approve_with(
+            adapter_declaring(MockAdServer.capabilities),
+            media_buy_id=media_buy_id,
+            tenant_id=tenant_id,
+            adapter_response=adapter_response,
+        )
         assert result.ok, f"Should succeed with empty dict: {result.error_msg}"
 
         # Package config should be unchanged (no platform_line_item_id added)
@@ -386,7 +422,12 @@ class TestExecuteApprovedPlatformIdsEdgeCases:
             packages=[],
         )
 
-        result = _run_execute_approved(media_buy_id, tenant_id, adapter_response)
+        result, *_ = _approve_with(
+            adapter_declaring(MockAdServer.capabilities),
+            media_buy_id=media_buy_id,
+            tenant_id=tenant_id,
+            adapter_response=adapter_response,
+        )
         assert result.ok, f"Should succeed with no mapping: {result.error_msg}"
 
         from sqlalchemy import select
@@ -440,22 +481,6 @@ def pending_media_buy_with_approved_creative(pending_media_buy_with_package):
     CreativeAssignmentFactory(creative=creative, media_buy=mb, package_id=data["package_id"])
 
     return {**data, "principal_id": principal.principal_id, "creative_id": creative.creative_id}
-
-
-def _approve_with(adapter, *, media_buy_id: str, tenant_id: str, order_id: str, asset: dict):
-    """Run the approval with *adapter* standing in for the ad server, which books *order_id*.
-
-    Returns the approval's result and the ``get_adapter`` and ad-server-boundary stand-ins,
-    so a test can grade which adapter each step ran on. The creative gate and the asset
-    builder are stubbed: the approval's creative upload is the subject, not either of them.
-    """
-    with (
-        patch(ADAPTER_BOUNDARY, return_value=AdapterCreateResult(media_buy_id=order_id, packages=[])) as creation,
-        patch("src.core.tools.media_buy_create._validate_creatives_before_adapter_call"),
-        patch("src.core.tools.media_buy_create._build_adapter_asset_from_creative", return_value=(asset, None)),
-        patch("src.core.tools.media_buy_create.get_adapter", return_value=adapter) as get_adapter,
-    ):
-        return run_approval(media_buy_id, tenant_id), get_adapter, creation
 
 
 class TestExecuteApprovedEnrichesSellerConcept:
@@ -521,7 +546,7 @@ class TestExecuteApprovedEnrichesSellerConcept:
         # (2) ...fed through the REAL execute_approved_media_buy writeback. The adapter
         # response carries the GAM order id; the adapter itself is a stand-in whose push
         # returns the real producer's output.
-        mock_adapter = adapter_declaring(GoogleAdManager.capabilities)
+        mock_adapter = _gam_adapter()
         mock_adapter.add_creative_assets.return_value = produced
         valid_asset = {
             "creative_id": creative_id,
@@ -534,7 +559,11 @@ class TestExecuteApprovedEnrichesSellerConcept:
             "name": "Test Creative",
         }
         result, _get_adapter, _creation = _approve_with(
-            mock_adapter, media_buy_id=media_buy_id, tenant_id=tenant_id, order_id=gam_order_id, asset=valid_asset
+            mock_adapter,
+            media_buy_id=media_buy_id,
+            tenant_id=tenant_id,
+            adapter_response=AdapterCreateResult(media_buy_id=gam_order_id, packages=[]),
+            asset=valid_asset,
         )
 
         assert result.ok, f"execute_approved_media_buy failed: {result.error_msg}"
@@ -570,30 +599,35 @@ class TestExecuteApprovedEnrichesSellerConcept:
 class TestExecuteApprovedRunsOnItsOneAdapter:
     """The approval books, pushes and approves on the one adapter it builds."""
 
-    @pytest.mark.parametrize(
-        ("capabilities", "pushed"),
-        [
-            pytest.param(GoogleAdManager.capabilities, True, id="trafficking"),
-            pytest.param(MockAdServer.capabilities, False, id="not-trafficking"),
-        ],
-    )
-    def test_the_push_reaches_only_an_adapter_that_traffics_creatives(
-        self, pending_media_buy_with_approved_creative, capabilities, pushed
-    ):
-        """Only an adapter that declares creative trafficking is pushed to, on the one adapter the approval built."""
+    @pytest.mark.parametrize("gam", [pytest.param(True, id="gam"), pytest.param(False, id="mock")])
+    def test_the_approval_calls_only_what_the_adapter_has(self, pending_media_buy_with_approved_creative, gam):
+        """GAM is pushed the creative and approves the order; a Mock adapter is asked for neither.
+
+        Both run on the one adapter the approval built. Only ``GoogleAdManager`` traffics
+        creatives and has an ``orders_manager``. ``MockAdServer`` has neither, so the approval
+        calls nothing on it.
+        """
         fixture = pending_media_buy_with_approved_creative
-        adapter = adapter_declaring(capabilities)
+        adapter = _gam_adapter() if gam else adapter_declaring(MockAdServer.capabilities)
         adapter.add_creative_assets.return_value = []
         asset = {"creative_id": fixture["creative_id"], "package_assignments": []}
 
         result, get_adapter, creation = _approve_with(
-            adapter, media_buy_id=fixture["media_buy_id"], tenant_id=fixture["tenant_id"], order_id="555", asset=asset
+            adapter,
+            media_buy_id=fixture["media_buy_id"],
+            tenant_id=fixture["tenant_id"],
+            adapter_response=AdapterCreateResult(media_buy_id="555", packages=[]),
+            asset=asset,
         )
 
         assert result.ok, f"execute_approved_media_buy failed: {result.error_msg}"
         get_adapter.assert_called_once_with(ANY)
         creation.assert_called_once_with(ANY, ANY, ANY, ANY, ANY, adapter)
-        adapter.orders_manager.approve_order.assert_called_once_with("555")
-        assert adapter.add_creative_assets.call_args_list == (
-            [call("555", [asset], ANY, already_approved=True)] if pushed else []
+        assert adapter.mock_calls == (
+            [
+                call.add_creative_assets("555", [asset], ANY, already_approved=True),
+                call.orders_manager.approve_order("555"),
+            ]
+            if gam
+            else []
         )
