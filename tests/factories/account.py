@@ -20,7 +20,7 @@ from adcp.types.domains.core.business_entity import (  # TODO: no stable alias i
 from factory import LazyAttribute, Sequence, SubFactory
 
 from src.core.database.models import Account, AgentAccountAccess
-from tests.factories.core import TenantFactory
+from tests.factories.core import IN_ROW_TENANT, ParentRow, ParentRowsFactory, TenantFactory
 
 #: The account every test names by literal. Deterministic on purpose: ``account`` is
 #: spec-REQUIRED on create_media_buy, update_media_buy and sync_creatives, and the transport
@@ -33,7 +33,7 @@ from tests.factories.core import TenantFactory
 DEFAULT_TEST_ACCOUNT_ID = "acct_test"
 
 
-class AccountFactory(factory.alchemy.SQLAlchemyModelFactory):
+class AccountFactory(ParentRowsFactory):
     class Meta:
         model = Account
         sqlalchemy_session = None
@@ -48,27 +48,22 @@ class AccountFactory(factory.alchemy.SQLAlchemyModelFactory):
         #: ``.build()`` carrying the trap.
         exclude = ["tenant"]
 
-    tenant = SubFactory(TenantFactory)
-    tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
+    tenant = ParentRow(("tenant_id",), SubFactory(TenantFactory))
     account_id = Sequence(lambda n: f"acc_{n:04d}")
     name = LazyAttribute(lambda o: f"Test Account {o.account_id}")
     status = "active"
 
 
-class AgentAccountAccessFactory(factory.alchemy.SQLAlchemyModelFactory):
+class AgentAccountAccessFactory(ParentRowsFactory):
     class Meta:
         model = AgentAccountAccess
         sqlalchemy_session = None
         sqlalchemy_session_persistence = "commit"
         exclude = ["tenant", "principal", "account"]
 
-    tenant = SubFactory(TenantFactory)
-    principal = SubFactory("tests.factories.principal.PrincipalFactory", tenant=factory.SelfAttribute("..tenant"))
-    account = SubFactory(AccountFactory, tenant=factory.SelfAttribute("..tenant"))
-
-    tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
-    principal_id = LazyAttribute(lambda o: o.principal.principal_id)
-    account_id = LazyAttribute(lambda o: o.account.account_id)
+    tenant = ParentRow(("tenant_id",), SubFactory(TenantFactory))
+    principal = ParentRow(("principal_id",), SubFactory("tests.factories.principal.PrincipalFactory", **IN_ROW_TENANT))
+    account = ParentRow(("account_id",), SubFactory(AccountFactory, **IN_ROW_TENANT))
 
 
 def seed_default_account(

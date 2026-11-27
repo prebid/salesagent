@@ -206,7 +206,9 @@ def _mock_product(product_id: str = "prod_1", currency: str = "USD") -> MagicMoc
     test through here started raising ``AttributeError`` on a shape production never
     produces. The factory cannot drift from the model that way.
     """
-    pricing_option = PricingOptionFactory.build(product_id=product_id, currency=currency, min_spend_per_package=None)
+    pricing_option = PricingOptionFactory.build(
+        tenant_id="test_tenant", product_id=product_id, currency=currency, min_spend_per_package=None
+    )
 
     product = MagicMock()
     product.product_id = product_id

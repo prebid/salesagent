@@ -13,7 +13,7 @@ from src.core.resolved_identity import AccountIdentity, PublicIdentity, Resolved
 from src.core.schemas import Principal as SchemaPrincipal
 from src.core.schemas.account import Account
 from src.core.tenant_context import TenantContext
-from tests.factories.core import TenantFactory
+from tests.factories.core import ParentRow, ParentRowsFactory, TenantFactory
 
 _UNSET = object()
 
@@ -29,14 +29,13 @@ def plaintext_token_for(principal_id: str) -> str:
     return f"tok_test_{principal_id}"
 
 
-class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
+class PrincipalFactory(ParentRowsFactory):
     class Meta:
         model = Principal
         sqlalchemy_session = None
         sqlalchemy_session_persistence = "commit"
 
-    tenant = SubFactory(TenantFactory)
-    tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
+    tenant = ParentRow(("tenant_id",), SubFactory(TenantFactory))
     principal_id = Sequence(lambda n: f"principal_{n:04d}")
     name = LazyAttribute(lambda o: f"Test Advertiser {o.principal_id}")
     # The row stores only the hash. The plaintext a test PRESENTS is derived from the

@@ -14,7 +14,7 @@ from src.core.format_resolver import creative_identity_of, find_format
 from src.core.schemas import CreativeFormatIdentity, Format, FormatId
 from src.core.schemas.creative import CreativeAssetRequest
 
-from .core import TenantFactory
+from .core import ParentRow, ParentRowsFactory, TenantFactory
 from .creative_asset import build_assets, image_spec
 from .media_buy import MediaBuyFactory
 from .principal import PrincipalFactory
@@ -328,7 +328,7 @@ class CreativeFactory(SQLAlchemyModelFactory):
         approved = factory.Trait(status="approved")
 
 
-class CreativeAssignmentFactory(SQLAlchemyModelFactory):
+class CreativeAssignmentFactory(ParentRowsFactory):
     class Meta:
         model = CreativeAssignment
         sqlalchemy_session = None
@@ -336,13 +336,27 @@ class CreativeAssignmentFactory(SQLAlchemyModelFactory):
         exclude = ("creative", "media_buy")
 
     assignment_id = factory.Sequence(lambda n: f"assignment_{n:04d}")
-    creative = factory.SubFactory(CreativeFactory)
-    tenant_id = factory.LazyAttribute(lambda o: o.creative.tenant_id)
-    creative_id = factory.LazyAttribute(lambda o: o.creative.creative_id)
-    principal_id = factory.LazyAttribute(lambda o: o.creative.principal_id)
-    media_buy = factory.SubFactory(MediaBuyFactory, tenant=factory.SelfAttribute("..creative.tenant"))
-    media_buy_id = factory.LazyAttribute(lambda o: o.media_buy.media_buy_id)
-    # A package the buy holds, as production assigns one: an assignment's package is a
-    # foreign key to media_packages. The lowest id, so a multi-package buy picks the same one.
-    package_id = factory.LazyAttribute(lambda o: min(package.package_id for package in o.media_buy.packages))
+    creative = ParentRow(("tenant_id", "creative_id", "principal_id"), factory.SubFactory(CreativeFactory))
+    #: A buy built here goes in the creative's tenant, which a creative named by id does not supply.
+    media_buy = ParentRow(
+        ("media_buy_id",),
+        factory.SubFactory(MediaBuyFactory, tenant=factory.SelfAttribute("..creative.tenant")),
+        routed_from="creative",
+    )
     weight = 100
+
+    @classmethod
+    def _adjust_kwargs(cls, **kwargs: Any) -> dict[str, Any]:
+        """Name a package the buy holds, as production assigns one.
+
+        An assignment's package is a foreign key to media_packages. A buy the factory built or
+        the caller passed supplies its lowest package id, so a multi-package buy picks the same
+        one. A buy named by id is not at hand to read, so its caller names the package too.
+        """
+        kwargs = super()._adjust_kwargs(**kwargs)
+        if kwargs.get("package_id") is None:
+            media_buy = kwargs.get("media_buy")
+            if media_buy is None:
+                raise TypeError(f"{cls.__name__} reads no package off a media_buy named by id: pass package_id")
+            kwargs["package_id"] = min(package.package_id for package in media_buy.packages)
+        return kwargs

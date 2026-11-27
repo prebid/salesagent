@@ -13,7 +13,7 @@ from sqlalchemy.orm.attributes import flag_modified, set_committed_value
 from src.core.database.models import PricingOption, Product, ProductPublisherSelection
 from src.core.helpers.publisher_property_helpers import AuthorizedPropertyRef
 from src.core.schemas.pricing import CpmPricingOption
-from tests.factories.core import TenantFactory
+from tests.factories.core import ParentRow, ParentRowsFactory, TenantFactory
 from tests.factories.publisher import (  # noqa: F401 -- re-exported for the tests that seed selections
     SellsPublishersMixin,
     authorize_publishers,
@@ -179,13 +179,11 @@ def catalog_first_publisher_leaderboard(tenant) -> None:
     declare_format_options(tenant, FIRST_PUBLISHER_DOMAIN, [entry])
 
 
-class PricingOptionFactory(factory.alchemy.SQLAlchemyModelFactory):
+class PricingOptionFactory(ParentRowsFactory):
     """A ``PricingOption`` row. The ONLY way a test builds one.
 
-    Takes a ``product``, or the ``tenant_id``/``product_id`` pair that names one. Give it
-    the pair and it attaches NO parent object: the SubFactory would otherwise build a
-    second ``Product`` that nothing asked for, and adding the option to a session would
-    cascade an INSERT for it — against ids the caller has already created itself.
+    Takes a ``product``, or the ``tenant_id``/``product_id`` pair that names one, and builds
+    no product for the pair. Half the pair is a ``TypeError``: the row's foreign key needs both.
     """
 
     class Meta:
@@ -193,9 +191,7 @@ class PricingOptionFactory(factory.alchemy.SQLAlchemyModelFactory):
         sqlalchemy_session = None
         sqlalchemy_session_persistence = "commit"
 
-    product = SubFactory(ProductFactory)
-    tenant_id = LazyAttribute(lambda o: o.product.tenant_id)
-    product_id = LazyAttribute(lambda o: o.product.product_id)
+    product = ParentRow(("tenant_id", "product_id"), SubFactory(ProductFactory))
     pricing_model = "cpm"
     currency = "USD"
     is_fixed = True
@@ -210,30 +206,6 @@ class PricingOptionFactory(factory.alchemy.SQLAlchemyModelFactory):
     pricing_option_id = LazyAttribute(
         lambda o: PricingOption.default_option_id(o.pricing_model, o.currency, o.is_fixed)
     )
-
-    @classmethod
-    def _adjust_kwargs(cls, **kwargs):
-        """Keep the parent OBJECT only when it is the parent the ids name.
-
-        A caller that passes ``tenant_id``/``product_id`` overrides the two LazyAttributes
-        but not the SubFactory, so a ``Product`` is still built — one with different ids,
-        which nothing asked for and which a ``session.add`` would cascade an INSERT for.
-        Comparing the two is what tells the cases apart: they agree exactly when the
-        product IS the one being named.
-
-        The key is REMOVED, never set to ``None``. ``product`` is a relationship over
-        ``(tenant_id, product_id)``, so an explicit ``None`` is not "no opinion" — it is
-        "this row has no parent", and SQLAlchemy honours it at flush by nulling both FK
-        columns, discarding the ids the caller passed. That reads as correct right up
-        until the INSERT, because the attributes hold the caller's values until then.
-        """
-        product = kwargs.get("product")
-        if product is not None and (product.tenant_id, product.product_id) != (
-            kwargs["tenant_id"],
-            kwargs["product_id"],
-        ):
-            del kwargs["product"]
-        return kwargs
 
 
 def priced_product(
