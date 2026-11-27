@@ -56,6 +56,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit._architecture_helpers import rel
+
 # DEFERRED to prebid/salesagent#2060. Every check below encodes the TARGET state,
 # and none of it holds yet: the scenarios still seed and read breaker state in the
 # test process, and conftest still routes both tags through a non-strict xfail.
@@ -179,7 +181,7 @@ def _step_functions_by_template() -> list[tuple[re.Pattern[str], str, ast.Functi
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             for template in _decorator_templates(node):
-                key = f"{py_file.relative_to(_TESTS_ROOT.parent)}::{node.name}"
+                key = f"{rel(py_file, _TESTS_ROOT.parent)}::{node.name}"
                 registered.append((_template_to_regex(template), key, node))
     return registered
 

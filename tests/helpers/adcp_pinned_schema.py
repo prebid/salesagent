@@ -191,7 +191,7 @@ def _resolve_filename(filename: str) -> Path:
             p for p in root.rglob(filename) if not (_EXCLUDED_TOP_LEVEL_DIRS & set(p.relative_to(root).parts))
         )
         if len(matches) > 1:
-            rels = [str(m.relative_to(root)) for m in matches]
+            rels = [m.relative_to(root).as_posix() for m in matches]
             raise PinnedSchemaError(
                 f"Schema filename {filename!r} is ambiguous ({rels}) — pass a "
                 f"category-qualified ref (e.g. {rels[0]!r}) instead of a bare filename."
@@ -215,7 +215,7 @@ def _load_with_id(path: Path) -> dict[str, Any]:
     """Load a schema file, stamping its own ``file://`` URI as ``$id`` so its
     relative ``$ref``s (and any ``$ref``s INTO it from a sibling schema)
     resolve deterministically."""
-    schema = json.loads(path.read_text())
+    schema = json.loads(path.read_text(encoding="utf-8"))
     return {**schema, "$id": path.as_uri()}
 
 

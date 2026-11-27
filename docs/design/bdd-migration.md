@@ -17,18 +17,19 @@ form, and what is still open.
 - **A step declares deliberate malformation, and the dispatch grades it.**
   A step that means to send something invalid says so with `malformed(...)`,
   naming the code the buyer must receive, and
-  `assert_declared_malformations` (`tests/factories/malformed.py:471`) fails the
+  `assert_declared_malformations` in `tests/factories/malformed.py` fails the
   scenario when a payload and its declaration disagree with the pinned model.
-  It runs from `gate_and_record` (`tests/bdd/steps/generic/_dispatch.py:178`),
+  It runs from `gate_and_record` in `tests/bdd/steps/generic/_dispatch.py`,
   one function at the one place every dispatch passes, before `json_safe`
   rebuilds the dicts and drops the marker.
 - **The gate captures the request-as-dispatched.**
-  `record_dispatched_request` (`tests/bdd/payload_capture.py:168`) records each
+  `record_dispatched_request` in `tests/bdd/payload_capture.py` records each
   payload against the running test from the same gate, and
   `scripts/audit/compare_payloads.py` compares them across transports. That is
   the request-side check the plan reported missing.
 - **`ctx["response"]` is gone**, with a guard: check E of
-  `tests/unit/test_architecture_bdd_wire_discipline.py` (around line 992) refuses
+  `tests/unit/test_architecture_bdd_wire_discipline.py`
+  (`TestNoProvenanceStrippedResponseCopy`) refuses
   both subscript and `.get` access to it, with an empty allowlist. Steps read
   `ctx["result"].payload` through the named accessors instead.
 - **The `env.mock` gap is declared rather than ambient.**
@@ -40,17 +41,18 @@ form, and what is still open.
 - **Transport de-pinning**, which this plan listed under "Not in scope", has
   happened. Every scenario runs on `a2a`, `mcp`, and `rest` — plus `e2e_rest`
   when the in-network stack enables it — and `_IMPL_ONLY` is an empty set
-  (`tests/bdd/conftest.py:4052`).
+  (`tests/bdd/conftest.py`).
 
 ## Landed in a different form
 
 Item 1 proposed one sentinel vocabulary replacing the three families. The
-families are still three: `OMIT` (`tests/factories/request.py:99`),
+families are still three: `OMIT` (`tests/factories/request.py`),
 `OMIT_IDEMPOTENCY_KEY` / `OMIT_ACCOUNT`
-(`tests/harness/media_buy_create.py:32,38`), and the deliberate local clone
-(`tests/bdd/steps/domain/uc011_accounts.py:56`). What replaced the unification is
-the declared-malformation gate above, which grades a payload against the pin
-instead of asking every omission to spell itself the same way.
+(`tests/harness/media_buy_create.py`), and the deliberate local clone of
+`OMIT_IDEMPOTENCY_KEY` in `tests/bdd/steps/domain/uc011_accounts.py`. What
+replaced the unification is the declared-malformation gate above, which grades a
+payload against the pin instead of asking every omission to spell itself the same
+way.
 
 ## Still open
 

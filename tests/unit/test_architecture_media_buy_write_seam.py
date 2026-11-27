@@ -35,6 +35,7 @@ from tests.unit._architecture_helpers import (
     assert_detector_catches_ast_snippets,
     format_failure,
     parse_module,
+    rel,
     repo_root,
     src_python_files,
 )
@@ -133,10 +134,10 @@ def _scan_src(*, inside_repositories: bool) -> list[str]:
     repo = repo_root()
     hits: list[str] = []
     for path in src_python_files(repo):
-        rel = str(path.relative_to(repo))
-        if rel.startswith(REPOSITORY_DIR) is not inside_repositories:
+        rel_path = rel(path, repo)
+        if rel_path.startswith(REPOSITORY_DIR) is not inside_repositories:
             continue
-        hits.extend(f"{rel}:{lineno}" for lineno in find_media_buy_write_seam_violations(parse_module(path)))
+        hits.extend(f"{rel_path}:{lineno}" for lineno in find_media_buy_write_seam_violations(parse_module(path)))
     return sorted(hits)
 
 
@@ -182,7 +183,7 @@ def test_detector_finds_the_real_repository_writes() -> None:
     written_fields = {
         attr.attr
         for path in src_python_files(repo)
-        if str(path.relative_to(repo)).startswith(REPOSITORY_DIR)
+        if rel(path, repo).startswith(REPOSITORY_DIR)
         for node in ast.walk(parse_module(path))
         for attr in _attribute_targets(node)
         if attr.attr in GUARDED_FIELDS

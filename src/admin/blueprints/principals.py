@@ -3,20 +3,20 @@
 import json
 import logging
 import re
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import cast
 
 from adcp.types import AuthenticationScheme
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import String, func, select
-from sqlalchemy.exc import SQLAlchemyError
 
+from src.admin.form_validation import form_number, json_object_body
 from src.admin.services import DashboardService
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action, record_admin_action_failure
-from src.admin.utils.operator_errors import safe_error_message
 from src.core.database.database_session import get_db_session
-from src.core.database.models import AuditLog, MediaBuy, PushNotificationConfig, Tenant
+from src.core.database.models import AuditLog, MediaBuy, PushNotificationConfig, Tenant, UserRole
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.database.repositories.uow import PushNotificationConfigUoW
 from src.core.exceptions import AdCPValidationError
@@ -41,87 +41,81 @@ principals_bp = Blueprint("principals", __name__)
 @require_tenant_access()
 def list_principals(tenant_id):
     """List all principals (advertisers) for a tenant."""
-    try:
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            if not tenant:
-                flash("Tenant not found", "error")
-                return redirect(url_for("core.index"))
+    with get_db_session() as db_session:
+        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            flash("Tenant not found", "error")
+            return redirect(url_for("core.index"))
 
-            principals = PrincipalRepository(db_session, tenant_id).list_all()
+        principals = PrincipalRepository(db_session, tenant_id).list_all()
 
-            # Convert to dict format for template
-            principals_list = []
-            for principal in principals:
-                # Count media buys for this principal
-                stmt = (
-                    select(func.count())
-                    .select_from(MediaBuy)
-                    .filter_by(tenant_id=tenant_id, principal_id=principal.principal_id)
-                )
-                media_buy_count = db_session.scalar(stmt)
-
-                # Handle both string (SQLite) and dict (PostgreSQL JSONB) formats
-                mappings = principal.platform_mappings
-                if mappings and isinstance(mappings, str):
-                    mappings = json.loads(mappings)
-                elif not mappings:
-                    mappings = {}
-
-                principal_dict = {
-                    "principal_id": principal.principal_id,
-                    "name": principal.name,
-                    "token_prefix": principal.token_prefix,
-                    "platform_mappings": mappings,
-                    "media_buy_count": media_buy_count,
-                    "created_at": principal.created_at,
-                }
-                principals_list.append(principal_dict)
-
-            # Get dashboard metrics that the template expects
-            dashboard_service = DashboardService(tenant_id)
-            metrics = dashboard_service.get_dashboard_metrics()
-
-            # Get recent media buys that the template expects
-            recent_media_buys = dashboard_service.get_recent_media_buys(limit=10)
-
-            # Get chart data that the template expects
-            chart_data_dict = dashboard_service.get_chart_data()
-
-            # Get tenant config for features
-            from src.admin.utils import get_tenant_config_from_db
-
-            config = get_tenant_config_from_db(tenant_id)
-            features = config.get("features", {})
-
-            # The template expects this to be under the 'advertisers' key
-            # since principals are advertisers in the UI
-            return render_template(
-                "tenant_dashboard.html",
-                tenant=tenant,
-                tenant_id=tenant_id,
-                advertisers=principals_list,
-                # Template variables to match main dashboard
-                active_campaigns=metrics.get("live_buys", 0),
-                total_spend=metrics.get("total_revenue", 0),
-                principals_count=metrics.get("total_advertisers", 0),
-                products_count=metrics.get("products_count", 0),
-                recent_buys=recent_media_buys,
-                recent_media_buys=recent_media_buys,
-                features=features,
-                # Chart data
-                revenue_data=json.dumps(metrics["revenue_data"]),
-                chart_labels=chart_data_dict["labels"],
-                chart_data=chart_data_dict["data"],
-                # Metrics object
-                metrics=metrics,
-                show_advertisers_tab=True,
+        # Convert to dict format for template
+        principals_list = []
+        for principal in principals:
+            # Count media buys for this principal
+            stmt = (
+                select(func.count())
+                .select_from(MediaBuy)
+                .filter_by(tenant_id=tenant_id, principal_id=principal.principal_id)
             )
+            media_buy_count = db_session.scalar(stmt)
 
-    except Exception as e:
-        logger.error(f"Error listing principals: {e}", exc_info=True)
-        flash("Error loading advertisers", "error")
-        return redirect(url_for("core.index"))
+            # Handle both string (SQLite) and dict (PostgreSQL JSONB) formats
+            mappings = principal.platform_mappings
+            if mappings and isinstance(mappings, str):
+                mappings = json.loads(mappings)
+            elif not mappings:
+                mappings = {}
+
+            principal_dict = {
+                "principal_id": principal.principal_id,
+                "name": principal.name,
+                "token_prefix": principal.token_prefix,
+                "platform_mappings": mappings,
+                "media_buy_count": media_buy_count,
+                "created_at": principal.created_at,
+            }
+            principals_list.append(principal_dict)
+
+        # Get dashboard metrics that the template expects
+        dashboard_service = DashboardService(tenant_id)
+        metrics = dashboard_service.get_dashboard_metrics()
+
+        # Get recent media buys that the template expects
+        recent_media_buys = dashboard_service.get_recent_media_buys(limit=10)
+
+        # Get chart data that the template expects
+        chart_data_dict = dashboard_service.get_chart_data()
+
+        # Get tenant config for features
+        from src.admin.utils import get_tenant_config_from_db
+
+        config = get_tenant_config_from_db(tenant_id)
+        features = config.get("features", {})
+
+        # The template expects this to be under the 'advertisers' key
+        # since principals are advertisers in the UI
+        return render_template(
+            "tenant_dashboard.html",
+            tenant=tenant,
+            tenant_id=tenant_id,
+            advertisers=principals_list,
+            # Template variables to match main dashboard
+            active_campaigns=metrics.get("live_buys", 0),
+            total_spend=metrics.get("total_revenue", 0),
+            principals_count=metrics.get("total_advertisers", 0),
+            products_count=metrics.get("products_count", 0),
+            recent_buys=recent_media_buys,
+            recent_media_buys=recent_media_buys,
+            features=features,
+            # Chart data
+            revenue_data=json.dumps(metrics["revenue_data"]),
+            chart_labels=chart_data_dict["labels"],
+            chart_data=chart_data_dict["data"],
+            # Metrics object
+            metrics=metrics,
+            show_advertisers_tab=True,
+        )
 
 
 # Leave room for the mock advertiser prefix in the narrowest derived-ID column.
@@ -146,25 +140,31 @@ def _advertiser_id_refusal(principal_id: str) -> str | None:
     return None
 
 
-def _refuse(message: str, back_to: str, reason: str | None = None):
+def _refuse(message: str, back_to: str):
     """Record one failed form action and return the operator to its form."""
-    record_admin_action_failure(message if reason is None else reason)
+    record_admin_action_failure(message)
     flash(message, "error")
     return redirect(back_to)
 
 
-def _platform_mappings_from_form(principal_id: str) -> tuple[dict, str | None]:
+def _platform_mappings_from_form(
+    principal_id: str, form: Mapping[str, str], *, stored_mappings: dict | None = None
+) -> tuple[dict, str | None]:
     """Parse the shared create/edit mapping fields, returning an operator refusal."""
     mappings = {}
-    gam_id = request.form.get("gam_advertiser_id", "").strip()
+    gam_id = form.get("gam_advertiser_id", "").strip()
     if gam_id:
         try:
             int(gam_id)
         except ValueError:
             return {}, "GAM Advertiser ID must be numeric"
         mappings["google_ad_manager"] = {"advertiser_id": gam_id, "enabled": True}
-    if request.form.get("enable_mock"):
+    if form.get("enable_mock"):
         mappings["mock"] = mock_platform_mapping(principal_id)
+    if stored_mappings:
+        mappings = {
+            platform: {**stored_mappings.get(platform, {}), **mapping} for platform, mapping in mappings.items()
+        }
     return mappings, None if mappings else "Select at least one platform mapping"
 
 
@@ -198,50 +198,45 @@ def create_principal(tenant_id):
 
     # POST - Create the principal
     back_to = url_for("principals.create_principal", tenant_id=tenant_id)
-    try:
-        principal_name = request.form.get("name", "").strip()
-        if not principal_name:
-            return _refuse("Principal name is required", back_to)
+    principal_name = request.form.get("name", "").strip()
+    if not principal_name:
+        return _refuse("Principal name is required", back_to)
 
-        principal_id = request.form.get("principal_id", "")
-        id_refusal = _advertiser_id_refusal(principal_id)
-        if id_refusal is not None:
-            return _refuse(id_refusal, back_to)
+    principal_id = request.form.get("principal_id", "")
+    id_refusal = _advertiser_id_refusal(principal_id)
+    if id_refusal is not None:
+        return _refuse(id_refusal, back_to)
 
-        platform_mappings, mapping_refusal = _platform_mappings_from_form(principal_id)
-        if mapping_refusal is not None:
-            return _refuse(mapping_refusal, back_to)
+    platform_mappings, mapping_refusal = _platform_mappings_from_form(principal_id, request.form)
+    if mapping_refusal is not None:
+        return _refuse(mapping_refusal, back_to)
 
-        with get_db_session() as db_session:
-            # No duplicate-name pre-check: advertiser names are human-readable
-            # labels, not keys. The spec attaches uniqueness only to ids
-            # (core/account.json: name is "Human-readable account name", e.g.
-            # "Acme c/o Pinnacle"), and no index backs the tenant+name pair, so a
-            # pre-check here read as a guarantee it could not hold under
-            # concurrency. Identity is (tenant_id, principal_id).
+    with get_db_session() as db_session:
+        # No duplicate-name pre-check: advertiser names are human-readable
+        # labels, not keys. The spec attaches uniqueness only to ids
+        # (core/account.json: name is "Human-readable account name", e.g.
+        # "Acme c/o Pinnacle"), and no index backs the tenant+name pair, so a
+        # pre-check here read as a guarantee it could not hold under
+        # concurrency. Identity is (tenant_id, principal_id).
 
-            # The token is minted here and shown ONCE, in the flash below; the row keeps
-            # its hash. An operator who loses it rotates it.
-            token = PrincipalRepository(db_session, tenant_id).issue_unless_taken(
-                principal_id,
-                name=principal_name,
-                platform_mappings=platform_mappings,  # JSONType handles serialization
-                created_at=datetime.now(UTC),
-                updated_at=datetime.now(UTC),
-            )
-            if token is None:
-                return _refuse("Advertiser ID is already in use", back_to)
-            db_session.commit()
+        # The token is minted here and shown ONCE, in the flash below; the row keeps
+        # its hash. An operator who loses it rotates it.
+        token = PrincipalRepository(db_session, tenant_id).issue_unless_taken(
+            principal_id,
+            name=principal_name,
+            platform_mappings=platform_mappings,  # JSONType handles serialization
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
+        if token is None:
+            return _refuse("Advertiser ID is already in use", back_to)
+        db_session.commit()
 
-            flash(
-                f"Advertiser '{principal_name}' created. Its API token, shown only now: {token}",
-                "success",
-            )
-            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="advertisers"))
-
-    except SQLAlchemyError as e:
-        logger.error(f"Error creating principal: {e}", exc_info=True)
-        return _refuse("Error creating advertiser", back_to, safe_error_message(e))
+        flash(
+            f"Advertiser '{principal_name}' created. Its API token, shown only now: {token}",
+            "success",
+        )
+        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="advertisers"))
 
 
 @principals_bp.route("/principals/<principal_id>/edit", methods=["GET", "POST"])
@@ -286,70 +281,60 @@ def edit_principal(tenant_id, principal_id):
 
     # POST - Update the principal
     back_to = url_for("principals.edit_principal", tenant_id=tenant_id, principal_id=principal_id)
-    try:
-        platform_mappings, mapping_refusal = _platform_mappings_from_form(principal_id)
+    with get_db_session() as db_session:
+        principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
+        if not principal:
+            flash("Advertiser not found", "error")
+            return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
+
+        platform_mappings, mapping_refusal = _platform_mappings_from_form(
+            principal_id, request.form, stored_mappings=principal.platform_mappings
+        )
         if mapping_refusal is not None:
             return _refuse(mapping_refusal, back_to)
 
-        with get_db_session() as db_session:
-            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
-            if not principal:
-                flash("Advertiser not found", "error")
-                return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
+        # Update name if provided
+        principal_name = request.form.get("name", "").strip()
+        if principal_name:
+            principal.name = principal_name
 
-            # Update name if provided
-            principal_name = request.form.get("name", "").strip()
-            if principal_name:
-                principal.name = principal_name
+        principal.platform_mappings = platform_mappings
+        principal.updated_at = datetime.now(UTC)
+        db_session.commit()
 
-            principal.platform_mappings = platform_mappings
-            principal.updated_at = datetime.now(UTC)
-            db_session.commit()
-
-            flash(f"Advertiser '{principal.name}' updated successfully", "success")
-            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="advertisers"))
-
-    except SQLAlchemyError as e:
-        logger.error(f"Error updating principal: {e}", exc_info=True)
-        return _refuse("Error updating advertiser", back_to, safe_error_message(e))
+        flash(f"Advertiser '{principal.name}' updated successfully", "success")
+        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="advertisers"))
 
 
 @principals_bp.route("/principal/<principal_id>", methods=["GET"])
 @require_tenant_access()
 def get_principal(tenant_id, principal_id):
     """Get principal details including platform mappings (API endpoint)."""
-    try:
-        with get_db_session() as db_session:
-            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
+    with get_db_session() as db_session:
+        principals = PrincipalRepository(db_session, tenant_id)
+        principal = principals.require(principals.get, principal_id)
 
-            if not principal:
-                return jsonify({"error": "Principal not found"}), 404
-
-            # Parse platform mappings (handle both string and dict formats)
-            if principal.platform_mappings:
-                if isinstance(principal.platform_mappings, str):
-                    mappings = json.loads(principal.platform_mappings)
-                else:
-                    mappings = principal.platform_mappings
+        # Parse platform mappings (handle both string and dict formats)
+        if principal.platform_mappings:
+            if isinstance(principal.platform_mappings, str):
+                mappings = json.loads(principal.platform_mappings)
             else:
-                mappings = {}
+                mappings = principal.platform_mappings
+        else:
+            mappings = {}
 
-            return jsonify(
-                {
-                    "success": True,
-                    "principal": {
-                        "principal_id": principal.principal_id,
-                        "name": principal.name,
-                        "token_prefix": principal.token_prefix,
-                        "platform_mappings": mappings,
-                        "created_at": principal.created_at.isoformat() if principal.created_at else None,
-                    },
-                }
-            )
-
-    except Exception as e:
-        logger.error(f"Error getting principal {principal_id}: {e}", exc_info=True)
-        return jsonify({"error": f"Failed to get principal: {str(e)}"}), 500
+        return jsonify(
+            {
+                "success": True,
+                "principal": {
+                    "principal_id": principal.principal_id,
+                    "name": principal.name,
+                    "token_prefix": principal.token_prefix,
+                    "platform_mappings": mappings,
+                    "created_at": principal.created_at.isoformat() if principal.created_at else None,
+                },
+            }
+        )
 
 
 @principals_bp.route("/principal/<principal_id>/rotate-token", methods=["POST"])
@@ -360,7 +345,8 @@ def get_principal(tenant_id, principal_id):
 # wrote an audit row saying this rotation succeeded. Graded by
 # tests/integration/test_audit_decorator_auth_order.py. The other 54 sites carrying the
 # inverted order, and the ast-grep rule that would refuse it, are GH #2110.
-@require_tenant_access()
+# Admin only: the new token is returned in the response, so rotating is acting as the buyer.
+@require_tenant_access(role=UserRole.ADMIN)
 @log_admin_action("rotate_principal_token")
 def rotate_token(tenant_id, principal_id):
     """Replace the principal's API token. The new token is in the response, once.
@@ -368,20 +354,15 @@ def rotate_token(tenant_id, principal_id):
     The stored hash is the only record of a token, so a lost token cannot be shown again;
     rotation is the recovery. The old token stops resolving on commit.
     """
-    try:
-        with get_db_session() as db_session:
-            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
-            if not principal:
-                return jsonify({"error": "Principal not found"}), 404
+    with get_db_session() as db_session:
+        principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
+        if not principal:
+            return jsonify({"error": "Principal not found"}), 404
 
-            token = principal.rotate_token()
-            principal.updated_at = datetime.now(UTC)
-            db_session.commit()
-            return jsonify({"success": True, "token": token, "token_prefix": principal.token_prefix})
-
-    except Exception as e:
-        logger.error(f"Error rotating token for principal {principal_id}: {e}", exc_info=True)
-        return jsonify({"error": "Failed to rotate token"}), 500
+        token = principal.rotate_token()
+        principal.updated_at = datetime.now(UTC)
+        db_session.commit()
+        return jsonify({"success": True, "token": token, "token_prefix": principal.token_prefix})
 
 
 @principals_bp.route("/principal/<principal_id>/update_mappings", methods=["POST"])
@@ -389,54 +370,37 @@ def rotate_token(tenant_id, principal_id):
 @require_tenant_access()
 def update_mappings(tenant_id, principal_id):
     """Update principal platform mappings."""
-    try:
-        data = request.get_json()
-        if not data:
-            return jsonify({"error": "Invalid request"}), 400
+    data = json_object_body()
+    if not data:
+        return jsonify({"error": "Invalid request"}), 400
 
-        platform_mappings = data.get("platform_mappings", {})
+    platform_mappings = data.get("platform_mappings", {})
 
-        # Validate GAM advertiser_id if present
-        if "google_ad_manager" in platform_mappings:
-            gam_config = platform_mappings["google_ad_manager"]
-            advertiser_id = gam_config.get("advertiser_id") or gam_config.get("company_id")
+    # Validate GAM advertiser_id if present
+    if "google_ad_manager" in platform_mappings:
+        gam_config = platform_mappings["google_ad_manager"]
+        advertiser_id = gam_config.get("advertiser_id") or gam_config.get("company_id")
 
-            if advertiser_id:
-                # Validate it's numeric (GAM expects integer company IDs)
-                try:
-                    int(advertiser_id)
-                except (ValueError, TypeError):
-                    return (
-                        jsonify(
-                            {
-                                "error": f"GAM Advertiser ID must be numeric (got: '{advertiser_id}'). "
-                                "Please select a valid advertiser from the dropdown."
-                            }
-                        ),
-                        400,
-                    )
+        if advertiser_id:
+            form_number(int, "advertiser_id", advertiser_id)  # GAM company ids are integers
 
-        with get_db_session() as db_session:
-            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
+    with get_db_session() as db_session:
+        principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
 
-            if not principal:
-                return jsonify({"error": "Principal not found"}), 404
+        if not principal:
+            return jsonify({"error": "Principal not found"}), 404
 
-            # Update mappings - JSONType handles serialization
-            principal.platform_mappings = platform_mappings
-            principal.updated_at = datetime.now(UTC)
-            db_session.commit()
+        # Update mappings - JSONType handles serialization
+        principal.platform_mappings = platform_mappings
+        principal.updated_at = datetime.now(UTC)
+        db_session.commit()
 
-            return jsonify(
-                {
-                    "success": True,
-                    "message": "Platform mappings updated successfully",
-                }
-            )
-
-    except Exception as e:
-        logger.error(f"Error updating principal mappings: {e}", exc_info=True)
-        return jsonify({"error": "Failed to update mappings"}), 500
+        return jsonify(
+            {
+                "success": True,
+                "message": "Platform mappings updated successfully",
+            }
+        )
 
 
 @principals_bp.route("/api/gam/get-advertisers", methods=["POST"])
@@ -455,128 +419,113 @@ def get_gam_advertisers(tenant_id):
         - fetch_all=true can take 5-10 seconds for networks with thousands of advertisers
         - Default behavior (limit=500) is fast but may not return all advertisers
     """
-    try:
-        from src.adapters.google_ad_manager import GoogleAdManager
+    from src.adapters.google_ad_manager import GoogleAdManager
 
-        # Get request parameters
-        data = request.get_json() or {}
-        search_query = data.get("search")
-        limit = data.get("limit", 500)
-        fetch_all = data.get("fetch_all", False)
+    # Get request parameters
+    data = json_object_body()
+    search_query = data.get("search")
+    limit = data.get("limit", 500)
+    fetch_all = data.get("fetch_all", False)
 
-        # Get tenant configuration
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            if not tenant:
-                return jsonify({"error": "Tenant not found"}), 404
+    # Get tenant configuration
+    with get_db_session() as db_session:
+        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            return jsonify({"error": "Tenant not found"}), 404
 
-            # Check if GAM is configured (uses centralized tenant.is_gam_tenant property)
-            gam_enabled = tenant.is_gam_tenant
+        # Check if GAM is configured (uses centralized tenant.is_gam_tenant property)
+        gam_enabled = tenant.is_gam_tenant
 
-            # Debug logging to help troubleshoot
-            logger.info(
-                f"GAM API detection for tenant {tenant_id}: "
-                f"ad_server={tenant.ad_server}, "
-                f"has_adapter_config={tenant.adapter_config is not None}, "
-                f"adapter_type={tenant.adapter_config.adapter_type if tenant.adapter_config else None}, "
-                f"gam_enabled={gam_enabled}, "
-                f"search={search_query}, limit={limit}, fetch_all={fetch_all}"
-            )
+        # Debug logging to help troubleshoot
+        logger.info(
+            f"GAM API detection for tenant {tenant_id}: "
+            f"ad_server={tenant.ad_server}, "
+            f"has_adapter_config={tenant.adapter_config is not None}, "
+            f"adapter_type={tenant.adapter_config.adapter_type if tenant.adapter_config else None}, "
+            f"gam_enabled={gam_enabled}, "
+            f"search={search_query}, limit={limit}, fetch_all={fetch_all}"
+        )
 
-            if not gam_enabled:
-                logger.warning(f"GAM not enabled for tenant {tenant_id}")
-                return jsonify({"error": "Google Ad Manager not configured"}), 400
+        if not gam_enabled:
+            logger.warning(f"GAM not enabled for tenant {tenant_id}")
+            return jsonify({"error": "Google Ad Manager not configured"}), 400
 
-            # Initialize GAM adapter with adapter config
-            try:
-                # Import Principal model
-                from src.core.schemas import Principal
+        # Initialize GAM adapter with adapter config
+        # Import Principal model
+        from src.core.schemas import Principal
 
-                # Create a mock principal for GAM initialization
-                # Need dummy advertiser_id for GAM adapter validation, even though get_advertisers() doesn't use it
-                mock_principal = Principal(
-                    principal_id="system",
-                    name="System",
-                    platform_mappings={
-                        "google_ad_manager": {
-                            "advertiser_id": "system_temp_advertiser_id",  # Dummy ID for validation only
-                            "advertiser_name": "System (temp)",
-                        }
-                    },
-                )
+        # Create a mock principal for GAM initialization
+        # Need dummy advertiser_id for GAM adapter validation, even though get_advertisers() doesn't use it
+        mock_principal = Principal(
+            principal_id="system",
+            name="System",
+            platform_mappings={
+                "google_ad_manager": {
+                    "advertiser_id": "system_temp_advertiser_id",  # Dummy ID for validation only
+                    "advertiser_name": "System (temp)",
+                }
+            },
+        )
 
-                # Build GAM config from AdapterConfig
-                if not tenant.adapter_config or not tenant.adapter_config.gam_network_code:
-                    return jsonify({"error": "GAM network code not configured for this tenant"}), 400
+        # Build GAM config from AdapterConfig
+        if not tenant.adapter_config or not tenant.adapter_config.gam_network_code:
+            return jsonify({"error": "GAM network code not configured for this tenant"}), 400
 
-                # Use build_gam_config_from_adapter to handle both OAuth and service account
-                from src.adapters.gam import build_gam_config_from_adapter
+        # Use build_gam_config_from_adapter to handle both OAuth and service account
+        from src.adapters.gam import build_gam_config_from_adapter
 
-                gam_config = build_gam_config_from_adapter(tenant.adapter_config)
+        gam_config = build_gam_config_from_adapter(tenant.adapter_config)
 
-                adapter = GoogleAdManager(
-                    config=gam_config,
-                    principal=mock_principal,
-                    network_code=tenant.adapter_config.gam_network_code,
-                    advertiser_id=None,
-                    trafficker_id=tenant.adapter_config.gam_trafficker_id,
-                    tenant_id=tenant_id,
-                    tenant_ai_config=None,  # names no order, so no AI configuration is read
-                )
+        adapter = GoogleAdManager(
+            config=gam_config,
+            principal=mock_principal,
+            network_code=tenant.adapter_config.gam_network_code,
+            advertiser_id=None,
+            trafficker_id=tenant.adapter_config.gam_trafficker_id,
+            tenant_id=tenant_id,
+            tenant_ai_config=None,  # names no order, so no AI configuration is read
+        )
 
-                # Get advertisers (companies) from GAM with filtering support
-                advertisers = adapter.orders_manager.get_advertisers(
-                    search_query=search_query, limit=limit, fetch_all=fetch_all
-                )
+        # Get advertisers (companies) from GAM with filtering support
+        advertisers = adapter.orders_manager.get_advertisers(
+            search_query=search_query, limit=limit, fetch_all=fetch_all
+        )
 
-                return jsonify(
-                    {
-                        "success": True,
-                        "advertisers": advertisers,
-                        "count": len(advertisers),
-                        "search": search_query,
-                        "fetch_all": fetch_all,
-                    }
-                )
-
-            except Exception as gam_error:
-                logger.error(f"GAM API error: {gam_error}")
-                return jsonify({"error": f"Failed to fetch advertisers: {str(gam_error)}"}), 500
-
-    except Exception as e:
-        logger.error(f"Error getting GAM advertisers: {e}", exc_info=True)
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify(
+            {
+                "success": True,
+                "advertisers": advertisers,
+                "count": len(advertisers),
+                "search": search_query,
+                "fetch_all": fetch_all,
+            }
+        )
 
 
 @principals_bp.route("/api/principal/<principal_id>/config", methods=["GET"])
 @require_tenant_access()
 def get_principal_config(tenant_id, principal_id):
     """Get principal configuration including platform mappings for testing UI."""
-    try:
-        with get_db_session() as db_session:
-            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
+    with get_db_session() as db_session:
+        principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
 
-            if not principal:
-                return jsonify({"error": "Principal not found"}), 404
+        if not principal:
+            return jsonify({"error": "Principal not found"}), 404
 
-            # Parse platform mappings
-            platform_mappings = (
-                json.loads(principal.platform_mappings)
-                if isinstance(principal.platform_mappings, str)
-                else principal.platform_mappings
-            )
+        # Parse platform mappings
+        platform_mappings = (
+            json.loads(principal.platform_mappings)
+            if isinstance(principal.platform_mappings, str)
+            else principal.platform_mappings
+        )
 
-            return jsonify(
-                {
-                    "principal_id": principal.principal_id,
-                    "name": principal.name,
-                    "platform_mappings": platform_mappings,
-                }
-            )
-
-    except Exception as e:
-        logger.error(f"Error getting principal config: {e}", exc_info=True)
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify(
+            {
+                "principal_id": principal.principal_id,
+                "name": principal.name,
+                "platform_mappings": platform_mappings,
+            }
+        )
 
 
 @principals_bp.route("/api/principal/<principal_id>/testing-config", methods=["POST"])
@@ -584,82 +533,71 @@ def get_principal_config(tenant_id, principal_id):
 @require_tenant_access()
 def save_testing_config(tenant_id, principal_id):
     """Save testing configuration (HITL settings) for a mock adapter principal."""
-    try:
-        data = request.get_json()
-        if not data or "hitl_config" not in data:
-            return jsonify({"error": "Missing hitl_config in request"}), 400
+    data = request.get_json()
+    if not data or "hitl_config" not in data:
+        return jsonify({"error": "Missing hitl_config in request"}), 400
 
-        hitl_config = data["hitl_config"]
+    hitl_config = data["hitl_config"]
 
-        with get_db_session() as db_session:
-            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
+    with get_db_session() as db_session:
+        principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
 
-            if not principal:
-                return jsonify({"error": "Principal not found"}), 404
+        if not principal:
+            return jsonify({"error": "Principal not found"}), 404
 
-            # Parse existing platform mappings
-            platform_mappings = (
-                json.loads(principal.platform_mappings)
-                if isinstance(principal.platform_mappings, str)
-                else principal.platform_mappings or {}
-            )
+        # Parse existing platform mappings
+        platform_mappings = (
+            json.loads(principal.platform_mappings)
+            if isinstance(principal.platform_mappings, str)
+            else principal.platform_mappings or {}
+        )
 
-            # Ensure mock adapter exists
-            if "mock" not in platform_mappings:
-                platform_mappings["mock"] = mock_platform_mapping(principal_id)
+        # Ensure mock adapter exists
+        if "mock" not in platform_mappings:
+            platform_mappings["mock"] = mock_platform_mapping(principal_id)
 
-            # Update hitl_config
-            platform_mappings["mock"]["hitl_config"] = hitl_config
+        # Update hitl_config
+        platform_mappings["mock"]["hitl_config"] = hitl_config
 
-            # Save back to database - JSONType handles serialization
-            principal.platform_mappings = platform_mappings
-            principal.updated_at = datetime.now(UTC)
-            db_session.commit()
+        # Save back to database - JSONType handles serialization
+        principal.platform_mappings = platform_mappings
+        principal.updated_at = datetime.now(UTC)
+        db_session.commit()
 
-            logger.info(f"Updated testing config for principal {principal_id} in tenant {tenant_id}")
+        logger.info(f"Updated testing config for principal {principal_id} in tenant {tenant_id}")
 
-            return jsonify({"success": True, "message": "Testing configuration saved successfully"})
-
-    except Exception as e:
-        logger.error(f"Error saving testing config: {e}", exc_info=True)
-        return jsonify({"error": "Failed to save testing configuration"}), 500
+        return jsonify({"success": True, "message": "Testing configuration saved successfully"})
 
 
 @principals_bp.route("/principals/<principal_id>/webhooks", methods=["GET"])
 @require_tenant_access()
 def manage_webhooks(tenant_id, principal_id):
     """Manage webhook configurations for a principal."""
-    try:
-        with get_db_session() as db_session:
-            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
-            if not principal:
-                flash("Principal not found", "error")
-                return redirect(url_for("principals.list_principals", tenant_id=tenant_id))
+    with get_db_session() as db_session:
+        principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
+        if not principal:
+            flash("Principal not found", "error")
+            return redirect(url_for("principals.list_principals", tenant_id=tenant_id))
 
-            # Get all webhooks for this principal
-            webhooks = db_session.scalars(
-                select(PushNotificationConfig).filter_by(tenant_id=tenant_id, principal_id=principal_id)
-            ).all()
+        # Get all webhooks for this principal
+        webhooks = db_session.scalars(
+            select(PushNotificationConfig).filter_by(tenant_id=tenant_id, principal_id=principal_id)
+        ).all()
 
-            return render_template(
-                "webhook_management.html",
-                tenant_id=tenant_id,
-                principal=principal,
-                webhooks=webhooks,
-                # The SPELLING comes from the pinned enum, never from a literal:
-                # hardcoding it is how "hmac_sha256" — which nothing in src/
-                # compares against — became the value this form posted. Only
-                # HMAC-SHA256 is offered: Bearer is a member of the enum but this
-                # form has no field to collect a bearer token, and adding one is a
-                # feature, not part of fixing a route that never persisted a row.
-                auth_schemes=[AuthenticationScheme.HMAC_SHA256],
-                no_authentication=NO_AUTHENTICATION,
-            )
-
-    except Exception as e:
-        logger.error(f"Error loading webhook management: {e}", exc_info=True)
-        flash(f"Error loading webhooks: {str(e)}", "error")
-        return redirect(url_for("principals.list_principals", tenant_id=tenant_id))
+        return render_template(
+            "webhook_management.html",
+            tenant_id=tenant_id,
+            principal=principal,
+            webhooks=webhooks,
+            # The SPELLING comes from the pinned enum, never from a literal:
+            # hardcoding it is how "hmac_sha256" — which nothing in src/
+            # compares against — became the value this form posted. Only
+            # HMAC-SHA256 is offered: Bearer is a member of the enum but this
+            # form has no field to collect a bearer token, and adding one is a
+            # feature, not part of fixing a route that never persisted a row.
+            auth_schemes=[AuthenticationScheme.HMAC_SHA256],
+            no_authentication=NO_AUTHENTICATION,
+        )
 
 
 def _redirect_to_webhooks(tenant_id, principal_id):
@@ -668,7 +606,7 @@ def _redirect_to_webhooks(tenant_id, principal_id):
 
 @principals_bp.route("/principals/<principal_id>/webhooks/register", methods=["POST"])
 @log_admin_action("register_webhook")
-@require_tenant_access()
+@require_tenant_access(role=UserRole.ADMIN)
 def register_webhook(tenant_id, principal_id):
     """Register a new webhook for a principal."""
     try:
@@ -788,7 +726,7 @@ def register_webhook(tenant_id, principal_id):
         # means the audit decorator would otherwise record the refusal as a
         # SUCCESSFUL admin action. Say the action failed explicitly.
         record_admin_action_failure(e)
-        flash(f"Error registering webhook: {str(e)}", "error")
+        flash(f"Error registering webhook: {e.message}", "error")
         return _redirect_to_webhooks(tenant_id, principal_id)
 
 
@@ -864,24 +802,19 @@ def toggle_webhook(tenant_id, principal_id, config_id):
 @require_tenant_access()
 def delete_principal(tenant_id, principal_id):
     """Delete a principal (advertiser)."""
-    try:
-        with get_db_session() as db_session:
-            # Find the principal
-            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
+    with get_db_session() as db_session:
+        # Find the principal
+        principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
 
-            if not principal:
-                return jsonify({"error": "Principal not found"}), 404
+        if not principal:
+            return jsonify({"error": "Principal not found"}), 404
 
-            principal_name = principal.name
+        principal_name = principal.name
 
-            # Delete the principal (cascades to related records)
-            db_session.delete(principal)
-            db_session.commit()
+        # Delete the principal (cascades to related records)
+        db_session.delete(principal)
+        db_session.commit()
 
-            logger.info(f"Deleted principal {principal_id} ({principal_name}) from tenant {tenant_id}")
+        logger.info(f"Deleted principal {principal_id} ({principal_name}) from tenant {tenant_id}")
 
-            return jsonify({"success": True, "message": f"Principal '{principal_name}' deleted successfully"})
-
-    except Exception as e:
-        logger.error(f"Error deleting principal: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"success": True, "message": f"Principal '{principal_name}' deleted successfully"})

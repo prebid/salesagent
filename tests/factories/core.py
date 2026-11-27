@@ -8,6 +8,7 @@ seed_property_tag_selection (the property-tag rows the admin product form requir
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -21,8 +22,10 @@ from src.core.database.models import (
     GAMInventory,
     PropertyTag,
     SignalsAgent,
+    SyncJob,
     Tenant,
 )
+from src.core.schemas.advertising_policy import AdvertisingPolicy
 from src.core.tenant_context import TenantContext
 
 
@@ -62,6 +65,16 @@ def tenant_subdomain(tenant_id: str) -> str:
     The admin UI is the only reader left.
     """
     return f"pub-{tenant_id}".replace("_", "-")
+
+
+def tenant_virtual_host(tenant_id: str) -> str:
+    """A ``Tenant.virtual_host`` named after *tenant_id*, for a tenant whose id is unique where it is stored.
+
+    ``TenantFactory``'s own host is a ``Sequence``, which restarts with each process: in a
+    database that other runs and suites also write (the e2e stack's), it repeats a host that
+    is already there. A tenant id from ``mint_id`` is unique there, and so is this host.
+    """
+    return f"{tenant_subdomain(tenant_id)}.example.com"
 
 
 class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
@@ -127,7 +140,7 @@ class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
                 # A tenant always declares a host, so the projection requires one. Derived
                 # from the tenant_id here so two contexts built in one test differ, the way
                 # the ORM factory's Sequence does.
-                "virtual_host": f"{tenant_subdomain(tenant_id)}.example.com",
+                "virtual_host": tenant_virtual_host(tenant_id),
                 "ad_server": "mock",
                 **overrides,
             }
@@ -138,6 +151,27 @@ class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
         "tests.factories.core.CurrencyLimitFactory",
         factory_related_name="tenant",
     )
+
+
+class AdvertisingPolicyFactory(factory.Factory):
+    """A complete ``AdvertisingPolicy``, the only shape ``tenants.advertising_policy`` stores.
+
+    The model has no defaults, so a test that hand-writes a policy writes every key or fails
+    to load. This factory holds the one complete shape: checks on, nothing prohibited, no
+    manual review, no description. Override the fields the test grades.
+    """
+
+    class Meta:
+        model = AdvertisingPolicy
+
+    enabled = True
+    require_manual_review = False
+    prohibited_advertisers = factory.LazyFunction(list)
+    prohibited_categories = factory.LazyFunction(list)
+    prohibited_tactics = factory.LazyFunction(list)
+    default_prohibited_categories = factory.LazyFunction(list)
+    default_prohibited_tactics = factory.LazyFunction(list)
+    description = None
 
 
 class CurrencyLimitFactory(factory.alchemy.SQLAlchemyModelFactory):
@@ -184,6 +218,26 @@ class GAMInventoryFactory(factory.alchemy.SQLAlchemyModelFactory):
             "sizes": [{"width": 300, "height": 250}],
         }
     )
+
+
+class SyncJobFactory(factory.alchemy.SQLAlchemyModelFactory):
+    """An inventory sync the admin UI started a moment ago, still running and reporting progress."""
+
+    class Meta:
+        model = SyncJob
+        sqlalchemy_session = None
+        sqlalchemy_session_persistence = "commit"
+
+    tenant = SubFactory(TenantFactory)
+    tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
+    sync_id = Sequence(lambda n: f"sync_{n:04d}")
+    adapter_type = "google_ad_manager"
+    sync_type = "inventory"
+    status = "running"
+    started_at = factory.LazyFunction(lambda: datetime.now(UTC))
+    triggered_by = "admin_ui"
+    # A running sync with progress is never taken for a dead one (start_inventory_sync_background).
+    progress = factory.LazyFunction(lambda: {"phase": "Starting"})
 
 
 class PropertyTagFactory(factory.alchemy.SQLAlchemyModelFactory):

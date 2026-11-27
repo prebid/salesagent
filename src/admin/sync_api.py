@@ -17,8 +17,11 @@ from sqlalchemy import func, select
 
 from src.adapters.google_ad_manager import GoogleAdManager
 from src.admin.auth_helpers import api_key_prefix, mint_stored_api_key, require_api_key_auth
+from src.admin.form_validation import json_object_body
 from src.core.database.models import AdapterConfig, SyncJob, Tenant
+from src.core.operator_errors import FormIssue, InvalidFormInput
 from src.services.gam_inventory_service import db_session as gam_db_session
+from src.services.sync_jobs import recording_failure
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +34,9 @@ db_session = gam_db_session
 #: The ``superadmin_config`` row holding this API key's digest. Named once: the
 #: decorator below and the mint/prefix helpers at the bottom must agree on it.
 SYNC_API_CONFIG_KEY = "api_key"
+
+#: The ``sync_type`` values the trigger route runs.
+SYNC_TYPES = ("full", "inventory", "targeting", "selective")
 
 require_sync_api_key = require_api_key_auth(
     setting="sync_api_key",
@@ -73,12 +79,17 @@ def trigger_sync(tenant_id: str) -> tuple[Response, int]:
             return jsonify({"error": "Adapter not configured"}), 400
 
         # Get request parameters
-        data = request.get_json() or {}
+        data = json_object_body()
         sync_type = data.get("sync_type", "full")
         force = data.get("force", False)
         custom_targeting_limit = data.get("custom_targeting_limit", 1000)
         audience_segment_limit = data.get("audience_segment_limit")
         sync_types = data.get("sync_types", [])
+
+        if sync_type not in SYNC_TYPES:
+            raise InvalidFormInput(FormIssue("sync_type", f"sync_type must be one of {', '.join(SYNC_TYPES)}"))
+        if sync_type == "selective" and not sync_types:
+            raise InvalidFormInput(FormIssue("sync_types", "sync_types is required for a selective sync"))
 
         # Check for recent sync if not forcing
         if not force:
@@ -104,95 +115,53 @@ def trigger_sync(tenant_id: str) -> tuple[Response, int]:
                         200,
                     )
 
-        # Create sync job
-        sync_id = f"sync_{tenant_id}_{int(datetime.now(UTC).timestamp())}"
-        sync_job = SyncJob(
-            sync_id=sync_id,
-            tenant_id=tenant_id,
-            adapter_type="google_ad_manager",
-            sync_type=sync_type,
-            status="pending",
-            started_at=datetime.now(UTC),
-            triggered_by="api",
-            triggered_by_id="tenant_management_api",
+        # Initialize GAM adapter with sync manager
+        from src.core.schemas import Principal
+
+        # Create dummy principal for sync (no advertiser needed for inventory sync)
+        principal = Principal(
+            principal_id="system",
+            name="System",
+            platform_mappings={},  # No advertiser_id needed for inventory sync
         )
 
-        db_session.add(sync_job)
-        db_session.commit()
+        # Build GAM config
+        from src.adapters.gam import build_gam_config_from_adapter
 
-        # Trigger sync using GAM adapter with sync manager
-        try:
-            # Initialize GAM adapter with sync manager
-            from src.core.schemas import Principal
+        gam_config = build_gam_config_from_adapter(adapter_config)
 
-            # Create dummy principal for sync (no advertiser needed for inventory sync)
-            principal = Principal(
-                principal_id="system",
-                name="System",
-                platform_mappings={},  # No advertiser_id needed for inventory sync
+        # Create GAM adapter with new modular architecture
+        # NOTE: advertiser_id=None is fine for inventory sync operations
+        adapter = GoogleAdManager(
+            config=gam_config,
+            principal=principal,
+            network_code=adapter_config.gam_network_code or "",
+            advertiser_id=None,  # Not needed for inventory sync
+            trafficker_id=adapter_config.gam_trafficker_id or None,
+            audit_logger=None,
+            tenant_id=tenant_id,
+            tenant_ai_config=None,  # names no order, so no AI configuration is read
+        )
+
+        # The sync manager creates and records the sync job; a failed sync raises
+        # SyncFailed, which the admin error handler answers with the text the job stores.
+        if sync_type == "full":
+            # Pass custom targeting limit to prevent timeouts
+            result = adapter.sync_full(db_session, force=force, custom_targeting_limit=custom_targeting_limit)
+        elif sync_type == "selective":
+            # Selective sync - only sync specified inventory types
+            result = adapter.sync_selective(
+                db_session,
+                sync_types=sync_types,
+                custom_targeting_limit=custom_targeting_limit,
+                audience_segment_limit=audience_segment_limit,
             )
+        else:
+            # "inventory", and "targeting", which maps to an inventory sync for now
+            result = adapter.sync_inventory(db_session, force=force, custom_targeting_limit=custom_targeting_limit)
 
-            # Build GAM config
-            from src.adapters.gam import build_gam_config_from_adapter
+        return jsonify(result), 200
 
-            gam_config = build_gam_config_from_adapter(adapter_config)
-
-            # Create GAM adapter with new modular architecture
-            # NOTE: advertiser_id=None is fine for inventory sync operations
-            adapter = GoogleAdManager(
-                config=gam_config,
-                principal=principal,
-                network_code=adapter_config.gam_network_code or "",
-                advertiser_id=None,  # Not needed for inventory sync
-                trafficker_id=adapter_config.gam_trafficker_id or None,
-                audit_logger=None,
-                tenant_id=tenant_id,
-                tenant_ai_config=None,  # names no order, so no AI configuration is read
-            )
-
-            # Use the sync manager to perform the sync
-            if sync_type == "full":
-                # Pass custom targeting limit to prevent timeouts
-                result = adapter.sync_full(db_session, force=force, custom_targeting_limit=custom_targeting_limit)
-            elif sync_type == "inventory":
-                result = adapter.sync_inventory(db_session, force=force, custom_targeting_limit=custom_targeting_limit)
-            elif sync_type == "targeting":
-                # Targeting sync can be mapped to inventory sync for now
-                result = adapter.sync_inventory(db_session, force=force, custom_targeting_limit=custom_targeting_limit)
-            elif sync_type == "selective":
-                # Selective sync - only sync specified inventory types
-                if not sync_types:
-                    raise ValueError("sync_types required for selective sync")
-                result = adapter.sync_selective(
-                    db_session,
-                    sync_types=sync_types,
-                    custom_targeting_limit=custom_targeting_limit,
-                    audience_segment_limit=audience_segment_limit,
-                )
-            else:
-                raise ValueError(f"Unsupported sync type: {sync_type}")
-
-            return jsonify(result), 200
-
-        except Exception as e:
-            logger.error(f"Sync failed for tenant {tenant_id}: {e}", exc_info=True)
-
-            # Update sync job with error (if it was created)
-            try:
-                sync_job.status = "failed"
-                # Type ignore for SQLAlchemy DateTime column assignment
-                sync_job.completed_at = datetime.now(UTC)
-                sync_job.error_message = str(e)
-                db_session.commit()
-            except Exception:
-                logger.warning("Failed to update sync_job error record", exc_info=True)
-
-            return jsonify({"sync_id": sync_id, "status": "failed", "error": str(e)}), 500
-
-    except Exception as e:
-        logger.error(f"Failed to trigger sync: {e}", exc_info=True)
-        db_session.rollback()
-        return jsonify({"error": str(e)}), 500
     finally:
         db_session.remove()
 
@@ -234,9 +203,6 @@ def get_sync_status(sync_id: str) -> tuple[Response, int]:
 
         return jsonify(response_dict), 200
 
-    except Exception as e:
-        logger.error(f"Failed to get sync status: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
     finally:
         db_session.remove()
 
@@ -301,9 +267,6 @@ def get_sync_history(tenant_id: str) -> tuple[Response, int]:
 
         return jsonify({"total": total, "limit": limit, "offset": offset, "results": results}), 200
 
-    except Exception as e:
-        logger.error(f"Failed to get sync history: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
     finally:
         db_session.remove()
 
@@ -357,9 +320,6 @@ def list_tenants() -> tuple[Response, int]:
 
         return jsonify({"total": len(results), "tenants": results}), 200
 
-    except Exception as e:
-        logger.error(f"Failed to list tenants: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
     finally:
         db_session.remove()
 
@@ -448,9 +408,6 @@ def get_sync_stats() -> tuple[Response, int]:
             200,
         )
 
-    except Exception as e:
-        logger.error(f"Failed to get sync stats: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
     finally:
         db_session.remove()
 
@@ -492,7 +449,9 @@ def sync_tenant_orders(tenant_id: str) -> tuple[Response, int]:
         db_session.add(sync_job)
         db_session.commit()
 
-        try:
+        # A failure marks the job failed and raises SyncFailed, which the admin error
+        # handler answers with the text the job stores.
+        with recording_failure(db_session(), sync_job, f"Orders sync failed for tenant {tenant_id}"):
             # Initialize GAM client
             from src.adapters.google_ad_manager import GoogleAdManager
             from src.core.schemas import Principal
@@ -531,24 +490,8 @@ def sync_tenant_orders(tenant_id: str) -> tuple[Response, int]:
             sync_job.summary = json.dumps(summary)
             db_session.commit()
 
-            return jsonify({"sync_id": sync_id, "status": "completed", "summary": summary}), 200
+        return jsonify({"sync_id": sync_id, "status": "completed", "summary": summary}), 200
 
-        except Exception as e:
-            logger.error(f"Orders sync failed for tenant {tenant_id}: {e}", exc_info=True)
-
-            # Update sync job with error
-            sync_job.status = "failed"
-            # Type ignore for SQLAlchemy DateTime column assignment
-            sync_job.completed_at = datetime.now(UTC)
-            sync_job.error_message = str(e)
-            db_session.commit()
-
-            return jsonify({"sync_id": sync_id, "status": "failed", "error": str(e)}), 500
-
-    except Exception as e:
-        logger.error(f"Failed to trigger orders sync: {e}", exc_info=True)
-        db_session.rollback()
-        return jsonify({"error": str(e)}), 500
     finally:
         db_session.remove()
 
@@ -603,9 +546,6 @@ def get_tenant_orders(tenant_id: str) -> tuple[Response, int]:
 
         return jsonify({"total": len(orders), "orders": orders}), 200
 
-    except Exception as e:
-        logger.error(f"Failed to get orders: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
     finally:
         db_session.remove()
 
@@ -633,9 +573,6 @@ def get_order_details(tenant_id: str, order_id: str) -> tuple[Response, int]:
 
         return jsonify(order_details), 200
 
-    except Exception as e:
-        logger.error(f"Failed to get order details: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
     finally:
         db_session.remove()
 
@@ -665,9 +602,6 @@ def get_tenant_line_items(tenant_id: str) -> tuple[Response, int]:
 
         return jsonify({"total": len(line_items), "line_items": line_items}), 200
 
-    except Exception as e:
-        logger.error(f"Failed to get line items: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
     finally:
         db_session.remove()
 

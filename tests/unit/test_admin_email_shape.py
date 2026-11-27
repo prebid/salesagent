@@ -1,4 +1,4 @@
-"""``_is_valid_email`` accepts an address shape and refuses a malformed one.
+"""``is_email_shaped`` accepts an address shape and refuses a malformed one.
 
 A pure function, so it belongs in this directory: input in, bool out, no database,
 no transport, no identity.
@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.admin.blueprints.users import _is_valid_email
+from src.admin.auth_utils import is_email_shaped
 
 
 @pytest.mark.parametrize(
@@ -41,7 +41,7 @@ from src.admin.blueprints.users import _is_valid_email
     ],
 )
 def test_accepts_an_ordinary_address(address: str) -> None:
-    assert _is_valid_email(address) is True
+    assert is_email_shaped(address) is True
 
 
 @pytest.mark.parametrize(
@@ -58,7 +58,7 @@ def test_accepts_an_ordinary_address(address: str) -> None:
     ],
 )
 def test_rejects_a_malformed_address(address: str, why: str) -> None:
-    assert _is_valid_email(address) is False, why
+    assert is_email_shaped(address) is False, why
 
 
 def test_refuses_a_second_at_sign_where_the_regex_accepted_one() -> None:
@@ -70,4 +70,4 @@ def test_refuses_a_second_at_sign_where_the_regex_accepted_one() -> None:
     is a correction -- but it is still a change, and an address a tenant admin
     could previously submit is now rejected.
     """
-    assert _is_valid_email("a@b.c@d") is False
+    assert is_email_shaped("a@b.c@d") is False

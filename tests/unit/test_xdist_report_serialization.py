@@ -271,7 +271,7 @@ def test_a_realistic_polluted_report_fails_execnet_before_and_passes_after():
     }
     with pytest.raises(DumpError):
         dumps(report)
-    with open(os.devnull, "w") as devnull:
+    with open(os.devnull, "w", encoding="utf-8") as devnull:
         dumps(sanitize_serialized_report(report, nodeid=report["nodeid"], stream=devnull))
 
 
@@ -346,8 +346,8 @@ def pytest_report_to_serializable(config, report):
 
 
 def _run_isolated_suite(tmp_path: Path, *, with_hook: bool) -> tuple[str, dict]:
-    (tmp_path / "test_polluting.py").write_text(textwrap.dedent(_POLLUTING_SUITE))
-    (tmp_path / "conftest.py").write_text(textwrap.dedent(_CONFTEST_WITH_HOOK) if with_hook else "")
+    (tmp_path / "test_polluting.py").write_text(textwrap.dedent(_POLLUTING_SUITE), encoding="utf-8")
+    (tmp_path / "conftest.py").write_text(textwrap.dedent(_CONFTEST_WITH_HOOK) if with_hook else "", encoding="utf-8")
     report_path = tmp_path / "report.json"
     env = {**os.environ, "PYTHONPATH": str(REPO_ROOT), "DATABASE_URL": ""}
     proc = subprocess.run(
@@ -374,7 +374,7 @@ def _run_isolated_suite(tmp_path: Path, *, with_hook: bool) -> tuple[str, dict]:
         env=env,
         timeout=300,
     )
-    summary = json.loads(report_path.read_text())["summary"] if report_path.exists() else {}
+    summary = json.loads(report_path.read_text(encoding="utf-8"))["summary"] if report_path.exists() else {}
     return proc.stdout + proc.stderr, summary
 
 

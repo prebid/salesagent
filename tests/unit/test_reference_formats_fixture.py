@@ -29,7 +29,7 @@ from src.core.schemas import Format
 @pytest.fixture
 def fixture_data() -> dict:
     """Raw JSON contents of the checked-in reference fixture."""
-    with open(CACHE_FILE) as f:
+    with open(CACHE_FILE, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -96,7 +96,7 @@ def test_load_reference_formats_fails_loud_on_empty_formats(monkeypatch, tmp_pat
     from src.core import format_cache
 
     bad = tmp_path / "empty.json"
-    bad.write_text(json.dumps({"schema_version": 2, "formats": []}))
+    bad.write_text(json.dumps({"schema_version": 2, "formats": []}), encoding="utf-8")
     load_reference_formats.cache_clear()
     monkeypatch.setattr(format_cache, "CACHE_FILE", bad)
     try:

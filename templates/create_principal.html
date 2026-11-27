@@ -107,7 +107,7 @@ document.addEventListener('DOMContentLoaded', function() {
         allowClear: true,
         minimumInputLength: 0, // Start searching from first character
         ajax: {
-            url: '{{ script_name }}/tenant/{{ tenant_id }}/api/gam/get-advertisers',
+            url: scriptRoot + '/tenant/' + {{ tenant_id|tojson }} + '/api/gam/get-advertisers',
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -124,7 +124,7 @@ document.addEventListener('DOMContentLoaded', function() {
             },
             processResults: function(data) {
                 if (data.error) {
-                    errorDiv.textContent = 'Error: ' + data.error;
+                    errorDiv.textContent = 'Error: ' + adminErrorText(data);
                     errorDiv.style.display = 'block';
                     return { results: [] };
                 }
@@ -160,8 +160,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 })
                 .then(response => {
                     if (!response.ok) {
-                        return response.text().then(text => {
-                            throw new Error(`HTTP ${response.status}: ${text.substring(0, 200)}`);
+                        return response.json().then(data => {
+                            throw new Error(adminErrorText(data));
                         });
                     }
                     return response.json();
@@ -210,8 +210,8 @@ document.addEventListener('DOMContentLoaded', function() {
     // Restore previous selection if form was reloaded with errors OR in edit mode
     {% if (form_data and form_data.gam_advertiser_id) or (edit_mode and existing_gam_id) %}
     // Need to fetch the advertiser name to display it
-    const advertiserId = '{{ existing_gam_id if edit_mode else form_data.gam_advertiser_id }}';
-    fetch('{{ script_name }}/tenant/{{ tenant_id }}/api/gam/get-advertisers', {
+    const advertiserId = {{ (existing_gam_id if edit_mode else form_data.gam_advertiser_id)|tojson }};
+    fetch(scriptRoot + '/tenant/' + {{ tenant_id|tojson }} + '/api/gam/get-advertisers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

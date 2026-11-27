@@ -199,7 +199,7 @@ class TestImportRegressionPrevention:
         blueprints = Path("src/admin/blueprints")
         callers = []
         for path in sorted(blueprints.glob("*.py")):
-            tree = ast.parse(path.read_text())
+            tree = ast.parse(path.read_text(encoding="utf-8"))
             calls_or = any(
                 isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "or_"
                 for node in ast.walk(tree)

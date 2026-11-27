@@ -115,3 +115,29 @@ def submit_audit_principal_id(ctx):
 @then("the advertiser create is refused as a reserved audit identity")
 def audit_principal_is_reserved(ctx):
     refused(ctx, "create", f"Advertiser ID '{ctx['audit_principal_id']}' is reserved")
+
+
+@given(parsers.parse('advertiser "{principal_id}" has saved mock simulation settings'))
+def save_mock_simulation(ctx, principal_id):
+    env = ctx["env"]
+    ctx["mock_simulation"] = {"enabled": True, "mode": "async"}
+    config = env.admin_request(env.tenant_id, "get", f"api/principal/{principal_id}/config")
+    assert config.status_code == 200
+    mappings = config.get_json()["platform_mappings"]
+    mappings["mock"]["hitl_config"] = ctx["mock_simulation"]
+    response = env.admin_request(
+        env.tenant_id,
+        "post",
+        f"principal/{principal_id}/update_mappings",
+        json={"platform_mappings": mappings},
+    )
+    assert response.status_code == 200
+    (saved,) = [row for row in env.principals() if row.principal_id == principal_id]
+    assert saved.platform_mappings["mock"]["hitl_config"] == ctx["mock_simulation"]
+
+
+@then("the advertiser retains its mock simulation settings")
+def preserved_mock_simulation(ctx):
+    assert _require_admin_page(ctx).status_code == 302
+    (row,) = ctx["env"].principals(name="Replacement")
+    assert row.platform_mappings["mock"]["hitl_config"] == ctx["mock_simulation"]

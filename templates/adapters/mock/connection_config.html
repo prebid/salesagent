@@ -46,7 +46,6 @@ Expected context variables:
 
 <script>
 function saveMockConfig() {
-    const scriptRoot = '{{ request.script_root }}' || '';
     const config = {
         manual_approval_required: document.getElementById('mock_manual_approval_required').checked
     };
@@ -67,7 +66,7 @@ function saveMockConfig() {
         if (data.success) {
             showNotification('Configuration saved successfully', 'success');
         } else {
-            showNotification('Failed to save: ' + (data.error || 'Unknown error'), 'error');
+            showNotification('Failed to save: ' + adminErrorText(data), 'error');
         }
     })
     .catch(error => {

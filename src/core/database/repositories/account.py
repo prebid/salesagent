@@ -17,9 +17,11 @@ from sqlalchemy.orm import Session
 
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Account, AgentAccountAccess
+from src.core.database.repositories.base import Repository
 from src.core.errors.details import ConflictDetails
 from src.core.exceptions import AdCPConflictError
 from src.core.helpers.brand_key import brand_key_parts
+from src.core.operator_errors import AccountNotFound
 
 #: The index that IS the natural-key invariant. ``_find_natural_key_conflict`` is
 #: only the fast path in front of it.
@@ -84,7 +86,7 @@ class NaturalKey:
         return cls(brand_domain, brand_id, operator, sandbox)
 
 
-class AccountRepository:
+class AccountRepository(Repository):
     """Tenant-scoped data access for Account and AgentAccountAccess.
 
     All queries filter by tenant_id automatically. Callers cannot bypass
@@ -97,6 +99,8 @@ class AccountRepository:
         session: SQLAlchemy session (caller manages lifecycle).
         tenant_id: Tenant scope for all queries.
     """
+
+    NOT_FOUND = AccountNotFound
 
     #: Fields ``update_fields`` refuses. Beyond the PK and creation stamp, this
     #: includes the NATURAL-KEY components: ``get_by_natural_key`` resolves a

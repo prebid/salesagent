@@ -45,8 +45,8 @@ Both suites talk to the same compose stack, defined in
 | `postgres` | One Postgres instance holding every database the run uses | Single DB service; isolation comes from database names, not containers |
 | `adcp-server` | The application under test (FastAPI, all protocols on one port) | The system under test |
 | `adcp-server-storyboard` | A second copy of the same image, `ENVIRONMENT: production`, waiting on `adcp-server` to be healthy | The conformance storyboards grade a production-mode deployment; sequencing on health keeps two boots from running `alembic upgrade` concurrently |
-| `proxy` | nginx in front of `adcp-server`, plaintext `:8000` | Tests go through the same reverse proxy production does |
-| `tls-proxy` | A second nginx listener terminating TLS on `:8443` for the `*.adcp.test` origins | Serves real HTTPS from a generated private certificate authority (CA), so https behavior is true rather than asserted |
+| `proxy` | nginx in front of `adcp-server`, plaintext on port 8000 | Tests go through the same reverse proxy production does |
+| `tls-proxy` | A second nginx listener terminating TLS on port 8443 for the `*.adcp.test` origins | Serves real HTTPS from a generated private certificate authority (CA), so https behavior is true rather than asserted |
 | `webhook-capture` | Long-lived webhook receiver (`tests/e2e/webhook_capture_service.py`) | Captures the server's outbound webhook deliveries; delivery arrives over TLS, readback is a plain-HTTP test control plane |
 | `creative-agent` + `creative-pg` | A pinned in-network creative agent with its own registry DB | The live public agent drifts and rate-limits; `adcp-server`'s `extra_hosts` blackholes it so a regression fails instantly |
 | `tests` | The in-network test runner (profile `runner`) | Runs tox inside the compose network so suites reach services by name |
@@ -56,8 +56,8 @@ stack's own bridge network, addressed by service name or dotted alias — no
 host ports exist. The `tls-proxy` service fronts every HTTPS origin on one
 listener — four dotted aliases — and routes by Server Name Indication (SNI).
 That is what makes the server's outbound calls real HTTPS. The SNI map is
-`config/nginx/nginx-tls-test.conf.template:39-44`; read the alias list there
-rather than from this diagram.
+`$tls_upstream_named` in `config/nginx/nginx-tls-test.conf.template`; read the
+alias list there rather than from this diagram.
 
 ```mermaid
 flowchart LR
@@ -392,9 +392,15 @@ The JSON is the authoritative record:
   collected/reported counts disagree, so a half-run cannot read as passing.
 - A suite that ran but produced no report is an **error**, not an omission —
   it exited before writing one, and the runner exits nonzero for it.
-- `.tox/` persists between runs, so both runners purge old reports first; a
-  report exists only if this run produced it. Trust the directory plus its
-  `.suites` manifest, never a lone JSON file's timestamp.
+- The in-network runner has each suite write its report straight into a fresh
+  per-run directory, so a report exists only if this run produced it, and a
+  finished suite's report survives a runner or Docker daemon that dies later.
+  `.suites` is written before the suites start, so a killed run still names
+  the suites it never finished.
+- The host runner copies reports out of `.tox/`, which persists between runs,
+  so it purges old reports first.
+- Trust the directory plus its `.suites` manifest, never a lone JSON file's
+  timestamp.
 
 A useful corollary: when the process exit code is nonzero but every report in
 the directory shows zero failures, the failure is outside the suites. The

@@ -88,3 +88,12 @@ Feature: BR-ADMIN-PRINCIPALS Advertiser identity and credentials
     Given an unauthenticated product request has written an audit row
     When the advertiser form submits that audit principal ID
     Then the advertiser create is refused as a reserved audit identity
+
+
+  @T-ADMIN-PRIN-010
+  Scenario: Renaming an advertiser preserves its mock simulation settings
+    Given advertiser "buyer" exists in this tenant
+    And advertiser "buyer" has saved mock simulation settings
+    When the advertiser edit submits field "name" as "Replacement"
+    Then the advertiser retains its mock simulation settings
+    And the original advertiser credential is unchanged

@@ -221,7 +221,7 @@ class TestOnePricingOptionIdHelper:
         is what makes the collapse real — re-exporting a wrapper of the same shape would
         still be two definitions to keep in step.
         """
-        source = Path(given_media_buy.__file__).read_text()
+        source = Path(given_media_buy.__file__).read_text(encoding="utf-8")
         local_defs = [
             node.name
             for node in ast.parse(source).body

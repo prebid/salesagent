@@ -342,5 +342,7 @@ class CreativeAssignmentFactory(SQLAlchemyModelFactory):
     principal_id = factory.LazyAttribute(lambda o: o.creative.principal_id)
     media_buy = factory.SubFactory(MediaBuyFactory, tenant=factory.SelfAttribute("..creative.tenant"))
     media_buy_id = factory.LazyAttribute(lambda o: o.media_buy.media_buy_id)
-    package_id = factory.Sequence(lambda n: f"pkg_{n:04d}")
+    # A package the buy holds, as production assigns one: an assignment's package is a
+    # foreign key to media_packages. The lowest id, so a multi-package buy picks the same one.
+    package_id = factory.LazyAttribute(lambda o: min(package.package_id for package in o.media_buy.packages))
     weight = 100

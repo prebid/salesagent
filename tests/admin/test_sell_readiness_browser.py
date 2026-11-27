@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import uuid
 from typing import Any
 
@@ -13,7 +12,6 @@ import pytest
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
-from src.core.credentials import hash_token
 from tests.admin.browser_flow_helpers import (
     browser_page,
     build_admin_test_session,
@@ -21,7 +19,7 @@ from tests.admin.browser_flow_helpers import (
     media_buy_for_task,
 )
 from tests.e2e.adcp_request_builder import build_adcp_media_buy_request, get_test_date_range, parse_tool_result
-from tests.helpers.credentials import credential_headers, displayed_token
+from tests.helpers.credentials import credential_headers
 
 pytestmark = [
     pytest.mark.admin,
@@ -185,20 +183,6 @@ def _set_mock_manual_approval(live_server: dict[str, str], required: bool) -> No
                 """,
                 (tenant_row[0], required),
             )
-
-
-def _get_principal_record(live_server: dict[str, str], principal_id: str) -> tuple[str, str, str] | None:
-    with psycopg2.connect(live_server["postgres"]) as conn:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT principal_id, name, token_hash
-                FROM principals
-                WHERE tenant_id = %s AND principal_id = %s
-                """,
-                (TENANT_ID, principal_id),
-            )
-            return cursor.fetchone()
 
 
 def _get_media_buy_state(live_server: dict[str, str], media_buy_id: str) -> dict[str, str | None]:
@@ -371,32 +355,6 @@ def test_edit_product_browser_flow(docker_services_e2e, live_server, test_auth_t
     discovered = _lookup_product(live_server, test_auth_token, product_id)
     assert discovered["name"] == updated_name
     assert discovered["delivery_measurement"]["provider"] == "IAS"
-
-
-def test_create_principal_browser_flow(docker_services_e2e, live_server):
-    """Create a principal in the browser and verify persisted state."""
-    principal_id = f"Buyer_{uuid.uuid4().hex}_longid"
-    principal_name = f"Browser Principal {uuid.uuid4().hex[:6]}"
-
-    with browser_page(live_server["admin"]) as page:
-        login_as_tenant_admin(page, TENANT_ID)
-        page.goto(f"/tenant/{TENANT_ID}/principals/create", wait_until="domcontentloaded")
-        field = page.locator("#principal_id")
-        for invalid in (" buyer ", "two words", "a/b", "☃", "a" * 46):
-            assert not field.evaluate("(el, value) => { el.value = value; return el.checkValidity(); }", invalid)
-        field.fill(principal_id)
-        assert field.evaluate("el => el.checkValidity()")
-        page.locator("#name").fill(principal_name)
-        page.get_by_role("button", name="Add Advertiser").click()
-        page.wait_for_url(f"**/tenant/{TENANT_ID}/settings/advertisers", wait_until="domcontentloaded")
-        page.wait_for_selector(f"text={principal_name}")
-        token_notice = page.get_by_text(re.compile("Its API token, shown only now:")).inner_text()
-        issued_token = displayed_token(token_notice)
-
-    record = _get_principal_record(live_server, principal_id)
-    assert record is not None, "Principal should be persisted"
-    assert record[1] == principal_name
-    assert record[2] == hash_token(issued_token), "Persisted hash must match the token shown in the browser"
 
 
 @pytest.mark.slow

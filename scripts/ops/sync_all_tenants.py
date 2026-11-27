@@ -41,7 +41,7 @@ def sync_all_gam_tenants():
                 Tenant.ad_server == "google_ad_manager",
                 Tenant.is_active,
                 AdapterConfig.gam_network_code.isnot(None),
-                AdapterConfig.gam_refresh_token.isnot(None),
+                AdapterConfig._gam_refresh_token.isnot(None),
             )
             .all()
         )

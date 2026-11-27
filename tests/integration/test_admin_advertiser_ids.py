@@ -6,6 +6,8 @@ import pytest
 
 from src.adapters.mock_ad_server import MockAdServer
 from src.admin.blueprints import principals as principals_blueprint
+from src.admin.utils.audit_decorator import _RAISED_MESSAGE
+from src.core.operator_errors import DB_ERROR_OPERATOR_MESSAGE, logged_failure_pattern
 from src.core.schemas import Principal
 from tests.factories import PrincipalFactory
 from tests.harness.admin_principal import AdminPrincipalEnv
@@ -50,11 +52,15 @@ def test_database_error_is_audited_without_the_driver_message(creation_env, oper
         if operation == "create"
         else env.post_edit("fault_buyer", name="Replacement", enable_mock="1")
     )
-    assert response.status_code == 302
-    message = b"Error creating advertiser" if operation == "create" else b"Error updating advertiser"
-    assert message in env.follow(response).data
+    assert response.status_code == 500
+    page = response.data.decode()
+    assert logged_failure_pattern(DB_ERROR_OPERATOR_MESSAGE).search(page)
     (row,) = env.audit_rows(f"AdminUI.{operation}_principal", method="POST")
-    assert (row.success, row.error_message) == (False, "A database error occurred. The details have been logged.")
+    assert (row.success, row.error_message) == (False, _RAISED_MESSAGE)
+    rendered = f"{page}\n{row.error_message}"
+    assert "canceling statement due to user request" not in rendered
+    assert "psycopg2" not in rendered
+    assert "SELECT principals." not in rendered
     assert env.principals(name="Created Advertiser") == []
     assert env.principals(name="Replacement") == []
 

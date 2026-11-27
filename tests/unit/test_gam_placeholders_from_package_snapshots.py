@@ -311,7 +311,9 @@ def _pinned_format_kinds() -> set[str]:
     ``core/product-format-declaration.json`` is quoted from elsewhere in this change.
     """
     schema = json.loads(
-        (Path(adcp.__file__).parent / "_schemas" / "3.2" / "core" / "product-format-declaration.json").read_text()
+        (Path(adcp.__file__).parent / "_schemas" / "3.2" / "core" / "product-format-declaration.json").read_text(
+            encoding="utf-8"
+        )
     )
     kinds: set[str] = set()
 

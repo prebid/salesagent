@@ -17,6 +17,7 @@
     .provision-form label { display: block; font-size: 0.8rem; color: #6b7280; margin-bottom: 0.25rem; }
     .provision-form select, .provision-form input { padding: 0.4rem 0.8rem; border: 1px solid #d1d5db; border-radius: 6px; }
     .empty-state { text-align: center; padding: 3rem; color: #6b7280; }
+    .kek-warning { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; padding: 1rem; border-radius: 6px; margin-bottom: 1.5rem; max-width: 60rem; }
     .explainer { color: #6b7280; font-size: 0.9rem; margin-bottom: 1.5rem; max-width: 60rem; }
 </style>
 
@@ -47,6 +48,15 @@
     </button>
 </form>
 
+{% if key_backing.active_key_fault %}
+<div class="kek-warning" role="alert">
+    <strong>Key {{ key_backing.active_kid }} is active, but this deployment cannot sign with it, so this seller is not signing.</strong>
+    <span class="kek-advice">{{ key_backing.active_key_fault.advice }}</span>
+    <a href="https://github.com/prebid/salesagent/blob/main/docs/operations/signing-key-runbook.md#{{ key_backing.active_key_fault.runbook_anchor }}"
+       target="_blank" rel="noopener">Signing key runbook</a>
+</div>
+{% endif %}
+
 {% if keys %}
 <table class="signing-table">
     <thead>
@@ -68,8 +78,12 @@
             <td>
                 {% if key.revoked_at %}
                 <span class="status-badge status-revoked">revoked {{ key.revoked_at }}</span>
-                {% elif key.kid == active_kid %}
+                {% elif key.kid == key_backing.active_kid %}
+                {% if key_backing.signs %}
                 <span class="status-badge status-active">signing</span>
+                {% else %}
+                <span class="status-badge status-revoked">active, cannot sign</span>
+                {% endif %}
                 {% else %}
                 <span class="status-badge status-published">published</span>
                 {% endif %}
@@ -79,7 +93,7 @@
                 {% if not key.revoked_at %}
                 <form method="POST"
                       action="{{ url_for('signing_keys.revoke_signing_key_route', tenant_id=tenant_id, kid=key.kid) }}"
-                      onsubmit="return confirm('Revoke {{ key.kid }}? Signatures made with it will stop being produced immediately.');">
+                      onsubmit="return confirm({{ ('Revoke ' ~ key.kid ~ '? Signatures made with it will stop being produced immediately.')|tojson|forceescape }});">
                     <button type="submit" class="btn btn-danger">Revoke</button>
                 </form>
                 {% endif %}

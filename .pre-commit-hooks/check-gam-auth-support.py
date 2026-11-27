@@ -51,7 +51,7 @@ def check_file(file_path: str) -> list[str]:
     errors = []
 
     try:
-        content = Path(file_path).read_text()
+        content = Path(file_path).read_text(encoding="utf-8")
     except Exception as e:
         print(f"Warning: Could not read {file_path}: {e}", file=sys.stderr)
         return errors

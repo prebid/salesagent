@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import urlsplit
-
-from sqlalchemy import select
 
 from src.core.database.models import AuditLog, Principal
 from src.core.database.repositories.principal import PrincipalRepository
@@ -55,8 +52,7 @@ class AdminPrincipalEnv(AdminOperatorMixin, DatabaseFaultMixin, BareIntegrationE
         return self.admin_request(self.tenant_id, "get", "principals/create")
 
     def follow(self, response: AdminResponse) -> AdminResponse:
-        location = urlsplit(response.headers["Location"])
-        return self.client.request("get", location.path + (f"?{location.query}" if location.query else ""))
+        return self.client.follow(response)
 
     def post_rotate_token(
         self, principal_id: str, *, authenticated: bool, form: dict[str, str] | None = None
@@ -71,13 +67,14 @@ class AdminPrincipalEnv(AdminOperatorMixin, DatabaseFaultMixin, BareIntegrationE
     def principals(self, *, name: str | None = None, tenant_id: str | None = None) -> list[Principal]:
         session = self.get_session()
         session.expire_all()
-        query = select(Principal).filter_by(tenant_id=tenant_id or self.tenant_id)
-        if name is not None:
-            query = query.filter_by(name=name)
-        return list(session.scalars(query))
+        rows = PrincipalRepository(session, tenant_id or self.tenant_id).list_all()
+        return [row for row in rows if name is None or row.name == name]
 
-    def token_hash(self, principal_id: str) -> str:
-        return next(row.token_hash for row in self.principals() if row.principal_id == principal_id)
+    def token_hash(self, principal_id: str) -> str | None:
+        session = self.get_session()
+        session.expire_all()
+        principal = PrincipalRepository(session, self.tenant_id).get(principal_id)
+        return principal.token_hash if principal is not None else None
 
     def audit_rows(self, operation: str, *, method: str | None = None) -> list[AuditLog]:
         return [
