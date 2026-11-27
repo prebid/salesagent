@@ -9,6 +9,7 @@ graded on the response itself; the trigger's own counter shows it was this fault
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 
 from pytest_bdd import given, parsers, then, when
 
@@ -185,6 +186,49 @@ def then_sync_job_recorded_failed(ctx: dict) -> None:
     job = status.get_json()
     assert job["status"] == "failed", f"The job is {job['status']!r}, so the failure was not recorded"
     assert job.get("error") == answer["error"], f"The job stores {job.get('error')!r}, not {answer['error']!r}"
+
+
+@given("another tenant of this seller, onboarded to Google Ad Manager with a service account whose key it never stored")
+def given_another_gam_tenant_without_service_account_key(ctx: dict) -> None:
+    env = _env(ctx)
+    ctx["admin_other_tenant_id"] = env.seed_tenant()
+    env.onboard_gam(tenant_id=ctx["admin_other_tenant_id"], gam_auth_method="service_account")
+
+
+@given("that tenant's inventory sync has been running for two hours with no progress")
+def given_other_tenant_sync_stale(ctx: dict) -> None:
+    tenant_id = _other_tenant_id(ctx)
+    ctx["admin_running_sync_id"] = f"sync_stale_{tenant_id}"
+    started_at = datetime.now(UTC) - timedelta(hours=2)
+    _env(ctx).seed_running_inventory_sync(
+        ctx["admin_running_sync_id"], tenant_id=tenant_id, started_at=started_at, progress=None
+    )
+
+
+@then("the JSON response names that tenant's running sync as the one reset")
+def then_json_names_reset_sync(ctx: dict) -> None:
+    reset = _require_admin_page(ctx).get_json().get("reset_sync_id")
+    assert reset == ctx["admin_running_sync_id"], f"Expected {ctx['admin_running_sync_id']!r} reset, got {reset!r}"
+
+
+@then(parsers.parse('the sync API reports that tenant\'s running sync as failed with "{error}"'))
+def then_running_sync_recorded_failed(ctx: dict, error: str) -> None:
+    status = _env(ctx).sync_status_by_api(ctx["admin_running_sync_id"])
+    assert status.status_code == 200, f"The sync API does not know job {ctx['admin_running_sync_id']!r}"
+    job = status.get_json()
+    assert (job["status"], job.get("error")) == ("failed", error), (
+        f"Expected the job failed with {error!r}, got {job['status']!r} with {job.get('error')!r}"
+    )
+
+
+@then(parsers.parse('the sync API reports the started sync as failed with "{error}"'))
+def then_started_sync_recorded_failed(ctx: dict, error: str) -> None:
+    sync_id = _require_admin_page(ctx).get_json()["sync_id"]
+    assert sync_id != ctx["admin_running_sync_id"], f"The answer names the stale sync {sync_id!r}, not a new one"
+    job = _env(ctx).wait_for_sync_to_finish(sync_id)
+    assert (job["status"], job.get("error")) == ("failed", error), (
+        f"Expected the started sync failed with {error!r}, got {job['status']!r} with {job.get('error')!r}"
+    )
 
 
 @when(parsers.parse('the settings page tests the AI connection with the JSON body "{body}"'))

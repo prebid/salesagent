@@ -384,9 +384,16 @@ class _NestedUnitTracker(ast.NodeVisitor):
         # Either the with-item opens a unit (`with CreativeUoW(...)`), or the
         # block's BODY enters one on a stack (`uow = stack.enter_context(...)`)
         # — the latter is a plain statement, not a with-item, so checking only
-        # context_expr misses sync_creatives, the module under change.
+        # context_expr misses sync_creatives, the module under change. Only an
+        # ``enter_context`` call counts from the body: a unit opened there by its own
+        # ``with`` is open only inside that inner block, which this visitor reaches as a
+        # With of its own. Counting it here made the OUTER block's every call "inside a
+        # unit", including the outer with-item itself, which runs before any unit opens.
         opens = any(_opens_unit_of_work(item.context_expr) for item in node.items) or any(
-            _opens_unit_of_work(sub) for stmt in node.body for sub in ast.walk(stmt) if isinstance(sub, ast.Call)
+            ast.unparse(sub.func).endswith("enter_context") and _opens_unit_of_work(sub)
+            for stmt in node.body
+            for sub in ast.walk(stmt)
+            if isinstance(sub, ast.Call)
         )
         self._uow_depth += 1 if opens else 0
         self.generic_visit(node)

@@ -7,6 +7,7 @@ and losing progress on container restarts.
 
 import logging
 import threading
+from contextlib import ExitStack, suppress
 from datetime import UTC, datetime
 from typing import Any
 
@@ -15,9 +16,10 @@ from sqlalchemy import select
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import SyncJob
-from src.core.operator_errors import StateConflict, safe_error_message
+from src.core.database.repositories.uow import SyncJobUoW
+from src.core.operator_errors import StateConflict
 from src.core.thread_registry import ThreadRegistry
-from src.services.sync_jobs import record_sync_failure
+from src.services.sync_jobs import SyncFailed, recording_failure
 
 logger = logging.getLogger(__name__)
 
@@ -71,18 +73,13 @@ def start_inventory_sync_background(
     """
 
     # Create sync job record
-    with get_db_session() as db:
+    with SyncJobUoW(tenant_id) as uow:
+        assert uow.sync_jobs is not None and uow.adapter_config is not None
         # Get adapter type for the tenant via repository
-        from src.core.database.repositories.adapter_config import AdapterConfigRepository
-
-        adapter_repo = AdapterConfigRepository(db, tenant_id)
-        adapter_type = adapter_repo.get_adapter_type() or "mock"
+        adapter_type = uow.adapter_config.get_adapter_type() or "mock"
 
         # Check if sync already running
-        stmt = select(SyncJob).where(
-            SyncJob.tenant_id == tenant_id, SyncJob.status == "running", SyncJob.sync_type == "inventory"
-        )
-        existing_sync = db.scalars(stmt).first()
+        existing_sync = uow.sync_jobs.find_running("inventory")
 
         if existing_sync:
             # Check if sync is stale (running for >1 hour with no progress updates)
@@ -100,10 +97,10 @@ def start_inventory_sync_background(
 
             if is_stale:
                 # Mark stale sync as failed and allow new sync to start
-                existing_sync.mark_failed(
-                    "Sync thread died (stale after 1+ hour with no progress) - marked as failed to allow fresh sync"
+                uow.sync_jobs.record_failure(
+                    existing_sync.sync_id,
+                    "Sync thread died (stale after 1+ hour with no progress) - marked as failed to allow fresh sync",
                 )
-                db.commit()
                 logger.warning(
                     f"Marked stale sync {existing_sync.sync_id} as failed (running since {existing_sync.started_at}, no progress)"
                 )
@@ -114,13 +111,11 @@ def start_inventory_sync_background(
         # Create new sync job
         sync_id = f"sync_{tenant_id}_{int(datetime.now(UTC).timestamp())}"
 
-        sync_job = SyncJob(
-            sync_id=sync_id,
-            tenant_id=tenant_id,
+        uow.sync_jobs.create(
+            sync_id,
+            "inventory",
             adapter_type=adapter_type,
-            sync_type="inventory",
             status="running",
-            started_at=datetime.now(UTC),
             triggered_by="admin_ui",
             triggered_by_id="system",
             progress={
@@ -130,8 +125,6 @@ def start_inventory_sync_background(
                 "audience_segment_limit": audience_segment_limit,
             },
         )
-        db.add(sync_job)
-        db.commit()
 
     # Start background thread
     thread = threading.Thread(
@@ -172,8 +165,14 @@ def _run_sync_thread(
     - Phase 4: Discovering Custom Targeting (5/7 or 4/6)
     - Phase 5: Discovering Audience Segments (6/7 or 5/6)
     - Phase 6: Marking Stale Inventory (7/7 or 6/6)
+
+    A failure is recorded on the job by ``recording_failure``, after the session it was
+    raised in has closed, and ends the thread there: it has no caller to raise to. The job
+    leaves ``_active_syncs`` however the thread ends.
     """
-    try:
+    context = f"Inventory sync {sync_id} failed"
+    with ExitStack() as registered, suppress(SyncFailed), recording_failure(tenant_id, sync_id, context):
+        registered.callback(_active_syncs.remove, sync_id)
         logger.info(f"[{sync_id}] Starting inventory sync for {tenant_id}")
 
         # Import here to avoid circular dependencies
@@ -188,8 +187,7 @@ def _run_sync_thread(
         with get_db_session() as db:
             tenant = db.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
             if not tenant:
-                record_sync_failure(tenant_id, sync_id, "Tenant not found")
-                return
+                raise SyncFailed(sync_id, "Tenant not found")
 
             from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
@@ -201,8 +199,7 @@ def _run_sync_thread(
                 or adapter_config.adapter_type != "google_ad_manager"
                 or not adapter_config.gam_network_code
             ):
-                record_sync_failure(tenant_id, sync_id, "GAM not configured")
-                return
+                raise SyncFailed(sync_id, "GAM not configured")
 
             # Determine auth method
             auth_method = getattr(adapter_config, "gam_auth_method", None)
@@ -212,15 +209,13 @@ def _run_sync_thread(
                 elif hasattr(adapter_config, "gam_service_account_json") and adapter_config.gam_service_account_json:
                     auth_method = "service_account"
                 else:
-                    record_sync_failure(tenant_id, sync_id, "No GAM authentication configured")
-                    return
+                    raise SyncFailed(sync_id, "No GAM authentication configured")
 
             # Create GAM client based on auth method
             if auth_method == "service_account":
                 service_account_json_str = adapter_config.gam_service_account_json
                 if not service_account_json_str:
-                    record_sync_failure(tenant_id, sync_id, "Service account JSON not found")
-                    return
+                    raise SyncFailed(sync_id, "Service account JSON not found")
 
                 import json as json_mod
 
@@ -473,7 +468,7 @@ def _run_sync_thread(
         }
 
         # Mark complete
-        _mark_sync_complete(sync_id, result)
+        _mark_sync_complete(tenant_id, sync_id, result)
         logger.info(f"[{sync_id}] Sync completed successfully")
 
         # Invalidate inventory tree cache after successful sync
@@ -489,13 +484,6 @@ def _run_sync_thread(
             # Don't fail the sync if cache invalidation fails
             logger.warning(f"[{sync_id}] Failed to invalidate cache: {cache_error}")
 
-    except Exception as e:
-        record_sync_failure(tenant_id, sync_id, safe_error_message(e, f"Inventory sync {sync_id} failed"))
-
-    finally:
-        # Remove from active syncs
-        _active_syncs.remove(sync_id)
-
 
 def _update_sync_progress(sync_id: str, progress_data: dict[str, Any]):
     """Update sync job progress in database."""
@@ -510,21 +498,12 @@ def _update_sync_progress(sync_id: str, progress_data: dict[str, Any]):
         logger.warning(f"Failed to update sync progress: {e}")
 
 
-def _mark_sync_complete(sync_id: str, summary: dict[str, Any]):
+def _mark_sync_complete(tenant_id: str, sync_id: str, summary: dict[str, Any]):
     """Mark sync as completed with summary."""
     try:
-        with get_db_session() as db:
-            import json
-
-            stmt = select(SyncJob).where(SyncJob.sync_id == sync_id)
-            sync_job = db.scalars(stmt).first()
-            if sync_job:
-                sync_job.status = "completed"
-                # SQLAlchemy DateTime column accepts datetime objects
-                sync_job.completed_at = datetime.now(UTC)
-                # Convert summary dict to JSON string (summary field is Text, not JSON)
-                sync_job.summary = json.dumps(summary) if summary else None
-                db.commit()
+        with SyncJobUoW(tenant_id) as uow:
+            assert uow.sync_jobs is not None
+            uow.sync_jobs.mark_completed(sync_id, summary)
     except Exception as e:
         logger.error(f"Failed to mark sync complete: {e}")
 

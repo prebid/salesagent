@@ -19,6 +19,7 @@ from src.adapters.google_ad_manager import GoogleAdManager
 from src.admin.auth_helpers import api_key_prefix, mint_stored_api_key, require_api_key_auth
 from src.admin.form_validation import json_object_body
 from src.core.database.models import AdapterConfig, SyncJob, Tenant
+from src.core.database.repositories.uow import SyncJobUoW
 from src.core.operator_errors import FormIssue, InvalidFormInput
 from src.services.gam_inventory_service import db_session as gam_db_session
 from src.services.sync_jobs import recording_failure
@@ -147,18 +148,17 @@ def trigger_sync(tenant_id: str) -> tuple[Response, int]:
         # SyncFailed, which the admin error handler answers with the text the job stores.
         if sync_type == "full":
             # Pass custom targeting limit to prevent timeouts
-            result = adapter.sync_full(db_session, force=force, custom_targeting_limit=custom_targeting_limit)
+            result = adapter.sync_full(force=force, custom_targeting_limit=custom_targeting_limit)
         elif sync_type == "selective":
             # Selective sync - only sync specified inventory types
             result = adapter.sync_selective(
-                db_session,
                 sync_types=sync_types,
                 custom_targeting_limit=custom_targeting_limit,
                 audience_segment_limit=audience_segment_limit,
             )
         else:
             # "inventory", and "targeting", which maps to an inventory sync for now
-            result = adapter.sync_inventory(db_session, force=force, custom_targeting_limit=custom_targeting_limit)
+            result = adapter.sync_inventory(force=force, custom_targeting_limit=custom_targeting_limit)
 
         return jsonify(result), 200
 
@@ -435,23 +435,20 @@ def sync_tenant_orders(tenant_id: str) -> tuple[Response, int]:
 
         # Create sync job
         sync_id = f"orders_sync_{tenant_id}_{int(datetime.now(UTC).timestamp())}"
-        sync_job = SyncJob(
-            sync_id=sync_id,
-            tenant_id=tenant_id,
-            adapter_type="google_ad_manager",
-            sync_type="orders",
-            status="running",
-            started_at=datetime.now(UTC),
-            triggered_by="api",
-            triggered_by_id="tenant_management_api",
-        )
-
-        db_session.add(sync_job)
-        db_session.commit()
+        with SyncJobUoW(tenant_id) as uow:
+            assert uow.sync_jobs is not None
+            uow.sync_jobs.create(
+                sync_id,
+                "orders",
+                adapter_type="google_ad_manager",
+                status="running",
+                triggered_by="api",
+                triggered_by_id="tenant_management_api",
+            )
 
         # A failure marks the job failed and raises SyncFailed, which the admin error
         # handler answers with the text the job stores.
-        with recording_failure(db_session(), sync_job, f"Orders sync failed for tenant {tenant_id}"):
+        with recording_failure(tenant_id, sync_id, f"Orders sync failed for tenant {tenant_id}"):
             # Initialize GAM client
             from src.adapters.google_ad_manager import GoogleAdManager
             from src.core.schemas import Principal
@@ -484,11 +481,9 @@ def sync_tenant_orders(tenant_id: str) -> tuple[Response, int]:
             summary = service.sync_tenant_orders(tenant_id, adapter.client)
 
             # Update sync job with results
-            sync_job.status = "completed"
-            # Type ignore for SQLAlchemy DateTime column assignment
-            sync_job.completed_at = datetime.now(UTC)
-            sync_job.summary = json.dumps(summary)
-            db_session.commit()
+            with SyncJobUoW(tenant_id) as uow:
+                assert uow.sync_jobs is not None
+                uow.sync_jobs.mark_completed(sync_id, summary)
 
         return jsonify({"sync_id": sync_id, "status": "completed", "summary": summary}), 200
 

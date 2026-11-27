@@ -577,23 +577,49 @@ class AdminAccountEnv:
         with self._seeding(tenant_id) as (_, tenant):
             catalog_first_publisher_leaderboard(tenant)
 
-    def onboard_gam(self, *, tenant_id: str | None = None, service_account_email: str | None = None) -> None:
+    def onboard_gam(
+        self,
+        *,
+        tenant_id: str | None = None,
+        service_account_email: str | None = None,
+        gam_auth_method: str = "oauth",
+    ) -> None:
         """Leave *tenant_id* (this env's tenant by default) with the rows GAM onboarding writes.
 
         The service account email is stored if given; GAM onboarding stores none.
+        *gam_auth_method* is how the tenant authenticates to GAM; ``"service_account"`` with
+        no email names a service account whose key was never stored.
         """
         from tests.utils.tenant_setup import onboard_gam
 
         with self._seeding(tenant_id) as (_, tenant):
             config = onboard_gam(tenant, trafficker_id="bdd_trafficker")
             config.gam_service_account_email = service_account_email
+            config.gam_auth_method = gam_auth_method
 
-    def seed_running_inventory_sync(self, sync_id: str, *, tenant_id: str | None = None) -> None:
-        """Store an inventory sync *sync_id* of *tenant_id* (this env's by default), started a moment ago, still running."""
+    def seed_running_inventory_sync(self, sync_id: str, *, tenant_id: str | None = None, **columns: Any) -> None:
+        """Store an inventory sync *sync_id* of *tenant_id* (this env's by default), still running.
+
+        It started a moment ago and reports progress, unless *columns* (further ``SyncJob``
+        columns) say otherwise.
+        """
         from tests.factories import SyncJobFactory
 
         with self._seeding(tenant_id) as (_, tenant):
-            SyncJobFactory(tenant=tenant, sync_id=sync_id)
+            SyncJobFactory(tenant=tenant, sync_id=sync_id, **columns)
+
+    def wait_for_sync_to_finish(self, sync_id: str, *, timeout: float = 30.0) -> dict[str, Any]:
+        """The sync API's status of the job *sync_id* once it has stopped running, for a sync a thread runs."""
+        import time
+
+        deadline = time.monotonic() + timeout
+        while True:
+            status = self.sync_status_by_api(sync_id)
+            assert status.status_code == 200, f"The sync API does not know job {sync_id!r}: {status.status_code}"
+            job = status.get_json()
+            if job["status"] not in ("pending", "running") or time.monotonic() > deadline:
+                return job
+            time.sleep(0.2)
 
     def products_path(self, path: str = "") -> str:
         """The product routes of this tenant, which the product forms post to."""

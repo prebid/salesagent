@@ -59,7 +59,6 @@ ORM_MODEL_NAMES = _discover_orm_model_names()
 ALLOWLIST: set[tuple[str, str]] = {
     # ── Adapters ──
     # create_line_items removed — uses pre-loaded template param
-    ("src/adapters/gam/managers/sync.py", "_get_recent_sync"),
     ("src/adapters/gam/managers/sync.py", "get_sync_history"),
     ("src/adapters/gam/managers/sync.py", "get_sync_stats"),
     ("src/adapters/gam/managers/sync.py", "get_sync_status"),
@@ -104,7 +103,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/gam.py", "get_gam_custom_targeting_keys"),
     ("src/admin/blueprints/gam.py", "get_gam_line_item_api"),
     ("src/admin/blueprints/gam.py", "get_latest_sync_status"),
-    ("src/admin/blueprints/gam.py", "reset_stuck_sync"),
     ("src/admin/blueprints/gam.py", "test_gam_connection"),
     ("src/admin/blueprints/gam.py", "view_gam_line_item"),
     ("src/admin/blueprints/inventory.py", "analyze_ad_server_inventory"),
@@ -251,10 +249,8 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/auth_config_service.py", "mark_oidc_verified"),
     ("src/services/auth_config_service.py", "save_oidc_config"),
     # _run_approval_polling_thread removed — uses AdapterConfigRepository
-    ("src/services/background_sync_service.py", "_mark_sync_complete"),
     ("src/services/background_sync_service.py", "_run_sync_thread"),
     ("src/services/background_sync_service.py", "_update_sync_progress"),
-    ("src/services/background_sync_service.py", "start_inventory_sync_background"),
     ("src/services/delivery_simulator.py", "restart_active_simulations"),
     ("src/services/delivery_webhook_scheduler.py", "_send_report_for_media_buy"),
     ("src/services/dynamic_pricing_service.py", "_calculate_product_pricing"),

@@ -21,6 +21,7 @@ from src.adapters.gam_inventory_discovery import (
 from src.core.database.database_session import get_engine
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import GAMInventory, Product, ProductInventoryMapping
+from src.core.database.repositories.gam_inventory import inventory_row
 from src.services.gam_product_config_service import product_gam_slots
 
 
@@ -32,8 +33,8 @@ class _ProcessEngineSession(Session):
 
 
 #: Thread-local sessions for the sync API, separate from ``get_db_session``'s, on the same
-#: engine: a sync's failure is recorded in a unit of work of its own while this session
-#: still holds the failed work.
+#: engine: a sync route holds this one open while the sync's units of work open and close
+#: ``get_db_session``'s, and a unit's exit closes only the session it opened.
 db_session: scoped_session[Session] = scoped_session(sessionmaker(class_=_ProcessEngineSession))
 
 logger = logging.getLogger(__name__)
@@ -74,287 +75,6 @@ class GAMInventoryService:
         sync_summary = self._streaming_sync_all_inventory(tenant_id, discovery)
 
         return sync_summary
-
-    def _save_inventory_to_db(self, tenant_id: str, discovery: GAMInventoryDiscovery):
-        """Save discovered inventory to database using batched operations to prevent memory issues.
-
-        Writes to database incrementally in batches rather than loading everything into memory.
-        This prevents OOM errors with large inventories (10k+ items).
-        """
-        sync_time = datetime.now(UTC)
-        BATCH_SIZE = 500  # Write every 500 items to keep memory usage low
-
-        # Load ALL existing inventory IDs once (1 query instead of N)
-        stmt = select(GAMInventory.inventory_type, GAMInventory.inventory_id, GAMInventory.id).where(
-            GAMInventory.tenant_id == tenant_id
-        )
-        existing_inventory = self.db.execute(stmt).all()
-        existing_ids = {(row.inventory_type, row.inventory_id): row.id for row in existing_inventory}
-
-        # Track totals for logging
-        total_inserted = 0
-        total_updated = 0
-
-        # Prepare batch insert and update lists
-        to_insert: list[dict[str, Any]] = []
-        to_update: list[dict[str, Any]] = []
-
-        def flush_batch():
-            """Flush current batch to database with error handling."""
-            nonlocal total_inserted, total_updated
-            try:
-                if to_insert:
-                    self.db.bulk_insert_mappings(GAMInventory, to_insert)
-                    batch_inserted = len(to_insert)
-                    total_inserted += batch_inserted
-                    logger.info(f"Batch inserted {batch_inserted} inventory items")
-                    to_insert.clear()
-                if to_update:
-                    self.db.bulk_update_mappings(GAMInventory, to_update)
-                    batch_updated = len(to_update)
-                    total_updated += batch_updated
-                    logger.info(f"Batch updated {batch_updated} inventory items")
-                    to_update.clear()
-                self.db.commit()  # Commit each batch
-            except Exception as e:
-                logger.error(
-                    f"Batch write failed at {total_inserted + total_updated} items: {e}",
-                    exc_info=True,
-                )
-                self.db.rollback()
-                raise  # Re-raise to fail the sync properly
-
-        # Process ad units
-        for ad_unit in discovery.ad_units.values():
-            item_data = {
-                "tenant_id": tenant_id,
-                "inventory_type": "ad_unit",
-                "inventory_id": ad_unit.id,
-                "name": ad_unit.name,
-                "path": ad_unit.path,
-                "status": ad_unit.status.value,
-                "inventory_metadata": {
-                    "ad_unit_code": ad_unit.ad_unit_code,
-                    "parent_id": ad_unit.parent_id,
-                    "description": ad_unit.description,
-                    "target_window": ad_unit.target_window,
-                    "explicitly_targeted": ad_unit.explicitly_targeted,
-                    "has_children": ad_unit.has_children,
-                    "sizes": ad_unit.sizes,
-                    "effective_applied_labels": ad_unit.effective_applied_labels,
-                },
-                "last_synced": sync_time,
-            }
-
-            key = ("ad_unit", ad_unit.id)
-            if key in existing_ids:
-                # Add database ID for update
-                item_data["id"] = existing_ids[key]
-                to_update.append(item_data)
-            else:
-                to_insert.append(item_data)
-
-            # Flush batch every BATCH_SIZE items
-            if (len(to_insert) + len(to_update)) >= BATCH_SIZE:
-                flush_batch()
-
-        # Flush remaining ad units
-        flush_batch()
-        logger.info(f"Completed saving ad units: {len(discovery.ad_units)} total")
-
-        # Process placements
-        placements_count = len(discovery.placements)
-        logger.info(f"Processing {placements_count} placements for database save")
-
-        if placements_count == 0:
-            logger.warning(
-                f"No placements found in discovery object for tenant {tenant_id}. "
-                f"This could indicate: (1) no placements exist in GAM, (2) placement discovery failed, "
-                f"or (3) all placements are ARCHIVED"
-            )
-
-        for placement in discovery.placements.values():
-            item_data = {
-                "tenant_id": tenant_id,
-                "inventory_type": "placement",
-                "inventory_id": placement.id,
-                "name": placement.name,
-                "path": [placement.name],  # Placements don't have hierarchy
-                "status": placement.status,
-                "inventory_metadata": {
-                    "placement_code": placement.placement_code,
-                    "description": placement.description,
-                    "is_ad_sense_targeting_enabled": placement.is_ad_sense_targeting_enabled,
-                    "ad_unit_ids": placement.ad_unit_ids,
-                    "targeting_description": placement.targeting_description,
-                },
-                "last_synced": sync_time,
-            }
-
-            key = ("placement", placement.id)
-            if key in existing_ids:
-                item_data["id"] = existing_ids[key]
-                to_update.append(item_data)
-            else:
-                to_insert.append(item_data)
-
-            # Flush batch every BATCH_SIZE items
-            if (len(to_insert) + len(to_update)) >= BATCH_SIZE:
-                flush_batch()
-
-        # Flush remaining placements
-        flush_batch()
-        logger.info(f"Completed saving placements: {placements_count} total processed")
-
-        # Process labels
-        for label in discovery.labels.values():
-            item_data = {
-                "tenant_id": tenant_id,
-                "inventory_type": "label",
-                "inventory_id": label.id,
-                "name": label.name,
-                "path": [label.name],
-                "status": "ACTIVE" if label.is_active else "INACTIVE",
-                "inventory_metadata": {
-                    "description": label.description,
-                    "ad_category": label.ad_category,
-                    "label_type": label.label_type,
-                },
-                "last_synced": sync_time,
-            }
-
-            key = ("label", label.id)
-            if key in existing_ids:
-                item_data["id"] = existing_ids[key]
-                to_update.append(item_data)
-            else:
-                to_insert.append(item_data)
-
-            # Flush batch every BATCH_SIZE items
-            if (len(to_insert) + len(to_update)) >= BATCH_SIZE:
-                flush_batch()
-
-        # Flush remaining labels
-        flush_batch()
-        logger.info("Completed saving labels")
-
-        # Process custom targeting keys
-        for targeting_key in discovery.custom_targeting_keys.values():
-            item_data = {
-                "tenant_id": tenant_id,
-                "inventory_type": "custom_targeting_key",
-                "inventory_id": targeting_key.id,
-                "name": targeting_key.name,
-                "path": [targeting_key.display_name],
-                "status": targeting_key.status,
-                "inventory_metadata": {
-                    "display_name": targeting_key.display_name,
-                    "type": targeting_key.type,  # PREDEFINED or FREEFORM
-                    "reportable_type": targeting_key.reportable_type,
-                },
-                "last_synced": sync_time,
-            }
-
-            item_key = ("custom_targeting_key", targeting_key.id)
-            if item_key in existing_ids:
-                item_data["id"] = existing_ids[item_key]
-                to_update.append(item_data)
-            else:
-                to_insert.append(item_data)
-
-            # Process values for this key
-            values = discovery.custom_targeting_values.get(targeting_key.id, [])
-            for value in values:
-                value_data = {
-                    "tenant_id": tenant_id,
-                    "inventory_type": "custom_targeting_value",
-                    "inventory_id": value.id,
-                    "name": value.name,
-                    "path": [targeting_key.display_name, value.display_name],
-                    "status": value.status,
-                    "inventory_metadata": {
-                        "custom_targeting_key_id": value.custom_targeting_key_id,
-                        "display_name": value.display_name,
-                        "match_type": value.match_type,
-                        "key_name": targeting_key.name,
-                        "key_display_name": targeting_key.display_name,
-                    },
-                    "last_synced": sync_time,
-                }
-
-                value_key = ("custom_targeting_value", value.id)
-                if value_key in existing_ids:
-                    value_data["id"] = existing_ids[value_key]
-                    to_update.append(value_data)
-                else:
-                    to_insert.append(value_data)
-
-                # Flush batch every BATCH_SIZE items (values can be huge)
-                if (len(to_insert) + len(to_update)) >= BATCH_SIZE:
-                    flush_batch()
-
-        # Flush remaining targeting keys/values
-        flush_batch()
-        logger.info("Completed saving targeting keys and values")
-
-        # Process audience segments
-        for segment in discovery.audience_segments.values():
-            item_data = {
-                "tenant_id": tenant_id,
-                "inventory_type": "audience_segment",
-                "inventory_id": segment.id,
-                "name": segment.name,
-                "path": [segment.type, segment.name],  # e.g. ["FIRST_PARTY", "Sports Enthusiasts"]
-                "status": segment.status,
-                "inventory_metadata": {
-                    "description": segment.description,
-                    "category_ids": segment.category_ids,
-                    "type": segment.type,  # FIRST_PARTY or THIRD_PARTY
-                    "size": segment.size,
-                    "data_provider_name": segment.data_provider_name,
-                    "segment_type": segment.segment_type,  # RULE_BASED, SHARED, etc.
-                },
-                "last_synced": sync_time,
-            }
-
-            key = ("audience_segment", segment.id)
-            if key in existing_ids:
-                item_data["id"] = existing_ids[key]
-                to_update.append(item_data)
-            else:
-                to_insert.append(item_data)
-
-            # Flush batch every BATCH_SIZE items
-            if (len(to_insert) + len(to_update)) >= BATCH_SIZE:
-                flush_batch()
-
-        # Flush remaining audience segments
-        flush_batch()
-        logger.info("Completed saving audience segments")
-
-        # Mark old items as potentially stale (but keep ad units active)
-        stale_cutoff = sync_time - timedelta(seconds=1)
-
-        # Don't mark ad units as STALE - they should remain ACTIVE
-        from sqlalchemy import update
-
-        update_stmt = (
-            update(GAMInventory)
-            .where(
-                and_(
-                    GAMInventory.tenant_id == tenant_id,
-                    GAMInventory.last_synced < stale_cutoff,
-                    GAMInventory.inventory_type != "ad_unit",  # Keep ad units active
-                )
-            )
-            .values(status="STALE")
-        )
-        self.db.execute(update_stmt)
-        self.db.commit()
-
-        logger.info(
-            f"Saved inventory to database: {total_inserted} new, {total_updated} updated (batched operations - prevents OOM)"
-        )
 
     def _streaming_sync_all_inventory(self, tenant_id: str, discovery: "GAMInventoryDiscovery") -> dict[str, Any]:
         """
@@ -508,7 +228,7 @@ class GAMInventoryService:
 
         logger.info(f"🔄 Processing {len(items)} items (batch size: {BATCH_SIZE})...")
         for idx, item in enumerate(items):
-            item_data = self._convert_item_to_db_format(tenant_id, inventory_type, item, sync_time)
+            item_data = inventory_row(tenant_id, inventory_type, item, sync_time)
 
             if item.id in existing_ids:
                 item_data["id"] = existing_ids[item.id]
@@ -569,20 +289,7 @@ class GAMInventoryService:
         to_update: list[dict[str, Any]] = []
 
         for key in keys:
-            item_data = {
-                "tenant_id": tenant_id,
-                "inventory_type": "custom_targeting_key",
-                "inventory_id": key.id,
-                "name": key.name,
-                "path": [key.display_name],
-                "status": key.status,
-                "inventory_metadata": {
-                    "display_name": key.display_name,
-                    "type": key.type,
-                    "reportable_type": key.reportable_type,
-                },
-                "last_synced": sync_time,
-            }
+            item_data = inventory_row(tenant_id, "custom_targeting_key", key, sync_time)
 
             if key.id in existing_ids:
                 item_data["id"] = existing_ids[key.id]
@@ -633,92 +340,6 @@ class GAMInventoryService:
                 logger.info(f"No custom targeting keys found in gam_inventory for tenant {tenant_id}")
         except Exception as e:
             logger.error(f"Failed to update adapter_config.custom_targeting_keys: {e}", exc_info=True)
-
-    def _convert_item_to_db_format(self, tenant_id: str, inventory_type: str, item, sync_time: datetime) -> dict:
-        """Convert inventory item to database format.
-
-        Args:
-            tenant_id: Tenant ID
-            inventory_type: Type of inventory
-            item: Inventory item object
-            sync_time: Sync timestamp
-
-        Returns:
-            Dictionary ready for database insert/update
-        """
-
-        if inventory_type == "ad_unit":
-            return {
-                "tenant_id": tenant_id,
-                "inventory_type": "ad_unit",
-                "inventory_id": item.id,
-                "name": item.name,
-                "path": item.path,
-                "status": item.status.value,
-                "inventory_metadata": {
-                    "ad_unit_code": item.ad_unit_code,
-                    "parent_id": item.parent_id,
-                    "description": item.description,
-                    "target_window": item.target_window,
-                    "explicitly_targeted": item.explicitly_targeted,
-                    "has_children": item.has_children,
-                    "sizes": item.sizes,
-                    "effective_applied_labels": item.effective_applied_labels,
-                },
-                "last_synced": sync_time,
-            }
-        elif inventory_type == "placement":
-            return {
-                "tenant_id": tenant_id,
-                "inventory_type": "placement",
-                "inventory_id": item.id,
-                "name": item.name,
-                "path": [item.name],
-                "status": item.status,
-                "inventory_metadata": {
-                    "placement_code": item.placement_code,
-                    "description": item.description,
-                    "is_ad_sense_targeting_enabled": item.is_ad_sense_targeting_enabled,
-                    "ad_unit_ids": item.ad_unit_ids,
-                    "targeting_description": item.targeting_description,
-                },
-                "last_synced": sync_time,
-            }
-        elif inventory_type == "label":
-            return {
-                "tenant_id": tenant_id,
-                "inventory_type": "label",
-                "inventory_id": item.id,
-                "name": item.name,
-                "path": [item.name],
-                "status": "ACTIVE" if item.is_active else "INACTIVE",
-                "inventory_metadata": {
-                    "description": item.description,
-                    "ad_category": item.ad_category,
-                    "label_type": item.label_type,
-                },
-                "last_synced": sync_time,
-            }
-        elif inventory_type == "audience_segment":
-            return {
-                "tenant_id": tenant_id,
-                "inventory_type": "audience_segment",
-                "inventory_id": item.id,
-                "name": item.name,
-                "path": [item.type, item.name],
-                "status": item.status,
-                "inventory_metadata": {
-                    "description": item.description,
-                    "category_ids": item.category_ids,
-                    "type": item.type,
-                    "size": item.size,
-                    "data_provider_name": item.data_provider_name,
-                    "segment_type": item.segment_type,
-                },
-                "last_synced": sync_time,
-            }
-        else:
-            raise ValueError(f"Unknown inventory type: {inventory_type}")
 
     def _flush_batch(self, to_insert: list, to_update: list):
         """Flush a batch of inserts and updates to database with timeout and connection recovery.

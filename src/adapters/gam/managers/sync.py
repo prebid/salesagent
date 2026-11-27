@@ -14,6 +14,7 @@ sync orchestration within the modular GAM architecture.
 
 import json
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -23,6 +24,7 @@ from sqlalchemy.orm import Session
 from src.adapters.gam.client import GAMClientManager
 from src.adapters.gam.managers.inventory import GAMInventoryManager
 from src.adapters.gam.managers.orders import GAMOrdersManager
+from src.adapters.gam_inventory_discovery import GAMInventoryDiscovery
 from src.core.database.models import SyncJob
 from src.services.sync_jobs import recording_failure
 
@@ -61,7 +63,6 @@ class GAMSyncManager:
 
     def sync_inventory(
         self,
-        db_session: Session,
         force: bool = False,
         fetch_custom_targeting_values: bool = False,
         custom_targeting_limit: int = 1000,
@@ -69,7 +70,6 @@ class GAMSyncManager:
         """Synchronize inventory data from GAM to database.
 
         Args:
-            db_session: Database session for persistence
             force: Force sync even if recent sync exists
             fetch_custom_targeting_values: Whether to fetch custom targeting values (default False for lazy loading)
             custom_targeting_limit: Maximum number of values per custom targeting key (only used if fetch_custom_targeting_values=True)
@@ -82,52 +82,25 @@ class GAMSyncManager:
 
         # Check for recent sync if not forcing
         if not force:
-            recent_sync = self._get_recent_sync(db_session, sync_type)
+            recent_sync = self._get_recent_sync(sync_type)
             if recent_sync:
                 logger.info(f"Recent inventory sync found: {recent_sync['sync_id']}")
                 return recent_sync
 
-        # Create sync job
-        sync_job = self._create_sync_job(db_session, sync_type, "api")
-
-        with recording_failure(db_session, sync_job, f"Inventory sync failed for tenant {self.tenant_id}"):
-            # Update status to running
-            sync_job.status = "running"
-            db_session.commit()
-
+        def work() -> dict[str, Any]:
             # Perform actual inventory sync with custom targeting parameters
             summary = self.inventory_manager.sync_all_inventory(
                 custom_targeting_limit=custom_targeting_limit, fetch_values=fetch_custom_targeting_values
             )
+            self._save_inventory(self.inventory_manager._get_discovery())
+            return summary
 
-            # Save inventory to database - this would be delegated to inventory service
-            from src.services.gam_inventory_service import GAMInventoryService
+        return self._run_job(sync_type, "Inventory", work)
 
-            inventory_service = GAMInventoryService(db_session)
-
-            # Get the discovery instance and save to DB
-            discovery = self.inventory_manager._get_discovery()
-            inventory_service._save_inventory_to_db(self.tenant_id, discovery)
-
-            # Update sync job with results
-            sync_job.status = "completed"
-            # TODO: SyncJob.completed_at should use Mapped[datetime] not Mapped[DateTime]
-            sync_job.completed_at = datetime.now(UTC)
-            sync_job.summary = json.dumps(summary)
-            db_session.commit()
-
-        logger.info(f"Inventory sync completed for tenant {self.tenant_id}: {summary}")
-        return {
-            "sync_id": sync_job.sync_id,
-            "status": "completed",
-            "summary": summary,
-        }
-
-    def sync_orders(self, db_session: Session, force: bool = False) -> dict[str, Any]:
+    def sync_orders(self, force: bool = False) -> dict[str, Any]:
         """Synchronize orders and line items from GAM to database.
 
         Args:
-            db_session: Database session for persistence
             force: Force sync even if recent sync exists
 
         Returns:
@@ -138,22 +111,15 @@ class GAMSyncManager:
 
         # Check for recent sync if not forcing
         if not force:
-            recent_sync = self._get_recent_sync(db_session, sync_type)
+            recent_sync = self._get_recent_sync(sync_type)
             if recent_sync:
                 logger.info(f"Recent orders sync found: {recent_sync['sync_id']}")
                 return recent_sync
 
-        # Create sync job
-        sync_job = self._create_sync_job(db_session, sync_type, "api")
-
-        with recording_failure(db_session, sync_job, f"Orders sync failed for tenant {self.tenant_id}"):
-            # Update status to running
-            sync_job.status = "running"
-            db_session.commit()
-
+        def work() -> dict[str, Any]:
             # Perform actual orders sync
             # This would be implemented when orders sync is needed
-            summary = {
+            return {
                 "tenant_id": self.tenant_id,
                 "sync_time": datetime.now(UTC).isoformat(),
                 "duration_seconds": 0,
@@ -162,25 +128,12 @@ class GAMSyncManager:
                 "message": "Orders sync not yet implemented in sync manager",
             }
 
-            # Update sync job with results
-            sync_job.status = "completed"
-            # TODO: SyncJob.completed_at should use Mapped[datetime] not Mapped[DateTime]
-            sync_job.completed_at = datetime.now(UTC)
-            sync_job.summary = json.dumps(summary)
-            db_session.commit()
+        return self._run_job(sync_type, "Orders", work)
 
-        logger.info(f"Orders sync completed for tenant {self.tenant_id}: {summary}")
-        return {
-            "sync_id": sync_job.sync_id,
-            "status": "completed",
-            "summary": summary,
-        }
-
-    def sync_full(self, db_session: Session, force: bool = False, custom_targeting_limit: int = 1000) -> dict[str, Any]:
+    def sync_full(self, force: bool = False, custom_targeting_limit: int = 1000) -> dict[str, Any]:
         """Perform full synchronization of both inventory and orders.
 
         Args:
-            db_session: Database session for persistence
             force: Force sync even if recent sync exists
             custom_targeting_limit: Maximum number of values per custom targeting key (default 1000)
 
@@ -189,15 +142,9 @@ class GAMSyncManager:
         """
         logger.info(f"Starting full sync for tenant {self.tenant_id} (force: {force})")
 
-        # Create sync job for full sync
-        sync_job = self._create_sync_job(db_session, "full", "api")
-
-        # A nested sync that fails has recorded its own job; this job takes over its text.
-        with recording_failure(db_session, sync_job, f"Full sync failed for tenant {self.tenant_id}"):
-            # Update status to running
-            sync_job.status = "running"
-            db_session.commit()
-
+        # The inventory and orders syncs run as jobs of their own, between this job's units.
+        # One that fails has recorded its own job; this job takes over its text.
+        def work() -> dict[str, Any]:
             start_time = datetime.now(UTC)
             combined_summary: dict[str, Any] = {
                 "tenant_id": self.tenant_id,
@@ -205,36 +152,22 @@ class GAMSyncManager:
             }
 
             # Sync inventory first with custom targeting limit
-            inventory_result = self.sync_inventory(
-                db_session, force=True, custom_targeting_limit=custom_targeting_limit
-            )
+            inventory_result = self.sync_inventory(force=True, custom_targeting_limit=custom_targeting_limit)
             combined_summary["inventory"] = inventory_result.get("summary", {})
 
             # Then sync orders
-            orders_result = self.sync_orders(db_session, force=True)
+            orders_result = self.sync_orders(force=True)
             combined_summary["orders"] = orders_result.get("summary", {})
 
             # Calculate total duration
             end_time = datetime.now(UTC)
             combined_summary["duration_seconds"] = (end_time - start_time).total_seconds()
+            return combined_summary
 
-            # Update sync job with results
-            sync_job.status = "completed"
-            # TODO: SyncJob.completed_at should use Mapped[datetime] not Mapped[DateTime]
-            sync_job.completed_at = datetime.now(UTC)
-            sync_job.summary = json.dumps(combined_summary)
-            db_session.commit()
-
-        logger.info(f"Full sync completed for tenant {self.tenant_id}: {combined_summary}")
-        return {
-            "sync_id": sync_job.sync_id,
-            "status": "completed",
-            "summary": combined_summary,
-        }
+        return self._run_job("full", "Full", work)
 
     def sync_selective(
         self,
-        db_session: Session,
         sync_types: list[str],
         custom_targeting_limit: int = 1000,
         audience_segment_limit: int | None = None,
@@ -242,7 +175,6 @@ class GAMSyncManager:
         """Perform selective synchronization of specific inventory types.
 
         Args:
-            db_session: Database session for persistence
             sync_types: List of inventory types to sync (ad_units, placements, labels, custom_targeting, audience_segments)
             custom_targeting_limit: Maximum number of values per custom targeting key (default 1000)
             audience_segment_limit: Maximum number of audience segments to sync (None = unlimited)
@@ -252,14 +184,7 @@ class GAMSyncManager:
         """
         logger.info(f"Starting selective sync for tenant {self.tenant_id}: {sync_types}")
 
-        # Create sync job
-        sync_job = self._create_sync_job(db_session, "selective", "api")
-
-        with recording_failure(db_session, sync_job, f"Selective sync failed for tenant {self.tenant_id}"):
-            # Update status to running
-            sync_job.status = "running"
-            db_session.commit()
-
+        def work() -> dict[str, Any]:
             # Get discovery instance
             discovery = self.inventory_manager._get_discovery()
 
@@ -269,26 +194,51 @@ class GAMSyncManager:
                 custom_targeting_limit=custom_targeting_limit,
                 audience_segment_limit=audience_segment_limit,
             )
+            self._save_inventory(discovery)
+            return summary
 
-            # Save inventory to database
-            from src.services.gam_inventory_service import GAMInventoryService
+        return self._run_job("selective", "Selective", work)
 
-            inventory_service = GAMInventoryService(db_session)
-            inventory_service._save_inventory_to_db(self.tenant_id, discovery)
+    def _run_job(self, sync_type: str, label: str, work: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+        """Run *work* as a new job of *sync_type*, and record its summary, or its failure, on the job.
 
-            # Update sync job with results
-            sync_job.status = "completed"
-            # TODO: SyncJob.completed_at should use Mapped[datetime] not Mapped[DateTime]
-            sync_job.completed_at = datetime.now(UTC)
-            sync_job.summary = json.dumps(summary)
-            db_session.commit()
+        Each step is a unit of work of its own, and none is open while *work* runs: every
+        unit shares the thread's scoped session, so one opened inside another (a nested
+        sync's, under a full sync) would close the outer one's session. The job is committed
+        before it runs, so a failure always has a row to land on, and committed running
+        before the work starts, so another caller sees it in progress.
+        """
+        # Imported here: the repositories package imports the adapters (repositories.account
+        # -> core.helpers), and so this module, while it is still importing.
+        from src.core.database.repositories.uow import SyncJobUoW
 
-        logger.info(f"Selective sync completed for tenant {self.tenant_id}: {summary}")
+        sync_id = self._create_sync_job(sync_type, "api")
+
+        with recording_failure(self.tenant_id, sync_id, f"{label} sync failed for tenant {self.tenant_id}"):
+            with SyncJobUoW(self.tenant_id) as uow:
+                assert uow.sync_jobs is not None
+                uow.sync_jobs.mark_running(sync_id)
+
+            summary = work()
+
+            with SyncJobUoW(self.tenant_id) as uow:
+                assert uow.sync_jobs is not None
+                uow.sync_jobs.mark_completed(sync_id, summary)
+
+        logger.info(f"{label} sync completed for tenant {self.tenant_id}: {summary}")
         return {
-            "sync_id": sync_job.sync_id,
+            "sync_id": sync_id,
             "status": "completed",
             "summary": summary,
         }
+
+    def _save_inventory(self, discovery: GAMInventoryDiscovery) -> None:
+        """Write what *discovery* found to the database, in a unit of work of its own that closes before the job's next unit."""
+        from src.core.database.repositories.uow import GAMInventoryUoW
+
+        with GAMInventoryUoW(self.tenant_id) as uow:
+            assert uow.inventory is not None
+            uow.inventory.save_discovery(discovery)
 
     def get_sync_status(self, db_session: Session, sync_id: str) -> dict[str, Any] | None:
         """Get status of a specific sync job.
@@ -416,74 +366,69 @@ class GAMSyncManager:
 
         return recent_sync is None
 
-    def _get_recent_sync(self, db_session: Session, sync_type: str) -> dict[str, Any] | None:
+    def _get_recent_sync(self, sync_type: str) -> dict[str, Any] | None:
         """Get recent sync if it exists (today).
 
         Args:
-            db_session: Database session
             sync_type: Type of sync to check
 
         Returns:
             Recent sync info or None
         """
+        from src.core.database.repositories.uow import SyncJobUoW
+
         today = datetime.now(UTC).replace(hour=0, minute=0, second=0)
 
-        stmt = select(SyncJob).where(
-            SyncJob.tenant_id == self.tenant_id,
-            SyncJob.sync_type == sync_type,
-            SyncJob.status.in_(["running", "completed"]),
-            SyncJob.started_at >= today,
-        )
-        recent_sync = db_session.scalars(stmt).first()
+        with SyncJobUoW(self.tenant_id) as uow:
+            assert uow.sync_jobs is not None
+            recent_sync = uow.sync_jobs.find_recent(sync_type, today)
 
-        if not recent_sync:
-            return None
+            if not recent_sync:
+                return None
 
-        if recent_sync.status == "running":
-            return {
-                "sync_id": recent_sync.sync_id,
-                "status": "running",
-                "message": "Sync already in progress",
-            }
-        else:
-            summary = json.loads(recent_sync.summary) if recent_sync.summary else {}
-            return {
-                "sync_id": recent_sync.sync_id,
-                "status": "completed",
-                "completed_at": recent_sync.completed_at.isoformat() if recent_sync.completed_at else None,
-                "summary": summary,
-                "message": "Recent sync exists",
-            }
+            if recent_sync.status == "running":
+                return {
+                    "sync_id": recent_sync.sync_id,
+                    "status": "running",
+                    "message": "Sync already in progress",
+                }
+            else:
+                summary = json.loads(recent_sync.summary) if recent_sync.summary else {}
+                return {
+                    "sync_id": recent_sync.sync_id,
+                    "status": "completed",
+                    "completed_at": recent_sync.completed_at.isoformat() if recent_sync.completed_at else None,
+                    "summary": summary,
+                    "message": "Recent sync exists",
+                }
 
-    def _create_sync_job(self, db_session: Session, sync_type: str, triggered_by: str) -> SyncJob:
-        """Create a new sync job record.
+    def _create_sync_job(self, sync_type: str, triggered_by: str) -> str:
+        """Create a new sync job record, pending, in a unit of work of its own.
 
         Args:
-            db_session: Database session
             sync_type: Type of sync (inventory, orders, full)
             triggered_by: Who/what triggered the sync
 
         Returns:
-            Created sync job instance
+            The created job's sync id
         """
+        from src.core.database.repositories.uow import SyncJobUoW
+
         sync_id = f"sync_{self.tenant_id}_{sync_type}_{int(datetime.now(UTC).timestamp())}"
 
-        sync_job = SyncJob(
-            sync_id=sync_id,
-            tenant_id=self.tenant_id,
-            adapter_type="google_ad_manager",
-            sync_type=sync_type,
-            status="pending",
-            started_at=datetime.now(UTC),
-            triggered_by=triggered_by,
-            triggered_by_id=f"{triggered_by}_sync",
-        )
-
-        db_session.add(sync_job)
-        db_session.commit()
+        with SyncJobUoW(self.tenant_id) as uow:
+            assert uow.sync_jobs is not None
+            uow.sync_jobs.create(
+                sync_id,
+                sync_type,
+                adapter_type="google_ad_manager",
+                status="pending",
+                triggered_by=triggered_by,
+                triggered_by_id=f"{triggered_by}_sync",
+            )
 
         logger.info(f"Created sync job {sync_id} for tenant {self.tenant_id}")
-        return sync_job
+        return sync_id
 
     def get_sync_stats(self, db_session: Session, hours: int = 24) -> dict[str, Any]:
         """Get sync statistics for the tenant.
