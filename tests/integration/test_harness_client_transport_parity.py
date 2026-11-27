@@ -103,11 +103,8 @@ def _dispatch_via_env_pinning_one_dispatch_core(env, transport: Transport, tool:
     do the same), so an env that re-grows its own hand-rolled MCP/A2A path
     records zero calls here.
 
-    Applies to CONVERTED envs only — an env that keeps a justified
-    ``deliver_*`` override with bespoke routing (e.g. ``MediaBuyDualEnv``,
-    which picks tool and parser from request content) is out of scope for this
-    helper and is graded by the structural guard's shrink-only allowlist
-    instead.
+    Composite environments enter with their declared primary tool; the core's
+    owner hooks resolve request content to the addressed tool and parser.
     """
     import tests.harness.client as client_module
 
@@ -489,6 +486,103 @@ class TestNewlyDelegatingEnvEquivalence:
             client_result = AdCPTestClient(env).call(tool, dict(payload), transport)
 
         _assert_success_equivalent(via, client_result)
+
+
+@pytest.mark.integration
+@pytest.mark.requires_db
+class TestMcpOwnerHookMigration:
+    @pytest.mark.parametrize(
+        "module,cls_name,tool,field",
+        [
+            ("media_buy_create", "MediaBuyCreateEnv", "create_media_buy", "media_buy_id"),
+            ("media_buy_dual", "MediaBuyDualEnv", "create_media_buy", "media_buy_id"),
+            ("media_buy_create_list", "MediaBuyCreateListEnv", "create_media_buy", "media_buy_id"),
+            ("creative_sync", "CreativeSyncEnv", "sync_creatives", "creatives"),
+            ("creative_formats", "CreativeFormatsEnv", "list_creative_formats", "formats"),
+            ("delivery_poll", "DeliveryPollEnv", "get_media_buy_delivery", "media_buy_deliveries"),
+        ],
+    )
+    def test_primary_mcp_routes_preserve_local_results(self, integration_db, module, cls_name, tool, field):
+        from src.core.schemas import GetMediaBuyDeliveryResponse, ListCreativeFormatsResponse, SyncCreativesResponse
+        from src.core.schemas._base import CreateMediaBuySuccess
+        from tests.factories import CreateMediaBuyRequestFactory, PackageRequestFactory
+
+        env_cls = getattr(importlib.import_module(f"tests.harness.{module}"), cls_name)
+        context = {"trace": f"mcp-owner-{module}"}
+        with env_cls() as env:
+            if tool == "create_media_buy":
+                _, _, product, option = env.setup_media_buy_data()
+                req = CreateMediaBuyRequestFactory.build(
+                    account={"account_id": env.setup_default_account().account_id},
+                    packages=[
+                        PackageRequestFactory.build(
+                            product_id=product.product_id, pricing_option_id=option.pricing_option_id
+                        )
+                    ],
+                    context=context,
+                )
+                kwargs = {"req": req}
+            else:
+                env.setup_default_data()
+                if tool == "list_creative_formats":
+                    env.set_registry_formats([])
+                kwargs = {"context": context}
+
+            result = _dispatch_via_env_pinning_one_dispatch_core(env, Transport.MCP, tool, **kwargs)
+            assert result.is_success, result.error
+
+            if module == "media_buy_dual":
+                from datetime import timedelta
+
+                from src.core.schemas._base import UpdateMediaBuySuccess
+                from tests.factories.request import UpdateMediaBuyRequestFactory
+
+                media_buy_id = result.require_wire()["media_buy_id"]
+                update = UpdateMediaBuyRequestFactory.build(
+                    account=req.account,
+                    media_buy_id=media_buy_id,
+                    end_time=req.end_time + timedelta(days=1),
+                    context=context,
+                )
+                updated = _dispatch_via_env_pinning_one_dispatch_core(env, Transport.MCP, tool, req=update)
+                assert updated.is_success, updated.error
+                assert type(updated.payload) is UpdateMediaBuySuccess
+                assert updated.require_wire()["media_buy_id"] == media_buy_id
+                assert updated.require_wire()["context"] == context
+            elif module == "media_buy_create_list":
+                from src.core.schemas import GetMediaBuyDeliveryRequest
+                from src.core.schemas._base import GetMediaBuysRequest, GetMediaBuysResponse
+
+                media_buy_id = result.require_wire()["media_buy_id"]
+                for request_cls, response_cls, field_name in (
+                    (GetMediaBuysRequest, GetMediaBuysResponse, "media_buys"),
+                    (GetMediaBuyDeliveryRequest, GetMediaBuyDeliveryResponse, "media_buy_deliveries"),
+                ):
+                    readback = _dispatch_via_env_pinning_one_dispatch_core(
+                        env, Transport.MCP, tool, req=request_cls(media_buy_ids=[media_buy_id], context=context)
+                    )
+                    assert readback.is_success, readback.error
+                    assert type(readback.payload) is response_cls
+                    assert [item["media_buy_id"] for item in readback.require_wire()[field_name]] == [media_buy_id]
+                    assert readback.require_wire()["context"] == context
+
+        assert result.is_success, result.error
+        expected_model = {
+            "create_media_buy": CreateMediaBuySuccess,
+            "sync_creatives": SyncCreativesResponse,
+            "list_creative_formats": ListCreativeFormatsResponse,
+            "get_media_buy_delivery": GetMediaBuyDeliveryResponse,
+        }[tool]
+        assert type(result.payload) is expected_model
+        wire = result.require_wire()
+        assert wire["context"] == context
+        assert field in wire
+        if field == "media_buy_id":
+            assert wire[field]
+        elif field == "creatives":
+            assert len(wire[field]) == 1
+        else:
+            assert wire[field] == []
 
 
 @pytest.mark.integration

@@ -303,10 +303,6 @@ class TestHasWireIsDeclaredAtEveryConstructionSite:
     # (module, owner, ordinal-in-owner) -> (expected has_wire, why this SITE is what it is)
     EXPECTED_SITES: dict[tuple[str, str, int], tuple[bool, str]] = {
         # ── tests/harness/dispatchers.py — the per-transport dispatch entry points ──
-        ("dispatchers.py", "McpDispatcher.dispatch", 0): (
-            True,
-            "success, downstream of the structured_content capture",
-        ),
         ("dispatchers.py", "RestE2EDispatcher.dispatch", 0): (
             False,
             "missing env.e2e_config — a pure config error, ahead of every httpx call",

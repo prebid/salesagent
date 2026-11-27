@@ -31,16 +31,6 @@ def then_task_state(ctx: dict, state: str) -> None:
     assert ctx["result"].envelope["a2a_task_state"] == f"TASK_STATE_{state.upper()}"
 
 
-@then(parsers.parse('the receipt contains the AdCP "{status}" result'))
-@then(parsers.parse('the receipt contains the AdCP "{status}" result with error "{code}"'))
-def then_adcp_result(ctx: dict, status: str, code: str = "-") -> None:
-    if code != "-":
-        ctx["result"].assert_wire_error(code)
-        assert ctx["result"].error_envelope()["status"] == status
-    else:
-        assert wire_field(ctx, "status") == status
-
-
 @then("the AdCP task handle is distinct from the native receipt")
 def then_distinct_handles(ctx: dict) -> None:
     task_id = wire_field(ctx, "task_id")

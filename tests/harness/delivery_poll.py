@@ -38,7 +38,6 @@ from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from tests.harness._base import IntegrationEnv, rest_body_from_kwargs
 from tests.harness._mixins import DeliveryPollMixin
 from tests.harness.gam import GAM_CLIENT_PATCH, GamSellerMixin
-from tests.harness.transport import DeliverResult
 from tests.helpers.gam_client import gam_delivery_row
 
 #: The request fields the delivery route's body accepts, for a dispatch in the flat form.
@@ -100,12 +99,6 @@ class DeliveryDispatchMixin:
             raise TypeError(f"dispatch carries both req= and request fields {sorted(kwargs)}; send one request")
         return _get_media_buy_delivery_impl(req, identity)
 
-    # FIXME(#2012): preserve the local model while production omits pinned-required
-    # by_package fields. A2A selects its local reader inside the shared core.
-    def _deliver_delivery_mcp(self, **kwargs: Any) -> DeliverResult:
-        """Dispatch get_media_buy_delivery via the real FastMCP Client pipeline."""
-        return self._run_mcp_client("get_media_buy_delivery", GetMediaBuyDeliveryResponse, **kwargs)  # type: ignore[attr-defined]
-
     def _build_delivery_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """The ``GetMediaBuyDeliveryBody`` for either call shape (``rest_body_from_kwargs``)."""
         return rest_body_from_kwargs(kwargs, _DELIVERY_BODY_FIELDS)
@@ -131,10 +124,7 @@ class DeliveryPollEnv(GamSellerMixin, DeliveryDispatchMixin, DeliveryPollMixin, 
 
     RESPONSE_MODEL = GetMediaBuyDeliveryResponse
 
-    # FIXME(#2012): retain the existing MCP route and its local response model.
-    def deliver_mcp(self, **kwargs: Any) -> DeliverResult:
-        """Dispatch get_media_buy_delivery via the real FastMCP Client pipeline."""
-        return self._deliver_delivery_mcp(**kwargs)
+    MCP_TOOL = "get_media_buy_delivery"
 
     A2A_SKILL = "get_media_buy_delivery"
 

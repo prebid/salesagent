@@ -155,7 +155,7 @@ def _presents_a_credential(credential: Any) -> bool:
 
 
 def _mcp_wire_envelope(exc: Exception) -> dict | None:
-    """The two-layer envelope inside a FastMCP ``ToolError``, or ``None``.
+    """The captured AdCP error envelope inside a FastMCP ``ToolError``, or ``None``.
 
     The MCP boundary translator raises ``AdCPToolError`` (single-arg JSON envelope)
     so FastMCP serializes ``str(exc)`` as the JSON-encoded envelope. This parses that
@@ -1592,10 +1592,8 @@ class BaseTestEnv:
             raise result.error
         return result.payload
 
-    def deliver_mcp(self, **kwargs: Any) -> DeliverResult:
-        """Dispatch through the real FastMCP Client pipeline, returning payload AND wire.
-
-        Legacy MCP overrides may shape requests; new envs use address_tool/response_parser.
+    def deliver_mcp(self, **kwargs: Any) -> TransportResult:
+        """Dispatch through the shared owner-aware core, retaining the MCP wire.
 
         Note on enum coercion: FastMCP auto-coerces string values to enums when
         calling tools through the MCP protocol, so envs dispatching here need no
@@ -1603,12 +1601,11 @@ class BaseTestEnv:
         """
         if not self.MCP_TOOL:
             raise NotImplementedError(
-                f"{type(self).__name__} declares no MCP_TOOL and does not override deliver_mcp(). "
-                "Set MCP_TOOL to enable Transport.MCP dispatch."
+                f"{type(self).__name__} declares no MCP_TOOL. Set MCP_TOOL to enable Transport.MCP dispatch."
             )
         from tests.harness.transport import Transport
 
-        return self._deliver_via_client(Transport.MCP, self.MCP_TOOL, kwargs)
+        return self._dispatch_via_client(Transport.MCP, self.MCP_TOOL, kwargs)
 
     def _dispatch_via_client(self, transport: Any, tool: str, kwargs: dict[str, Any]) -> TransportResult:
         """Present this environment's request and credential to the shared core."""
@@ -1619,17 +1616,13 @@ class BaseTestEnv:
         credential = payload.pop("credential", NO_IDENTITY_OVERRIDE)
         return _dispatch_core(self, transport, tool, payload, credential)
 
-    def _deliver_via_client(self, transport: Any, tool: str, kwargs: dict[str, Any]) -> DeliverResult:
-        """Adapt the core's already-typed result to the legacy MCP return contract."""
-        result = self._dispatch_via_client(transport, tool, kwargs)
-        if result.error is not None:
-            raise result.error
-        return DeliverResult(payload=result.payload, wire_response=result.wire_response)
-
     def call_mcp(self, **kwargs: Any) -> Any:
         """The parsed MCP payload. Defined ONCE; never override — override
-        :meth:`deliver_mcp` instead, so the wire survives the call."""
-        return self.deliver_mcp(**kwargs).payload
+        :meth:`address_tool` or :meth:`response_parser` instead."""
+        result = self.deliver_mcp(**kwargs)
+        if result.error is not None:
+            raise result.error
+        return result.payload
 
     def _run_a2a_handler(self, skill_name: str, **kwargs: Any) -> TransportResult:
         """Send an untyped request through the real native handler or signing route."""
@@ -1689,6 +1682,8 @@ class BaseTestEnv:
         """
         self._refuse_unsignable(signed)
         if self.can_sign:
+            from tests.helpers.signing import wire_origin
+
             raw, headers = self.wire_request(
                 method=method,
                 path=path,
@@ -1696,7 +1691,7 @@ class BaseTestEnv:
                 signed=signed,
                 credentialed=_presents_a_credential(credential),
                 extra=extra,
-                origin=self.e2e_config.base_url if self.is_e2e else None,
+                origin=wire_origin(self.e2e_config.base_url) if self.is_e2e else None,
             )
         else:
             raw = b"" if body is None else json.dumps(body).encode()
@@ -2329,7 +2324,7 @@ class BaseTestEnv:
         return cast("BaseModel", _response_reader(model)(data))
 
     def parse_rest_error_envelope(self, status_code: int, data: dict[str, Any]) -> dict[str, Any] | None:
-        """The two-layer envelope from a REST error body, or ``None``.
+        """The captured AdCP error envelope from a REST error body, or ``None``.
 
         Shares ``_wire_envelope`` with the A2A and MCP paths so all three agree on
         what an error body means.

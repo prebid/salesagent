@@ -45,19 +45,12 @@ def _a2a_first_data_part(task: dict[str, Any]) -> dict[str, Any]:
     return data[0]
 
 
-def _a2a_error_envelope(data: Any) -> dict[str, Any] | None:
-    """AdCP 3.2.7 permits an envelope-only failure; retain either emitted layer."""
-    if not isinstance(data, dict):
-        return None
-    return data if isinstance(data.get("adcp_error"), dict) else _wire_envelope(data)
-
-
 def _jsonrpc_error_evidence(error: Any) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """The complete refusal and its AdCP data, without reading message text."""
     metadata = {"jsonrpc_error": error}
     if isinstance(error, dict):
         metadata["jsonrpc_error_code"] = error.get("code")
-        return metadata, _a2a_error_envelope(error.get("data"))
+        return metadata, _wire_envelope(error.get("data"))
     return metadata, None
 
 
@@ -79,7 +72,7 @@ def native_task_result(transport: Transport, task: dict[str, Any], *, response: 
         failed = task["status"]["state"] == "TASK_STATE_FAILED"
         has_adcp_error = isinstance(data.get("adcp_error"), dict)
         if failed or has_adcp_error:
-            wire_error = _a2a_error_envelope(data)
+            wire_error = _wire_envelope(data)
             if wire_error is not None:
                 raise WireError(wire_error, response)
             raise WireRefusal("Failed A2A Task carried no AdCP error envelope", response)

@@ -41,8 +41,9 @@ xdist shipping (workers ship on ``config.workeroutput``, the controller merges i
 ``pytest_testnodedown``), controller-only writing, the collect-only guard and the
 run-scope block. Each of those was re-read against that file rather than assumed.
 
-Writes ``$BDD_PAYLOAD_ARTIFACT`` (tox sets it per BDD env, under ``{toxworkdir}``;
-``run_all_tests.sh`` copies it into ``$RESULTS_DIR/payloads/``). It must NOT land
+Writes ``$BDD_PAYLOAD_ARTIFACT`` (tox sets it per BDD env, to
+``payloads/<env>.json`` under ``$SUITE_REPORT_DIR``, which ``run_all_tests.sh``
+points at its per-run ``$RESULTS_DIR``). It must NOT land
 at the ``test-results/`` root the way ``bdd_scenario_liveness.json`` does: that
 file is overwritten every run, which would destroy the "before" this gate needs.
 """

@@ -38,7 +38,6 @@ from unittest.mock import MagicMock
 from src.core.schemas import ListCreativeFormatsResponse
 from tests.harness._base import IntegrationEnv
 from tests.harness.peer_agent import PeerCreativeAgentMixin
-from tests.harness.transport import DeliverResult
 from tests.helpers.peer_creative_agent import new_peer_key
 
 
@@ -52,11 +51,7 @@ class CreativeFormatsEnv(PeerCreativeAgentMixin, IntegrationEnv):
     # Dispatch declaration: the base owns call_mcp/call_a2a.
     RESPONSE_MODEL = ListCreativeFormatsResponse
 
-    # The existing local response differs from the pinned schema.
-    # A2A selects the local reader inside the core; this legacy MCP override stays.
-    def deliver_mcp(self, **kwargs: Any) -> DeliverResult:
-        """Dispatch list_creative_formats via the real FastMCP Client pipeline."""
-        return self._run_mcp_client("list_creative_formats", ListCreativeFormatsResponse, **kwargs)
+    MCP_TOOL = "list_creative_formats"
 
     A2A_SKILL = "list_creative_formats"
 

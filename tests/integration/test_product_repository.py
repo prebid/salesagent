@@ -19,6 +19,7 @@ from src.core.database.models import ProductPublisherSelection
 from src.core.database.models import Tenant as TenantModel
 from src.core.database.repositories.product import ProductRepository
 from src.core.database.repositories.uow import ProductUoW
+from src.core.format_satisfaction import FormatOptionsOutsideCommonIntersection
 from src.core.product_conversion import convert_product_model_to_schema
 from src.core.schemas import Product as ProductSchema
 from tests.factories import PricingOptionFactory, ProductFactory, TenantFactory
@@ -501,10 +502,6 @@ class TestProductRepositoryUpdateFields:
         assert fetched.name == "Test Product"
 
 
-#: The rule clause of the common-intersection refusal.
-_INTERSECTION_REFUSAL = "every format option must be accepted by all of them"
-
-
 @pytest.mark.requires_db
 class TestProductRepositoryCommonIntersection:
     """Both write methods refuse a multi-publisher product without placements outside the common intersection.
@@ -536,7 +533,7 @@ class TestProductRepositoryCommonIntersection:
         )
 
         if refused:
-            with pytest.raises(ValueError, match=_INTERSECTION_REFUSAL), ProductUoW(tenant.tenant_id) as uow:
+            with pytest.raises(FormatOptionsOutsideCommonIntersection), ProductUoW(tenant.tenant_id) as uow:
                 uow.products.create(product)
         else:
             with ProductUoW(tenant.tenant_id) as uow:
@@ -551,7 +548,7 @@ class TestProductRepositoryCommonIntersection:
 
         # pytest.raises OUTSIDE the UoW, so the refusal rolls the unit back as in production.
         if refused:
-            with pytest.raises(ValueError, match=_INTERSECTION_REFUSAL), ProductUoW(product.tenant_id) as uow:
+            with pytest.raises(FormatOptionsOutsideCommonIntersection), ProductUoW(product.tenant_id) as uow:
                 uow.products.update_fields(product.product_id, format_options=authored)
         else:
             with ProductUoW(product.tenant_id) as uow:

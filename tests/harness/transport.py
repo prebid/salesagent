@@ -84,21 +84,17 @@ class WireRefusal(AssertionError):
 
 
 def _wire_envelope(envelope: dict) -> dict | None:
-    """The captured error body if it IS the two-layer envelope, else ``None``.
+    """Recognize either error layer permitted by AdCP 3.2.7 L3, unchanged.
 
-    Returns what production sent, unchanged, or nothing. It reshapes no body and fills no
-    layer: ``AdcpErrorResponse.of`` (``src/core/schemas/_base.py``) "Carries the SAME error
-    object at both levels the wire expects -- ``adcp_error`` on the envelope and
-    ``errors[0]``", so a real failure response always arrives with both, and a body missing
-    one did not come from the boundary and is reported as no envelope.
-
-    Arming a fault needs a real typed exception; the adapter genuinely raises one. ASSERTING
-    an outcome never does: the envelope IS what the buyer received, so nothing here
-    reconstructs an exception from it.
+    Reader recognition accepts an envelope-only peer as well as payload errors.
+    Seller emission assertions separately require both mirrored layers; this
+    function fills neither and never reconstructs a body from an exception.
     """
     if not isinstance(envelope, dict):
         return None
-    if isinstance(envelope.get("errors"), list) and envelope["errors"]:
+    if isinstance(envelope.get("adcp_error"), dict) or (
+        isinstance(envelope.get("errors"), list) and envelope["errors"]
+    ):
         return envelope
     return None
 

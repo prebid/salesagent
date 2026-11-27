@@ -70,6 +70,7 @@ def test_falls_back_to_origin_when_sec_fetch_site_is_absent(client):
     assert _post(client, Origin="http://admin.example.com").status_code == 403
     assert _post(client, Origin="https://admin.example.com.evil.example").status_code == 403
     assert _post(client, Origin="null").status_code == 403
+    assert _post(client, Origin="http://[admin.example.com").status_code == 403
 
 
 def test_accepts_a_request_without_browser_headers(client):

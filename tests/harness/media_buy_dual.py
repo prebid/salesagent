@@ -27,7 +27,6 @@ from tests.harness.media_buy_create import (
     MediaBuyCreateEnv,
     _adapter_operation_receipts,
 )
-from tests.harness.transport import DeliverResult
 
 if TYPE_CHECKING:
     from tests.helpers.signing import SignatureRealization
@@ -135,14 +134,6 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         if tool == "update_media_buy":
             return lambda **data: self._parse_update_rest_response(data)
         return super().response_parser(tool)
-
-    def deliver_mcp(self, **kwargs: Any) -> DeliverResult:
-        # Legacy MCP content routing; A2A uses address_tool above.
-        if _is_update_request(kwargs):
-            # _call_update_mcp already returns a DeliverResult
-            # carrying the real structured_content wire.
-            return self._call_update_mcp(**kwargs)
-        return super().deliver_mcp(**kwargs)
 
     def _run_rest_request(self, endpoint: str, *, signed: SignatureRealization = False, **kwargs: Any) -> Any:
         # ``signed`` is DECLARED, never swallowed into ``**kwargs`` — the same
@@ -274,19 +265,6 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         """
         req = kwargs.get("req")
         return getattr(req, "media_buy_id", None) or kwargs.get("media_buy_id") or self._seeded_media_buy_id
-
-    def _call_update_mcp(self, **kwargs: Any) -> DeliverResult:
-        # Drive the REAL FastMCP Client pipeline (mirrors MediaBuyCreateEnv.call_mcp) so the
-        # structured_content — the real MCP wire body — is stashed as wire_response and the
-        # full middleware/auth chain runs. The real pipeline reaches the production boundary
-        # through RegistryTool.run (src/core/main.py), which calls serve and raises
-        # AdCPToolError(to_wire(response)) on a failure, so a raised AdCPSalesAgentError
-        # surfaces as the two-layer wire envelope captured as wire_error_envelope.
-        return self._run_mcp_client(
-            "update_media_buy",
-            lambda **data: self._parse_update_rest_response(data),
-            **self._flatten_update_request(kwargs),
-        )
 
     def _build_update_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """The REST body, built by the SAME flatten the A2A and MCP paths use.

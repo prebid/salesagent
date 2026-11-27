@@ -91,7 +91,6 @@ from tests.harness._realize import e2e_unsupported, realize_e2e
 from tests.harness.gam import GAM_CLIENT_PATCH, GamSellerMixin
 from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY
 from tests.harness.peer_agent import PeerCreativeAgentMixin
-from tests.harness.transport import DeliverResult
 from tests.helpers.creative_test_helpers import creative_payload
 from tests.helpers.peer_creative_agent import single_preview_document
 
@@ -1486,6 +1485,7 @@ class CreativeSyncEnv(GamSellerMixin, PeerCreativeAgentMixin, IntegrationEnv):
         )
         return _sync_creatives_impl(req=req, identity=identity)
 
+    MCP_TOOL = "sync_creatives"
     A2A_SKILL = "sync_creatives"
 
     def address_tool(self, tool: str, payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -1494,14 +1494,6 @@ class CreativeSyncEnv(GamSellerMixin, PeerCreativeAgentMixin, IntegrationEnv):
 
     def response_parser(self, tool: str) -> Any:
         return SyncCreativesResponse
-
-    def deliver_mcp(self, **kwargs: Any) -> DeliverResult:
-        """Call sync_creatives via Client(mcp) — full pipeline dispatch.
-
-        No enum coercion needed — FastMCP's TypeAdapter handles it automatically.
-        """
-        kwargs = self._with_required_request_fields(kwargs)
-        return self._run_mcp_client("sync_creatives", SyncCreativesResponse, **kwargs)
 
     @classmethod
     def _wire_value(cls, value: Any) -> Any:

@@ -25,8 +25,9 @@ import os
 from collections.abc import Iterator
 from unittest.mock import patch
 
-import httpx
+import httpx2
 import pytest
+from pydantic_ai.exceptions import ModelConnectionError
 
 from src.services.ai import AIServiceFactory, TenantAIConfig
 from src.services.ai.agents.ranking_agent import create_ranking_agent, rank_products_async
@@ -99,13 +100,28 @@ async def test_a_scripted_failure_raises_what_ranking_catches(origin: str) -> No
 
 
 async def test_a_dropped_connection_raises_what_ranking_catches(origin: str) -> None:
-    """google-genai raises it unwrapped, and it is no OSError; run_agent still classifies it."""
+    """pydantic-ai wraps google-genai's httpx2 transport error, which is no OSError; run_agent classifies it."""
     install_script(_SELLER_KEY, ranking={"drop_connection": True})
 
     with pytest.raises(AIProviderError) as excinfo:
         await _rank(_seller_model())
 
-    assert isinstance(excinfo.value.__cause__, httpx.RemoteProtocolError)
+    assert isinstance(excinfo.value.__cause__, ModelConnectionError)
+    assert isinstance(excinfo.value.__cause__.__cause__, httpx2.RemoteProtocolError)
+
+
+async def test_an_undecodable_body_raises_what_ranking_catches(origin: str) -> None:
+    """google-genai and pydantic-ai leave httpx2.DecodingError unwrapped; run_agent still classifies it.
+
+    ``httpx2.HTTPError`` is not an ``httpx.HTTPError``, so this is the case a classifier that
+    knew only the first httpx generation let escape as a defect.
+    """
+    install_script(_SELLER_KEY, ranking={"undecodable_body": True})
+
+    with pytest.raises(AIProviderError) as excinfo:
+        await _rank(_seller_model())
+
+    assert isinstance(excinfo.value.__cause__, httpx2.DecodingError)
 
 
 async def test_a_scripted_policy_failure_raises_what_get_products_fails_open_on(origin: str) -> None:

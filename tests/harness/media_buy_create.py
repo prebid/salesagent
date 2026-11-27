@@ -33,7 +33,6 @@ from tests.harness.admin_client import AdminOperatorMixin
 from tests.harness.gam import GAM_CLIENT_PATCH, GamSellerMixin
 from tests.harness.peer_agent import PeerCreativeAgentMixin
 from tests.harness.publisher_authorization import PublisherAdagentsMixin
-from tests.harness.transport import DeliverResult
 
 if TYPE_CHECKING:
     from src.core.tools.media_buy_create import ApprovalResult
@@ -830,6 +829,7 @@ class MediaBuyCreateEnv(
         flat.update(kwargs)
         return flat
 
+    MCP_TOOL = "create_media_buy"
     A2A_SKILL = "create_media_buy"
 
     def address_tool(self, tool: str, payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -837,19 +837,6 @@ class MediaBuyCreateEnv(
 
     def response_parser(self, tool: str) -> Any:
         return CreateMediaBuyResult
-
-    def deliver_mcp(self, **kwargs: Any) -> DeliverResult:
-        """Dispatch create_media_buy through the real FastMCP ``Client`` pipeline.
-
-        Delegates to the base ``_run_mcp_client`` (in-memory FastMCP transport →
-        middleware → TypeAdapter → MCP wrapper → ``_impl``, with the real
-        token→DB→identity auth chain and its patch-called guard), reconstructing
-        the ``CreateMediaBuyResult`` from the flattened ``structured_content`` via
-        ``parse_rest_response`` for the success|error union discrimination.
-        """
-        return self._run_mcp_client(
-            "create_media_buy", lambda **data: self.parse_rest_response(data), **self._flatten_request(kwargs)
-        )
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Build REST request body from kwargs."""

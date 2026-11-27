@@ -216,14 +216,6 @@ def provision_tenant():
             # Access control
             authorized_emails=[user_email.lower()],
             authorized_domains=[email_domain] if email_domain else None,
-            # Default policy settings
-            policy_settings={
-                "enabled": True,
-                "require_manual_review": False,
-                "prohibited_advertisers": [],
-                "prohibited_categories": [],
-                "prohibited_tactics": [],
-            },
         )
         # Both ids are freshly generated above (a uuid4 and its first 8 chars), so a
         # collision here would be a generator accident, not two users racing for the

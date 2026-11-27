@@ -50,7 +50,6 @@ from src.core.schemas import (
     LibraryErrorSource,
     Product,  # Extends library Product
 )
-from src.core.validation_helpers import safe_parse_json_field
 from src.services.ai import AIServiceFactory
 from src.services.ai.factory import AIProviderError
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
@@ -265,18 +264,16 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
 
     # Note: brand_manifest validation is handled by Pydantic schema, no need for runtime validation here
 
-    # Check policy compliance first (if enabled)
-    advertising_policy = safe_parse_json_field(tenant.advertising_policy, field_name="advertising_policy", default={})
-
-    # Only run policy checks if enabled in tenant settings
-    policy_check_enabled = advertising_policy.get("enabled", False)  # Default to False for new tenants
+    # Check policy compliance first (if enabled). No saved policy runs no check.
+    advertising_policy = tenant.advertising_policy
+    policy_check_enabled = advertising_policy is not None and advertising_policy.enabled
 
     # Extract brief text early - needed for policy checks, dynamic variants, and AI ranking
     brief_text = req.brief if req.brief else ""
     # What AI the seller configured, resolved once when the tenant was loaded.
     seller_ai = tenant.ai_config
 
-    if not policy_check_enabled:
+    if advertising_policy is None or not policy_check_enabled:
         # Skip policy checks if disabled
         policy_result = None
         logger.info(f"Policy checks disabled for tenant {tenant.tenant_id}")
@@ -296,15 +293,12 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
         else:
             policy_service = PolicyCheckService(model=policy_model)
 
-            # Use advertising_policy settings for tenant-specific rules
-            tenant_policies = advertising_policy if advertising_policy else {}
-
             try:
                 policy_result = await policy_service.check_brief_compliance(
                     brief=brief_text,
                     promoted_offering=offering,  # Use extracted offering from brand
                     brand_manifest=None,  # the pinned SDK: brand_manifest replaced by brand; policy service still accepts None
-                    tenant_policies=tenant_policies if tenant_policies else None,
+                    tenant_policy=advertising_policy,
                 )
 
                 # Log successful policy check
@@ -370,7 +364,8 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
     if (
         policy_result
         and policy_result.status == PolicyStatus.RESTRICTED
-        and advertising_policy.get("require_manual_review", False)
+        and advertising_policy is not None
+        and advertising_policy.require_manual_review
     ):
         # Log policy violation for audit trail and compliance
         audit_logger = get_audit_logger("AdCP", tenant.tenant_id)

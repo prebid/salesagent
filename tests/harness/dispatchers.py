@@ -1,21 +1,21 @@
 """Dispatcher classes — one per transport.
 
-Each dispatcher calls the env's transport-specific method and wraps the
-result in a TransportResult. The env subclass provides the actual call logic;
-the dispatcher only handles result wrapping and error capture.
+Each dispatcher returns a TransportResult with the observed wire evidence.
+MCP and A2A delegate through the base delivery methods to the shared core;
+REST retains the environment's endpoint and body builders.
 
 ONE DISPATCH FORM. The MCP and A2A dispatchers call ``env.deliver_mcp`` /
 ``env.deliver_a2a`` — the single pair ``BaseTestEnv`` owns
-(``tests/harness/_base.py``), which ``call_mcp``/``call_a2a`` delegate to as
-``deliver_*(**kwargs).payload``. There is no second channel: the deprecated
+(``tests/harness/_base.py``). ``call_mcp``/``call_a2a`` return the parsed payload
+or raise the exact captured exception. There is no second channel: the deprecated
 raw-kwargs dispatch path was deleted once its last 18 call sites migrated, and
 per-env ``call_mcp``/``call_a2a`` re-implementations are banned by
 ``tests/unit/test_architecture_harness_single_dispatch.py``. A scenario builds
 the request model; the transport serializes it.
 
-THE WIRE RIDES THE RETURN VALUE. Success-path wire bytes arrive on
-``DeliverResult.wire_response`` and are re-emitted on
-``TransportResult.wire_response``; error-path wire bytes arrive on
+THE WIRE RIDES THE RETURN VALUE. The MCP primitive's ``DeliverResult`` is read
+once by the core; dispatchers retain ``TransportResult.wire_response`` and
+error-path wire bytes on
 ``TransportResult.wire_error_envelope`` from ``client.py``'s per-transport
 unwraps. No dispatcher reads another object's private wire stash — that
 attribute (``_last_wire_response``) is deleted, which is what makes a second
@@ -268,14 +268,9 @@ class McpDispatcher:
             # re-attached on top: a bodyless 401 leaves that unwrap no envelope
             # to recover.
             return _carrying_refusal_response(unwrap_mcp_error(exc, Transport.MCP), exc)
-        # Real MCP wire: the structured_content dict, carried back on the SAME
-        # return value as the payload — see the A2A sibling above.
-        return TransportResult(
-            has_wire=True,  # structured_content came back from the MCP client
-            payload=delivered.payload,
-            envelope={"transport": "mcp"},
-            wire_response=delivered.wire_response,
-        )
+        if delivered.error is not None:
+            return _carrying_refusal_response(delivered, delivered.error)
+        return delivered
 
 
 def _effective_rest_method(method: str, *, has_params: bool) -> str:
@@ -292,84 +287,6 @@ def _effective_rest_method(method: str, *, has_params: bool) -> str:
     if method != "get":
         return method
     return "post" if has_params else "get"
-
-
-def _deliver_e2e_rest_signed(
-    env: BaseTestEnv,
-    *,
-    base_url: str,
-    endpoint: str,
-    method: str,
-    body: dict[str, Any],
-    credential: Any,
-    signed: SignatureRealization,
-) -> Any:
-    """E2E_REST delivery through ``env.wire_request`` — the signABLE path.
-
-    Not a second copy of ``client._deliver_e2e_rest``: that function serializes
-    its own request (httpx's ``json=``), which is the one thing a signature
-    cannot survive — httpx re-serializes with its own separators, so the bytes
-    signed are not the bytes sent and the verifier answers
-    ``request_signature_digest_mismatch``. Once the env CAN sign, every request
-    it makes — signed or not — goes through ``wire_request``, which owns the
-    three rules a signed request obeys (serialize once and send exactly those
-    bytes; carry the same credential and tenant hint whether or not you sign; one
-    identity, on ``Authorization``). The fork is on ``can_sign``, not on
-    ``signed``, so a signed and an unsigned dispatch differ by exactly the
-    signature (owner decision D1's corollary); an env that cannot sign keeps the
-    single upstream delivery implementation untouched.
-
-    ONE thing is this leg's OWN and is stated here rather than inside that seam,
-    because only this leg has it: the ORIGIN is the live stack's, port included —
-    nginx forwards ``Host`` verbatim and ``_verify_url`` rebuilds the authority
-    from it, so the in-process default (``http://testserver``) would cover a
-    different ``@target-uri`` than the verifier reconstructs.
-
-    The tenant hint used to be this leg's too, for a reason that has since become
-    every leg's: the header named a module-level ``sig_tenant`` that does not
-    exist in the live database, and a header asserting a tenant other than the
-    one being addressed is a lie inside the signed byte range — one ladder
-    reordering away from collapsing the posture bucket to ``none``, an unverified
-    pass-through wearing a 200. ``wire_request`` now sets it for all four legs,
-    and nothing else is carried across from *credential*: there are no testing
-    headers left to forward (the ``x-dry-run`` channel went with the testing
-    hooks), so this leg passes no ``extra`` at all.
-
-    *credential* is read for ONE bit and no more. ``wire_request`` owns the
-    credential it sends — the signing capability's bearer, on ``Authorization``,
-    per owner decision D3/D4 — so what a caller passes here cannot add a second
-    identity to the request; it can only say whether an ACCEPTABLE one is
-    presented. That bit is what selects the branch being graded: security.mdx
-    :1269 makes an unsigned request carrying a valid bearer a spec-correct 200,
-    so only a call presenting no bearer (``credential={}``, or one built with
-    ``token=None``) reaches the verifier's refusal at all.
-
-    *base_url* is passed in rather than read off ``env.e2e_config`` here: the
-    caller has already established it is not ``None`` (and returns a
-    ``TransportResult`` naming ``e2e_config=`` when it is), so re-deriving it
-    would either duplicate that check or type as optional.
-    """
-    import httpx
-
-    from tests.harness.client import _presented
-    from tests.helpers.signing import wire_origin
-
-    raw, headers = env.wire_request(
-        path=endpoint,
-        # A parameterless GET has no body to sign, and none to send.
-        body=None if method == "get" else body,
-        signed=signed,
-        origin=wire_origin(base_url),
-        # ``_presented`` is the one place an omitted credential falls back to
-        # env.credential(), shared with every other e2e delivery; the bearer is
-        # then the acceptable-credential bit, not the header set to send.
-        credentialed=bool(_presented(env, credential).get("Authorization")),
-        method=method.upper(),
-    )
-    with httpx.Client(base_url=base_url, timeout=30) as client:
-        # Signed or not, the bytes signed are the bytes sent — `content=`, never
-        # `json=`, which would re-serialize them.
-        return client.request(method.upper(), endpoint, content=raw, headers=headers)
 
 
 class RestE2EDispatcher:
@@ -392,7 +309,7 @@ class RestE2EDispatcher:
     (the wire-grading work; design doc §5). THE ONE EXCEPTION is an env that CAN
     SIGN: a signature requires the ``wire_request`` seam (serialize once, send
     exactly those bytes), which that delivery function does not go through, so
-    the signable path is ``_deliver_e2e_rest_signed`` above. This is the only leg
+    the signable path delegates to ``env._http_request``. This is the only leg
     that leaves the process, and the owner's D1 ruling — "the http path is the
     only really truthful one" — makes it the one that matters most.
 
@@ -411,7 +328,7 @@ class RestE2EDispatcher:
 
     def dispatch(self, env: BaseTestEnv, *, signed: SignatureRealization = False, **kwargs: Any) -> TransportResult:
         from tests.harness.address_table import ToolAddress
-        from tests.harness.client import _deliver_e2e_rest, unwrap_rest_response
+        from tests.harness.client import _deliver_e2e_rest, _presented, unwrap_rest_response
         from tests.harness.transport import NO_IDENTITY_OVERRIDE
 
         env._refuse_unsignable(signed)
@@ -433,13 +350,11 @@ class RestE2EDispatcher:
         method = _effective_rest_method(getattr(env, "REST_METHOD", "post"), has_params=bool(kwargs))
 
         if env.can_sign:
-            response = _deliver_e2e_rest_signed(
-                env,
-                base_url=env.e2e_config.base_url,
-                endpoint=endpoint,
-                method=method,
-                body=body,
-                credential=credential,
+            response = env._http_request(
+                method.upper(),
+                endpoint,
+                body=None if method == "get" else body,
+                credential=_presented(env, credential),
                 signed=signed,
             )
         else:

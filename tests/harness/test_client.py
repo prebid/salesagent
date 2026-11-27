@@ -25,15 +25,132 @@ from tests.harness.transport import Transport
 from tests.helpers.credentials import credential_headers
 
 
-def _origin_env(origin, *, a2a_over_http=False, a2a_skill=None):
+def _origin_env(origin, *, env_cls=BaseTestEnv, a2a_over_http=False, a2a_skill=None):
     from tests.harness.transport import E2EConfig
 
-    env = BaseTestEnv(e2e_config=E2EConfig(base_url=origin.base_url, postgres_url="postgresql://unused/db"))
-    env.A2A_SKILL = a2a_skill
+    env = env_cls(e2e_config=E2EConfig(base_url=origin.base_url, postgres_url="postgresql://unused/db"))
+    if a2a_skill is not None:
+        env.A2A_SKILL = a2a_skill
     env._signed_dispatch = False
     if a2a_over_http:
         env._run_a2a_handler = env._run_a2a_over_http
     return env
+
+
+class TestMcpEnvironmentReader:
+    @pytest.mark.parametrize("reject", [False, True])
+    def test_delivery_preserves_local_reader_outcome_and_wire(self, monkeypatch, reject):
+        from src.core.schemas import GetProductsResponse
+        from tests.harness.transport import DeliverResult, TransportResult
+
+        env = BaseTestEnv()
+        env.MCP_TOOL = "get_products"
+        body = {"products": [], "context": {"trace": "mcp-reader"}}
+        original = ValueError("local reader rejected the response")
+        reads = []
+        deliveries = []
+
+        def read(**data):
+            reads.append(data.copy())
+            if reject:
+                raise original
+            return GetProductsResponse.revive(data)
+
+        def deliver(tool, model, **kwargs):
+            deliveries.append((tool, model, kwargs))
+            return DeliverResult(payload=body.copy(), wire_response=body.copy())
+
+        monkeypatch.setattr(env, "response_parser", lambda tool: read)
+        monkeypatch.setattr(env, "_run_mcp_client", deliver)
+        result = env.deliver_mcp(credential={})
+
+        assert isinstance(result, TransportResult)
+        assert deliveries == [("get_products", dict, {"credential": {}})]
+        assert reads == [body]
+        assert result.has_wire
+        assert result.wire_response == body
+        assert result.envelope["transport"] == "mcp"
+        if reject:
+            assert result.error is original
+            monkeypatch.setattr(env, "deliver_mcp", lambda **kwargs: result)
+            with pytest.raises(ValueError) as caught:
+                env.call_mcp()
+            assert caught.value is original
+        else:
+            assert result.is_success
+            assert type(result.payload) is GetProductsResponse
+            assert result.payload.context == body["context"]
+
+    @pytest.mark.parametrize("body", [None, {"adcp_error": {"code": "AUTH_REQUIRED", "recovery": "correctable"}}])
+    def test_dispatch_preserves_captured_refusal_response(self, monkeypatch, body):
+        import httpx
+
+        from tests.harness.dispatchers import McpDispatcher
+        from tests.harness.transport import WireError, WireRefusal
+
+        env = BaseTestEnv()
+        env.MCP_TOOL = "get_products"
+        response = httpx.Response(401, json=body, headers={"www-authenticate": 'Signature error="missing"'})
+        original = WireRefusal("captured refusal", response) if body is None else WireError(body, response)
+
+        def refuse(*args, **kwargs):
+            raise original
+
+        monkeypatch.setattr(env, "_run_mcp_client", refuse)
+        result = McpDispatcher().dispatch(env, credential={})
+        assert result.error is original
+        assert result.raw_response is response
+        assert result.raw_response.status_code == 401
+        assert result.raw_response.headers["www-authenticate"] == 'Signature error="missing"'
+        assert result.wire_error_envelope == body
+
+
+class TestSharedErrorEnvelopeReader:
+    @pytest.mark.parametrize("shape", ["both", "envelope_only", "errors_only"])
+    def test_readers_retain_permitted_error_shapes_without_filling_layers(self, shape):
+        import httpx
+        from fastmcp.exceptions import ToolError
+
+        from tests.harness._base import _mcp_wire_envelope
+        from tests.harness.a2a_wire import native_task_result
+        from tests.harness.client import unwrap_mcp_error
+        from tests.harness.transport import WireError, _wire_envelope
+
+        error = {"code": "PRODUCT_NOT_FOUND", "message": "missing", "recovery": "correctable"}
+        body = {}
+        if shape != "errors_only":
+            body["adcp_error"] = error
+        if shape != "envelope_only":
+            body["errors"] = [error]
+        assert _wire_envelope(body) is body
+        assert _mcp_wire_envelope(ToolError(json.dumps(body))) == body
+        assert BaseTestEnv().parse_rest_error_envelope(400, body) is body
+
+        task = TestA2AHttpResultContract._frame("TASK_STATE_FAILED")["result"]["task"]
+        task["artifacts"][0]["parts"][0]["data"] = body
+        response = httpx.Response(400, json=body)
+        native = native_task_result(Transport.A2A, task)
+        rest = unwrap_rest_response(BaseTestEnv(), response, Transport.REST, lambda data: data)
+        # The primitive MCP sender captures ToolError through this reader and
+        # carries the returned body on WireError into the shared error unwrap.
+        mcp = unwrap_mcp_error(WireError(_mcp_wire_envelope(ToolError(json.dumps(body)))))
+        assert rest.raw_response is response
+        assert native.envelope["task"] == task
+        for result in (native, rest, mcp):
+            assert result.is_error
+            assert result.error_envelope() == body
+            if shape == "both":
+                result.assert_wire_error("PRODUCT_NOT_FOUND")
+            else:
+                # Recognition never relaxes this seller's two-layer emission assertion.
+                with pytest.raises(AssertionError):
+                    result.assert_wire_error("PRODUCT_NOT_FOUND")
+
+    @pytest.mark.parametrize("body", [None, [], {}, {"adcp_error": None}, {"adcp_error": "invalid"}, {"errors": []}])
+    def test_unrecognized_bodies_remain_unrecognized(self, body):
+        from tests.harness.transport import _wire_envelope
+
+        assert _wire_envelope(body) is None
 
 
 class TestClientMcpDispatchNoDb:
@@ -563,7 +680,6 @@ class TestA2AHttpResultContract:
     def test_account_environment_routes_list_readback_then_returns_to_sync(self, transport):
         from src.core.schemas.account import ListAccountsRequest, ListAccountsResponse, SyncAccountsResponse
         from tests.harness.account_sync import AccountSyncEnv
-        from tests.harness.transport import E2EConfig
         from tests.helpers.local_http_origin import run_local_origin
 
         frame = self._frame()
@@ -572,8 +688,7 @@ class TestA2AHttpResultContract:
         request = ListAccountsRequest(include_webhook_activity=True, webhook_activity_limit=3)
         with run_local_origin() as origin:
             origin.respond_with(200, body=json.dumps(frame).encode())
-            env = AccountSyncEnv(e2e_config=E2EConfig(base_url=origin.base_url, postgres_url="postgresql://unused/db"))
-            env._run_a2a_handler = env._run_a2a_over_http
+            env = _origin_env(origin, env_cls=AccountSyncEnv, a2a_over_http=True)
 
             listed = env.call_via(transport, req=request, credential={})
             synced = env.call_via(transport, accounts=[], credential={})
@@ -651,7 +766,6 @@ class TestA2AHttpResultContract:
         from pydantic import RootModel
 
         from tests.harness.a2a_task_ownership import A2ATaskOwnershipEnv
-        from tests.harness.transport import E2EConfig
         from tests.helpers.local_http_origin import run_local_origin
 
         frames = []
@@ -674,9 +788,7 @@ class TestA2AHttpResultContract:
             patch("tests.harness.a2a_task_ownership.RootModel", wraps=RootModel) as read_root,
         ):
             origin.respond_in_sequence([(200, json.dumps(frame).encode()) for frame in frames])
-            env = A2ATaskOwnershipEnv(
-                e2e_config=E2EConfig(base_url=origin.base_url, postgres_url="postgresql://unused/db")
-            )
+            env = _origin_env(origin, env_cls=A2ATaskOwnershipEnv)
             env.skill = "update_media_buy"
             env.parameters = {"media_buy_id": "existing-buy", "context": {"trace": "native-receipt"}}
             declared_skill = env.A2A_SKILL
@@ -1070,8 +1182,12 @@ class TestA2AHttpResultContract:
         assert type(data["returned_count"]) is int
         assert data["returned_count"] == 2
 
-    @pytest.mark.parametrize("route", ["a2a", "rest_post", "update_put"])
-    @pytest.mark.parametrize("capability", [False, True])
+    @pytest.mark.parametrize(
+        "route,capability",
+        [(route, capability) for route in ("a2a", "rest_post", "update_put") for capability in (False, True)]
+        + [("e2e_rest_post", True), ("e2e_rest_get", True)],
+    )
+    @pytest.mark.parametrize("trailing_slash", [False, True])
     @pytest.mark.parametrize("signed", [False, True])
     @pytest.mark.parametrize(
         "credential",
@@ -1083,9 +1199,12 @@ class TestA2AHttpResultContract:
             },
             {"x-adcp-tenant": "foreign-tenant"},
             {},
+            None,  # Omitted E2E credential uses the environment's declared identity.
         ],
     )
-    def test_http_routes_share_signing_identity_and_exact_request_bytes(self, route, capability, signed, credential):
+    def test_http_routes_share_signing_identity_and_exact_request_bytes(
+        self, monkeypatch, route, trailing_slash, capability, signed, credential
+    ):
         import time
 
         from adcp.signing.autosign import signing_profile_for_adcp_version
@@ -1093,8 +1212,10 @@ class TestA2AHttpResultContract:
         from adcp.signing.verifier import VerifierCapability, VerifyOptions, verify_request_signature
         from pydantic import RootModel
 
+        from tests.harness.dispatchers import RestE2EDispatcher
         from tests.harness.media_buy_dual import MediaBuyDualEnv
         from tests.harness.signing_capability import SigningCapability
+        from tests.harness.transport import E2EConfig
         from tests.helpers.local_http_origin import run_local_origin
         from tests.helpers.signing import keypair_for
 
@@ -1104,23 +1225,42 @@ class TestA2AHttpResultContract:
             env = _origin_env(origin)
             if route == "update_put":
                 env = MediaBuyDualEnv(e2e_config=env.e2e_config)
+            env.e2e_config = E2EConfig(
+                base_url=origin.base_url + ("/" if trailing_slash else ""), postgres_url="postgresql://unused/db"
+            )
+            presented = credential
+            if credential is None:
+                presented = credential_headers(token="default-token", tenant="default-tenant")
+                monkeypatch.setattr(env, "credential", lambda: presented)
             if capability:
                 env._signing = SigningCapability(private_key, jwks, "capability-token", "a2a-reader", origin.base_url)
             body = {"marker": "exact sent bytes"}
             method, path = (
                 ("PUT", "/api/v1/media-buys/buy-1")
                 if route == "update_put"
-                else ("POST", "/a2a" if route == "a2a" else "/api/v1/products")
+                else ("GET" if route == "e2e_rest_get" else "POST", "/a2a" if route == "a2a" else "/api/v1/products")
             )
+            if route.startswith("e2e_rest"):
+                env.REST_ENDPOINT = path
+                env.REST_METHOD = method.lower()
+                env.parse_rest_response = lambda data: data
+                origin.respond_with(200, body=json.dumps({"products": []}).encode())
 
             def send():
                 if route == "a2a":
-                    return env.send_a2a(body, credential, signed=signed)
+                    return env.send_a2a(body, presented, signed=signed)
                 if route == "update_put":
                     return env._run_update_rest_request(
-                        media_buy_id="buy-1", **body, credential=credential, signed=signed
+                        media_buy_id="buy-1", **body, credential=presented, signed=signed
                     )
-                return env._run_rest_request(path, req=RootModel(body), credential=credential, signed=signed)
+                if route.startswith("e2e_rest"):
+                    return RestE2EDispatcher().dispatch(
+                        env,
+                        **({} if credential is None else {"credential": credential}),
+                        signed=signed,
+                        **({} if method == "GET" else {"req": RootModel(body)}),
+                    )
+                return env._run_rest_request(path, req=RootModel(body), credential=presented, signed=signed)
 
             if signed and not capability:
                 with pytest.raises(AssertionError, match="no signing capability"):
@@ -1132,15 +1272,18 @@ class TestA2AHttpResultContract:
             headers = {key.lower(): value for key, value in request.headers.items()}
             assert request.method == method
             assert request.path == path
-            assert request.json() == body
+            if method == "GET":
+                assert request.body == b""
+            else:
+                assert request.json() == body
             if capability:
-                presents_auth = any(name.lower() == "authorization" for name in credential)
+                presents_auth = any(name.lower() == "authorization" for name in presented)
                 assert headers.get("authorization") == ("Bearer capability-token" if presents_auth else None)
                 assert "x-adcp-auth" not in headers
                 assert headers["x-adcp-tenant"] == env._tenant_id
                 assert headers["host"] == origin.base_url.removeprefix("http://")
             else:
-                for name, value in credential.items():
+                for name, value in presented.items():
                     assert headers[name.lower()] == value
             assert ("signature" in headers) is signed
             if signed:
@@ -1160,7 +1303,7 @@ class TestA2AHttpResultContract:
                     ),
                 )
                 assert signer.body_authenticated
-                assert signer.parsed_body == body
+                assert signer.parsed_body == (None if method == "GET" else body)
 
 
 class TestClientE2eA2aDelivery:
