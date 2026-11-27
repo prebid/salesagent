@@ -21,6 +21,11 @@ from src.core.exceptions import AdCPSalesAgentError
 from src.core.operator_errors import best_effort
 from src.core.webhook_validator import UNPARSEABLE_WEBHOOK_URL_FOR_LOG, url_for_record
 
+#: The attribute ``log_admin_action`` sets on the wrapper it returns: the operation name.
+#: ``functools.wraps`` copies it to every outer wrapper. scripts/generate_admin_route_reference.py
+#: reads it for the Audit operation column.
+AUDIT_OPERATION_ATTRIBUTE = "audit_operation"
+
 #: What the audit row of an action that raised records. The exception itself is logged
 #: under a reference by the admin error handler; its text never reaches the audit log.
 _RAISED_MESSAGE = "The action failed with an error; the server log has the details"
@@ -293,6 +298,7 @@ def log_admin_action(
 
             return result
 
+        setattr(decorated_function, AUDIT_OPERATION_ATTRIBUTE, operation_name)
         return decorated_function
 
     return decorator

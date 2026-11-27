@@ -15,6 +15,7 @@ Exit codes:
 """
 
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 
@@ -29,25 +30,13 @@ def check_route_conflicts() -> int:
     sys.path.insert(0, str(project_root))
 
     try:
-        # Import and create the Flask app
-        from src.admin.app import create_app
+        # The admin app's routes, read the same way the route reference reads them
+        from scripts.admin_routes import AdminRoute, iter_admin_routes
 
-        app_tuple = create_app()
-        app = app_tuple[0] if isinstance(app_tuple, tuple) else app_tuple
-
-        # Check for route conflicts
         # Group routes by path to detect duplicates
-        routes_by_path = {}  # path -> list of (endpoint, methods)
-
-        for rule in app.url_map.iter_rules():
-            path = str(rule)
-            endpoint = rule.endpoint
-            # Remove HEAD and OPTIONS from methods for comparison
-            methods = sorted(rule.methods - {"HEAD", "OPTIONS"})
-
-            if path not in routes_by_path:
-                routes_by_path[path] = []
-            routes_by_path[path].append({"endpoint": endpoint, "methods": methods})
+        routes_by_path: defaultdict[str, list[AdminRoute]] = defaultdict(list)
+        for route in iter_admin_routes():
+            routes_by_path[route.path].append(route)
 
         # Find actual conflicts (same path, overlapping methods)
         conflicts = []
@@ -59,15 +48,15 @@ def check_route_conflicts() -> int:
             for i, route1 in enumerate(route_list):
                 for route2 in route_list[i + 1 :]:
                     # Check for method overlap
-                    overlap = set(route1["methods"]) & set(route2["methods"])
+                    overlap = set(route1.methods) & set(route2.methods)
                     if overlap:
                         # Real conflict - same path, same HTTP method
                         conflicts.append(
                             {
                                 "path": path,
-                                "endpoints": [route1["endpoint"], route2["endpoint"]],
-                                "methods1": route1["methods"],
-                                "methods2": route2["methods"],
+                                "endpoints": [route1.endpoint, route2.endpoint],
+                                "methods1": list(route1.methods),
+                                "methods2": list(route2.methods),
                                 "overlap": sorted(overlap),
                             }
                         )
