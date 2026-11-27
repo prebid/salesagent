@@ -1982,6 +1982,42 @@ Feature: A format selector must satisfy the canonical declaration the product pu
       | product_option_ref |
       | no_selector        |
 
+  @T-UC-FORMAT-SATISFACTION-update-assigns-on-booked-contract @format_satisfaction @requires_db
+  Scenario Outline: update_media_buy assigns a creative against the contract its package was booked on - <selection>
+    Given the seller declares a canonical format option "fixed_300x250"
+    And the buyer already holds a media buy for that product
+    And that package was booked selecting <selection>
+    And the seller then republishes that option fixed at 728x90
+    And a canonical "image" creative carrying the "image_300x250" manifest exists
+    When the Buyer Agent assigns that creative through update_media_buy
+    Then the update is accepted
+
+    # creative/tracker-execution-contracts.mdx (v3.2.7) line 156: "Package assignment and
+    # create_media_buy revalidate the selected manifest against the immutable package
+    # snapshot before spend". The package was booked on the 300x250 option; the product now
+    # publishes it at 728x90. A seller checking the assignment against the live product
+    # refuses the 300x250 creative.
+    Examples:
+      | selection   |
+      | that option |
+      | no option   |
+
+  @T-UC-FORMAT-SATISFACTION-sync-assigns-on-booked-contract @format_satisfaction_sync @requires_db
+  Scenario Outline: sync_creatives assigns a creative against the contract its package was booked on - <selection>
+    Given a packaged product declaring a canonical image option fixed at 300x250
+    And that package was booked selecting <selection>
+    And the seller then republishes that option fixed at 728x90
+    And the buyer syncs a canonical "image" creative carrying the "image_300x250" manifest
+    When the Buyer Agent assigns it to that package
+    Then the assignment is recorded with no assignment error
+
+    # The same rule on the sync_creatives assignment gate, the other way a creative reaches a
+    # booked package.
+    Examples:
+      | selection   |
+      | that option |
+      | no option   |
+
   @T-UC-FORMAT-SATISFACTION-approval-unsnapshotted-canonical-only @format_satisfaction @requires_db
   Scenario: approving a parked buy with no recorded snapshot places a canonical-only product on its declarations
     Given the seller declares a canonical format option "fixed_300x250" and no format_ids

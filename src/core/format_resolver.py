@@ -971,27 +971,36 @@ def booked_contract_record(contract: FormatContract) -> dict[str, list[Any]]:
     return {"format_ids": list(contract.format_ids)}
 
 
-def booked_format_contract(package_config: Mapping[str, Any], *, package_id: str) -> FormatContract:
-    """The format contract a stored package was booked on: what it selected, else the product's contract then.
+def booked_format_contract(package: Any) -> FormatContract:
+    """The format contract a stored *package* row was booked on: what it selected, else the product's contract then.
 
-    create_media_buy.mdx (v3.2.7): "validation and serving use the package-time contract,
-    never mutable Product discovery". A package that selected declarations recorded them in
-    ``formats_to_provide``. One that selected none, because its request named no selector
-    ("omitting both selects all formats supported by the product",
-    ``media-buy/package-request.json``) or the product has no canonical arm, recorded the
-    product's contract under :data:`BOOKED_FORMAT_CONTRACT`. Create writes one of the two,
-    and a migration filled in the rows stored before it, so a package with neither is a
-    store defect.
+    THE ONE READ for every gate that checks a creative against a stored package: the approval
+    replay, the retroactive push, and the ``sync_creatives`` and ``update_media_buy``
+    assignment gates. create_media_buy.mdx (v3.2.7) line 339: "validation and serving use the
+    package-time contract, never mutable Product discovery"; tracker-execution-contracts.mdx
+    line 156: "Package assignment and ``create_media_buy`` revalidate the selected manifest
+    against the immutable package snapshot before spend". Create checks against the product
+    itself, because the package is booked at that moment.
+
+    A package that selected declarations recorded them in ``formats_to_provide``. One that
+    selected none, because its request named no selector ("omitting both selects all formats
+    supported by the product", ``media-buy/package-request.json``) or the product has no
+    canonical arm, recorded the product's contract under :data:`BOOKED_FORMAT_CONTRACT`.
+    Create writes one of the two, and a migration filled in the rows stored before it, so a
+    package with neither is a store defect.
 
     Raises:
         AdCPPersistedStateError: the package recorded no contract.
     """
-    selected = package_config.get("formats_to_provide")
+    config = package.package_config or {}
+    selected = config.get("formats_to_provide")
     if selected:
         return format_contract(format_options=selected, format_ids=None)
-    record = package_config.get(BOOKED_FORMAT_CONTRACT)
+    record = config.get(BOOKED_FORMAT_CONTRACT)
     if record is None:
-        raise AdCPPersistedStateError(details=ConfigurationDetails(package_id=package_id), field="formats_to_provide")
+        raise AdCPPersistedStateError(
+            details=ConfigurationDetails(package_id=package.package_id), field="formats_to_provide"
+        )
     return format_contract(format_options=record.get("format_options"), format_ids=record.get("format_ids"))
 
 

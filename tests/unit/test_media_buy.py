@@ -834,7 +834,9 @@ class TestCreateMediaBuyCreativeValidation:
             # "violates business rules beyond schema validation" (3.1.1
             # enums/error-code.json). Not CREATIVE_REJECTED — no policy review runs here.
             with pytest.raises(AdCPValidationError) as exc_info:
-                _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
+                _validate_creatives_before_adapter_call(
+                    [package], "test_tenant", "test_principal", session=session, stored=None
+                )
 
             assert exc_info.value.details.reasons is not None
 
@@ -867,7 +869,9 @@ class TestCreateMediaBuyCreativeValidation:
         # update_media_buy's gate splits terminal state from the field/format failures
         # the same way. The STATE travels per creative, as a problem, not as a sentence.
         with pytest.raises(AdCPGoneError) as exc_info:
-            _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
+            _validate_creatives_before_adapter_call(
+                [package], "test_tenant", "test_principal", session=session, stored=None
+            )
 
         problems = exc_info.value.details.problems or []
         assert [(p.subject_type, p.subject_id, p.rejected_value) for p in problems] == [
@@ -903,7 +907,9 @@ class TestCreateMediaBuyCreativeValidation:
         # update_media_buy's gate splits terminal state from the field/format failures
         # the same way. The STATE travels per creative, as a problem, not as a sentence.
         with pytest.raises(AdCPGoneError) as exc_info:
-            _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
+            _validate_creatives_before_adapter_call(
+                [package], "test_tenant", "test_principal", session=session, stored=None
+            )
 
         problems = exc_info.value.details.problems or []
         assert [(p.subject_type, p.subject_id, p.rejected_value) for p in problems] == [
@@ -944,7 +950,9 @@ class TestCreateMediaBuyCreativeValidation:
             session.scalars.return_value.all.return_value = [mock_creative_1, mock_creative_2]
 
             with pytest.raises(AdCPValidationError) as exc_info:
-                _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
+                _validate_creatives_before_adapter_call(
+                    [package], "test_tenant", "test_principal", session=session, stored=None
+                )
 
             # Both errors should be accumulated in a single exception
             assert exc_info.value.details.reasons is not None

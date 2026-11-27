@@ -289,7 +289,7 @@ class TestCreativeMissingUrl:
 
             with pytest.raises(AdCPValidationError) as exc_info:
                 _validate_creatives_before_adapter_call(
-                    [mock_package], "test_tenant", "test_principal", session=session
+                    [mock_package], "test_tenant", "test_principal", session=session, stored=None
                 )
 
             assert exc_info.value.details is not None
@@ -324,7 +324,7 @@ class TestCreativeMissingUrl:
 
             with pytest.raises(AdCPValidationError) as exc_info:
                 _validate_creatives_before_adapter_call(
-                    [mock_package], "test_tenant", "test_principal", session=session
+                    [mock_package], "test_tenant", "test_principal", session=session, stored=None
                 )
 
             assert exc_info.value.details is not None
@@ -504,7 +504,7 @@ class TestMultipleInvalidCreativesAccumulated:
 
             with pytest.raises(AdCPValidationError) as exc_info:
                 _validate_creatives_before_adapter_call(
-                    [mock_package], "test_tenant", "test_principal", session=session
+                    [mock_package], "test_tenant", "test_principal", session=session, stored=None
                 )
 
             # The accumulated ids reach the buyer through DETAILS, not the sentence: the
