@@ -85,9 +85,8 @@ def run_approval(media_buy_id: str, tenant_id: str, *, approved_by: str = "appro
 def uploadable_creative(creative_factory: Any, **kwargs: Any) -> Any:
     """A creative that survives the asset gate an approval runs before uploading.
 
-    ``_build_adapter_asset_from_creative`` resolves the creative's format spec and
-    then pulls url/width/height out of ``data["assets"]`` via
-    ``extract_media_url_and_dimensions``. ``CreativeFactory``'s defaults do not get
+    The gate resolves the creative's format spec and then reads its media out of
+    ``data["assets"]`` via ``read_creative_to_traffic``. ``CreativeFactory``'s defaults do not get
     through it: the format ``display_300x250`` is a legacy id absent from the
     reference catalog, and the asset is keyed ``banner``, which is neither an
     asset_id any format spec declares nor a member of production's
@@ -96,21 +95,14 @@ def uploadable_creative(creative_factory: Any, **kwargs: Any) -> Any:
 
     ``display_300x250_image`` IS in the catalog (served offline — ``ADCP_TESTING``
     is set autouse — so no creative agent is contacted), and it declares exactly the
-    two asset_ids seeded here. ``banner_image`` is also in the fallback allowlist, so
-    the extraction succeeds whether or not the spec resolves.
+    two asset_ids seeded here (its required assets, :func:`named_format_assets`), the click
+    URL typed ``clickthrough``. ``banner_image`` is also in the fallback allowlist, so the
+    extraction succeeds whether or not the spec resolves.
     """
-    from tests.factories.creative_asset import build_assets, image_spec, url_spec
+    from tests.factories.creative_asset import LIBRARY_IMAGE_FORMAT, named_format_assets
 
-    kwargs.setdefault("format", "display_300x250_image")
-    kwargs.setdefault(
-        "data",
-        {
-            "assets": build_assets(
-                image_spec("banner_image"),
-                url_spec("click_url", url="https://advertiser.example.com/landing", url_type="clickthrough"),
-            )
-        },
-    )
+    kwargs.setdefault("format", LIBRARY_IMAGE_FORMAT)
+    kwargs.setdefault("data", {"assets": named_format_assets(LIBRARY_IMAGE_FORMAT, url_type="clickthrough")})
     return creative_factory(**kwargs)
 
 

@@ -33,7 +33,7 @@ import pytest
 from src.adapters.base import AdapterCreateResult
 from src.core.database.database_session import get_db_session, get_engine
 from src.core.database.models import MediaPackage as DBMediaPackage
-from tests.helpers.gam_client import build_gam_adapter, gam_line_item, stub_gam_client_manager
+from tests.helpers.gam_client import build_gam_adapter, gam_line_item, gam_tag_asset, stub_gam_client_manager
 from tests.helpers.media_buy_approval import run_approval
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -233,7 +233,7 @@ def _run_execute_approved(media_buy_id, tenant_id, adapter_response):
         ),
         patch("src.core.tools.media_buy_create._validate_creatives_before_adapter_call"),
         patch(
-            "src.core.helpers.adapter_helpers.get_adapter",
+            "src.core.tools.media_buy_create.get_adapter",
             return_value=type("MockAdapter", (), {"orders_manager": None})(),
         ),
     ):
@@ -267,13 +267,13 @@ class TestExecuteApprovedPlatformIds:
             ),
             patch("src.core.tools.media_buy_create._validate_creatives_before_adapter_call"),
             patch(
-                "src.core.helpers.adapter_helpers.get_adapter",
+                "src.core.tools.media_buy_create.get_adapter",
                 return_value=type("MockAdapter", (), {"orders_manager": None})(),
             ),
         ):
             result = run_approval(media_buy_id, tenant_id)
 
-        assert result.ok, f"execute_approved_media_buy failed: {result.error_msg}"
+        assert result.ok, f"execute_approved_media_buy failed: {result.error!r}"
 
         # THE KEY ASSERTION: platform_line_item_id must be in package_config
         from sqlalchemy import select
@@ -311,7 +311,7 @@ class TestExecuteApprovedPlatformIdsEdgeCases:
         )
 
         result = _run_execute_approved(media_buy_id, tenant_id, adapter_response)
-        assert result.ok, f"execute_approved_media_buy failed: {result.error_msg}"
+        assert result.ok, f"execute_approved_media_buy failed: {result.error!r}"
 
         from sqlalchemy import select
 
@@ -338,7 +338,7 @@ class TestExecuteApprovedPlatformIdsEdgeCases:
         )
 
         result = _run_execute_approved(media_buy_id, tenant_id, adapter_response)
-        assert result.ok, f"Should succeed even if package not found: {result.error_msg}"
+        assert result.ok, f"Should succeed even if package not found: {result.error!r}"
 
     def test_empty_platform_line_item_ids_dict(self, pending_media_buy_with_package):
         """Empty _platform_line_item_ids dict — no writes, no crash."""
@@ -353,7 +353,7 @@ class TestExecuteApprovedPlatformIdsEdgeCases:
         )
 
         result = _run_execute_approved(media_buy_id, tenant_id, adapter_response)
-        assert result.ok, f"Should succeed with empty dict: {result.error_msg}"
+        assert result.ok, f"Should succeed with empty dict: {result.error!r}"
 
         # Package config should be unchanged (no platform_line_item_id added)
         from sqlalchemy import select
@@ -385,7 +385,7 @@ class TestExecuteApprovedPlatformIdsEdgeCases:
         )
 
         result = _run_execute_approved(media_buy_id, tenant_id, adapter_response)
-        assert result.ok, f"Should succeed with no mapping: {result.error_msg}"
+        assert result.ok, f"Should succeed with no mapping: {result.error!r}"
 
         from sqlalchemy import select
 
@@ -413,6 +413,7 @@ def pending_media_buy_with_approved_creative(pending_media_buy_with_package):
     from src.core.database.models import Principal as DBPrincipal
     from src.core.database.models import Tenant as DBTenant
     from tests.factories import CreativeAssignmentFactory, CreativeFactory, MediaBuyFactory
+    from tests.factories.creative_asset import make_legacy_image_assets
 
     data = pending_media_buy_with_package
     # The parent fixture bound every factory to its (committed) session; reuse it so the
@@ -433,7 +434,7 @@ def pending_media_buy_with_approved_creative(pending_media_buy_with_package):
         creative_id="cre_concept_enrichment",
         status="approved",
         format="display_300x250",
-        data={"assets": {"banner": {"url": "https://example.com/ad.jpg", "width": 300, "height": 250}}},
+        data={"assets": make_legacy_image_assets(url="https://example.com/ad.jpg")},
     )
     CreativeAssignmentFactory(creative=creative, media_buy=mb, package_id=data["package_id"])
 
@@ -463,20 +464,12 @@ class TestExecuteApprovedEnrichesSellerConcept:
             stub_gam_client_manager(line_items=[gam_line_item("test_package", sizes=((970, 250),))]),
             tenant_id=tenant_id,
         )
-        # The order's line item accepts the asset's 970x250 (read off its format), so the
-        # producer's size-vs-placeholder check passes. This asset only drives the producer
-        # to emit the concept-bearing status — it is independent of the DB package the
-        # writeback (step 2) uses.
-        gam_asset = {
-            "creative_id": creative_id,
-            "name": "HTML5 Banner",
-            "format": "display_970x250",
-            "media_url": "https://example.com/creative.html",
-            "click_url": "https://example.com/landing",
-            "package_assignments": [{"package_id": "test_package", "weight": 100, "platform_line_item_id": "1001"}],
-        }
-        with patch.object(gam, "_validate_creative_for_gam", return_value=[]):
-            statuses = gam.add_creative_assets(gam_order_id, [gam_asset], datetime.now(UTC))
+        # The order's line item accepts the carrier's 970x250, so the producer plans it. This
+        # asset only drives the producer to emit the concept-bearing status -- it is
+        # independent of the DB package the writeback (step 2) uses.
+        statuses = gam.add_creative_assets(
+            gam_order_id, [gam_tag_asset(creative_id, size=(970, 250))], datetime.now(UTC)
+        )
         assert statuses[0].status == "approved"
         assert statuses[0].concept_id == f"gam-order-{gam_order_id}"  # pins the produced key/value
         return statuses
@@ -527,11 +520,11 @@ class TestExecuteApprovedEnrichesSellerConcept:
                 "src.core.tools.media_buy_create._build_adapter_asset_from_creative",
                 return_value=(valid_asset, None),
             ),
-            patch("src.core.helpers.adapter_helpers.get_adapter", return_value=mock_adapter),
+            patch("src.core.tools.media_buy_create.get_adapter", return_value=mock_adapter),
         ):
             result = run_approval(media_buy_id, tenant_id)
 
-        assert result.ok, f"execute_approved_media_buy failed: {result.error_msg}"
+        assert result.ok, f"execute_approved_media_buy failed: {result.error!r}"
         mock_adapter.creatives_manager.add_creative_assets.assert_called_once_with(gam_order_id, ANY, ANY)
 
         # (3) The concept is PERSISTED to the creative's data blob (the Finding 1 fix —

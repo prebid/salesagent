@@ -509,22 +509,6 @@ def _list_creatives_impl(
 
         # Convert to schema objects
         for db_creative in db_creatives:
-            # Handle content_uri - required field even for snippet creatives
-            # For snippet creatives, provide an HTML-looking URL to pass validation
-            snippet = db_creative.data.get("snippet") if db_creative.data else None
-            if snippet:
-                content_uri = (
-                    db_creative.data.get("url") or "<script>/* Snippet-based creative */</script>"
-                    if db_creative.data
-                    else "<script>/* Snippet-based creative */</script>"
-                )
-            else:
-                content_uri = (
-                    db_creative.data.get("url") or "https://placeholder.example.com/missing.jpg"
-                    if db_creative.data
-                    else "https://placeholder.example.com/missing.jpg"
-                )
-
             # THE STORED IDENTITY, read once and asked for the one arm the wire carries. The
             # item schema's oneOf forbids both arms and forbids neither, and the state mirrors
             # the input: a creative synced by format_id lists by format_id, one synced by

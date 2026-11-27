@@ -48,11 +48,7 @@ def _asset(creative_id: str = "cr_1") -> dict[str, Any]:
     return {
         "creative_id": creative_id,
         "package_assignments": [{"package_id": "pkg_1", "weight": 100}],
-        "width": 300,
-        "height": 250,
-        "url": "https://cdn.example.com/banner.png",
         "click_url": CLICK_URL,
-        "asset_type": "image",
         "name": "Banner",
     }
 

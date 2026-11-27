@@ -49,8 +49,10 @@
 # (developers.google.com/ad-manager/api/geotargets). 200501 is GAM's own Geo_Target
 # DMA_REGION row for "New York NY"; 200803 (Los Angeles) applies the same numbering.
 #
-# Transports: a2a, mcp and rest. The live server has no stand-in GAM network, so the
-# setup declares itself unrealizable on e2e (GamSellerMixin.sell_through_gam).
+# Transports: a2a, mcp and rest. On e2e the tenant
+# sells on the GAM network the environment configures, and each GAM Then reads it back
+# (tests/harness/gam_network.py); a Given the configured network cannot be made into
+# declares that with its own reason (GamSellerMixin).
 #
 # @source repo=adcp ref=v3.2.7 path=dist/schemas/3.2.7/core/targeting.json
 # @source repo=adcp ref=v3.2.7 path=dist/schemas/3.2.7/core/geo-region-support.json

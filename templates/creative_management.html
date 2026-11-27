@@ -327,7 +327,13 @@ function approveCreative(creativeId) {
     })
     .then(data => {
         if (data.success) {
-            alert('✅ Creative approved successfully!');
+            // A push the approval triggered can withhold the creative from a live buy;
+            // the route names each one in `warnings`, and the seller must read them.
+            if (data.warnings && data.warnings.length) {
+                alert('⚠️ Creative approved with warnings:\n\n' + data.warnings.map(w => '• ' + w).join('\n'));
+            } else {
+                alert('✅ Creative approved successfully!');
+            }
             window.location.reload();
         } else {
             alert('Error: ' + adminErrorText(data));

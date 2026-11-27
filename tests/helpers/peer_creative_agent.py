@@ -140,17 +140,24 @@ def rehomed_reference_format(format_id: str, agent_url: str) -> dict[str, Any]:
     return catalog_entry(fmt, agent_url)
 
 
-def single_preview_document(key: str) -> dict[str, Any]:
+def single_preview_document(
+    key: str, *, preview_url: str | None = None, dimensions: tuple[int, int] | None = None
+) -> dict[str, Any]:
     """A ``preview_creative`` answer for the peer under *key*: one variant, one URL render.
 
     The single-request arm of creative/preview-creative-response.json (AdCP 3.2.7), built
     through the SDK's model of that arm so the document has the pinned shape, the
-    protocol envelope's ``status`` included. It names no dimensions, so a seller back-fills
-    no width or height from it: one document answers every preview under the key, and a
-    size that fitted one format would misstate another.
+    protocol envelope's ``status`` included. By default it names no dimensions, so a seller
+    back-fills no width or height from it: one document answers every preview under the key,
+    and a size that fitted one format would misstate another.
+
+    *preview_url* replaces the render's default page and *dimensions* (width, height) states
+    the render's size, for a scenario whose subject is what a seller does with a preview's
+    page and size.
     """
     from adcp.types import LegacyPreviewCreativeSingleResponse as PreviewCreativeSingleResponse
 
+    size = {} if dimensions is None else {"dimensions": {"width": dimensions[0], "height": dimensions[1]}}
     return PreviewCreativeSingleResponse.model_validate(
         {
             "response_type": "single",
@@ -161,8 +168,9 @@ def single_preview_document(key: str) -> dict[str, Any]:
                         {
                             "render_id": f"{key}-render",
                             "output_format": "url",
-                            "preview_url": f"https://preview.example.com/{key}.html",
+                            "preview_url": preview_url or f"https://preview.example.com/{key}.html",
                             "role": "primary",
+                            **size,
                         }
                     ],
                     "input": {"name": "Default"},

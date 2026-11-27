@@ -6,6 +6,7 @@ Used by creative sync tests instead of hand-crafted dicts.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -25,8 +26,8 @@ def make_legacy_asset_dict(asset_id: str, **fields: object) -> dict:
     ``url_type``, ``content``, ``duration_ms``). The pinned SDK's discriminated
     asset union rejects this shape. The legacy adapter converter that consumed it,
     ``_convert_creative_to_adapter_asset``, is deleted; the live path is
-    ``media_buy_create._build_adapter_asset_from_creative``, which reads the ORM
-    row rather than a schema object.
+    ``_creative_trafficking._read_for_packages``, which reads the ORM row rather than a
+    schema object.
 
     Use this ONLY for legacy-input / negative tests that deliberately exercise the
     old shape. New or valid creative assets must use the AssetSpec mechanism
@@ -214,6 +215,89 @@ def asset_spec(role: str, asset_type: str, *, multiple: bool = False, **fields: 
     return AssetSpec(role, asset_type, dict(fields), multiple)
 
 
+#: The slot an option accepting inline or paired delivery replaces the display_tag kind's
+#: slots with (formats/canonical/display_tag.json: "Format options accepting inline or paired
+#: delivery override `slots` with a `display_tag` asset"), under the name display.mdx gives it.
+DISPLAY_TAG_SLOT = "serving_tag"
+
+
+#: The click-through a creative carries when its scenario states none. A real ad server checks
+#: it: Google Ad Manager refuses ``example.com`` (``InvalidUrlError.INVALID_FORMAT`` on
+#: ``destinationUrl``), so it names a domain the network accepts.
+CLICKTHROUGH_URL = "https://prebid.org/landing"
+
+
+def display_tag_spec(delivery_type: str, *, role: str = DISPLAY_TAG_SLOT, **fields: object) -> AssetSpec:
+    """A ``display_tag`` asset of *delivery_type* (core/assets/display-tag-asset.json).
+
+    ``tag_url`` takes ``url``; ``inline_markup`` takes ``markup`` and ``markup_type``;
+    ``paired_redirect`` takes ``ad_request_url`` and ``clickthrough_url``. A tag URL creative is
+    this asset with ``delivery_type="tag_url"``; the kind's legacy ``tag_url`` url slot is
+    :func:`legacy_tag_url_spec`.
+    """
+    return asset_spec(role, "display_tag", delivery_type=delivery_type, **fields)
+
+
+def legacy_tag_url_spec(url: str, *, url_type: str | None = None) -> AssetSpec:
+    """The display_tag kind's backward-compatible default slot: a url asset under ``tag_url``.
+
+    formats/canonical/display_tag.json: "The backward-compatible default slot remains
+    `tag_url` (`url_type: ad_request`)". *url_type* is the asset's own mechanism, or none.
+    """
+    return url_spec("tag_url", url=url, url_type=url_type)
+
+
+def html_spec(role: str, *, content: str) -> AssetSpec:
+    """An inline ``html`` asset (core/assets/html-asset.json: ``content`` is its one required member)."""
+    return asset_spec(role, "html", content=content)
+
+
+def html5_bundle_specs(
+    bundle_url: str | None, *, backup_url: str, backup_width: int = 300, backup_height: int = 250
+) -> tuple[AssetSpec, AssetSpec]:
+    """The html5 kind's two slots (formats/canonical/html5.json): ``html5_bundle`` (zip) and ``backup_image``.
+
+    *bundle_url* ``None`` stores a zip asset carrying no ``url``, the member
+    core/assets/zip-asset.json requires.
+    """
+    bundle = asset_spec("html5_bundle", "zip", **({} if bundle_url is None else {"url": bundle_url}))
+    return bundle, image_spec("backup_image", url=backup_url, width=backup_width, height=backup_height)
+
+
+def html5_zip_bundle() -> bytes:
+    """A one-file HTML5 bundle, as a zip archive with a fixed timestamp so its bytes are stable."""
+    import io
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as bundle:
+        bundle.writestr(
+            zipfile.ZipInfo("index.html", date_time=(2026, 1, 1, 0, 0, 0)),
+            '<html><body><a href="javascript:window.open(clickTag)">Example ad</a></body></html>',
+        )
+    return buffer.getvalue()
+
+
+#: The reference-catalog format of the approved library creative scenarios reference by id: a
+#: format the committed capture serves and the harness's default product accepts.
+LIBRARY_IMAGE_FORMAT = "display_300x250_image"
+
+
+def library_image_assets(url: str = "https://example.com/banner.png") -> dict:
+    """A :data:`LIBRARY_IMAGE_FORMAT` creative's assets: its 300x250 ``banner_image`` showing *url*, and its click-through.
+
+    The format's manifest (:func:`named_format_assets`), so the creative carries every asset
+    the format requires: the ``click_url`` is :data:`CLICKTHROUGH_URL`, which an ad server that
+    requires a click-through (Google Ad Manager's image creatives) accepts.
+    """
+    return named_format_assets(LIBRARY_IMAGE_FORMAT, media_url=url)
+
+
+def parse_sizes(text: str) -> list[dict[str, int]]:
+    """``"300x250, 728x90"`` as ``{width, height}`` objects, in order: a format option's ``sizes``."""
+    return [{"width": int(w), "height": int(h)} for w, h in re.findall(r"(\d+)x(\d+)", text)]
+
+
 def build_assets(*specs: AssetSpec) -> dict:
     """Merge specs into one ``assets`` slot map for a creative payload.
 
@@ -259,7 +343,11 @@ def canonical_assets(kind: str) -> dict:
 
 
 def named_format_assets(
-    format_id: str = "display_300x250_image", *, media_url: str | None = None, prompt: str | None = None
+    format_id: str = "display_300x250_image",
+    *,
+    media_url: str | None = None,
+    prompt: str | None = None,
+    url_type: str | None = None,
 ) -> dict:
     """The ``assets`` a manifest naming legacy *format_id* must carry: one per REQUIRED asset.
 
@@ -271,7 +359,7 @@ def named_format_assets(
     from src.core.format_cache import load_reference_formats
 
     (fmt,) = (fmt for fmt in load_reference_formats() if fmt.format_id.id == format_id)
-    return format_manifest(fmt, media_url=media_url, prompt=prompt)
+    return format_manifest(fmt, media_url=media_url, prompt=prompt, url_type=url_type)
 
 
 def prompt_assets(content: str, *also: AssetSpec, format_id: str = "display_300x250_generative") -> dict:
@@ -285,7 +373,9 @@ def prompt_assets(content: str, *also: AssetSpec, format_id: str = "display_300x
     return {**named_format_assets(format_id, prompt=content), **build_assets(*also)}
 
 
-def format_manifest(fmt: Any, *, media_url: str | None = None, prompt: str | None = None) -> dict:
+def format_manifest(
+    fmt: Any, *, media_url: str | None = None, prompt: str | None = None, url_type: str | None = None
+) -> dict:
     """The ``assets`` that fill *fmt*'s required assets, each keyed by its ``asset_id``.
 
     core/format.json: each asset's ``asset_id`` "must be used as the key in creative
@@ -294,7 +384,8 @@ def format_manifest(fmt: Any, *, media_url: str | None = None, prompt: str | Non
 
     *media_url* replaces the default URL of the image, video or audio asset, for a caller
     whose creatives must differ in what they serve; *prompt* is the content of the text
-    asset, for a generative format whose required text asset is the build's prompt.
+    asset, for a generative format whose required text asset is the build's prompt;
+    *url_type* is the url asset's own mechanism (core/assets/url-asset.json), or none.
 
     A required type with no builder raises ``KeyError`` naming it, so a scenario cannot
     silently send an incomplete manifest.
@@ -302,11 +393,11 @@ def format_manifest(fmt: Any, *, media_url: str | None = None, prompt: str | Non
     media = {} if media_url is None else {"url": media_url}
     builders: dict[str, Callable[[str], AssetSpec]] = {
         "image": lambda asset_id: image_spec(asset_id, **media),
-        "url": lambda asset_id: url_spec(asset_id, url="https://example.com/landing"),
+        "url": lambda asset_id: url_spec(asset_id, url=CLICKTHROUGH_URL, url_type=url_type),
         "text": lambda asset_id: text_spec(asset_id, content=prompt or "Test copy"),
         "video": lambda asset_id: video_spec(asset_id, **media),
         "audio": lambda asset_id: asset_spec(asset_id, "audio", url=media_url or "https://example.com/spot.mp3"),
-        "html": lambda asset_id: asset_spec(asset_id, "html", content="<div>ad</div>"),
+        "html": lambda asset_id: html_spec(asset_id, content="<div>ad</div>"),
         "vast": lambda asset_id: asset_spec(asset_id, "vast", delivery_type="url", url="https://example.com/vast.xml"),
         "daast": lambda asset_id: asset_spec(
             asset_id, "daast", delivery_type="url", url="https://example.com/daast.xml"

@@ -38,8 +38,11 @@ from tests.bdd.steps._outcome_helpers import (
     wire_envelope_errors,
     wire_field,
 )
+from tests.bdd.steps.generic._creative_seeding import store_creative, store_package_creative
+from tests.bdd.steps.generic._table import comma_list
 from tests.factories import PricingOptionFactory, ProductFactory, StoredPlacementFactory
 from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
+from tests.factories.creative_asset import build_assets, make_legacy_image_assets, manifest_image_spec
 from tests.factories.mint import mint_id
 from tests.factories.product import authorize_publishers, default_publisher_properties
 
@@ -595,15 +598,7 @@ def _manifest(name: str) -> dict[str, Any]:
     so a refusal row and its accept row differ in the fact under test and nothing else.
     Built per call because a scenario may mutate what it was handed.
     """
-    from tests.factories.creative_asset import (
-        asset_spec,
-        build_assets,
-        image_spec,
-        manifest_image_spec,
-        text_spec,
-        url_spec,
-        video_spec,
-    )
+    from tests.factories.creative_asset import asset_spec, image_spec, text_spec, url_spec, video_spec
 
     mrec = manifest_image_spec("image_main")
     # A 30-second mp4/h264 video of 8 MB at 5,000 kbps and 30 fps, and a 30-second stereo mp3
@@ -1706,55 +1701,7 @@ def given_canonical_creative(ctx: dict, kind: str, asset_key: str) -> None:
     closed set and never the asset reader. That was salesagent-ol033.16; the workaround goes
     with it.
     """
-    creative = _seed_canonical_creative(ctx, kind=kind, asset_key=asset_key)
-    ctx["request_kwargs"]["packages"][0]["creative_ids"] = [creative.creative_id]
-
-
-def _seed_canonical_creative(
-    ctx: dict,
-    *,
-    kind: str,
-    asset_key: str = "image_main",
-    assets: dict[str, Any] | None = None,
-    status: str = "approved",
-    **row: Any,
-) -> Any:
-    """One creative carrying the named CANONICAL kind, committed. Returns the row.
-
-    Approved unless the caller names another review ``status``; ``row`` carries any other
-    column a caller pins (a ``creative_id`` a later sync must address). ``assets`` replaces
-    the one 300x250 image keyed ``asset_key`` with a whole named manifest (:func:`_manifest`).
-
-    The default asset key is ``image_main``, which ``formats/canonical/image.json`` declares
-    as the ``image`` kind's required image slot -- so a caller that does not care about the
-    key gets the one the pin names rather than a convention this seller invented. The image
-    states its file size (``manifest_image_spec``), because a declaration capping it is owed
-    the member.
-
-    CANONICAL ONLY. This grew a ``format_id`` arm for a legacy caller and then lost that
-    caller, and the dead parameter is removed rather than left: it built a creative carrying
-    a legacy reference WITHOUT routing it through ``resolvable_format_ref``, the door that
-    refuses a reference the pinned capture does not serve. A bypass sitting beside a new
-    door is how the door gets routed around later by someone who finds the simpler
-    parameter -- and this change exists precisely because an unserved id went unnoticed for
-    months. A legacy-arm caller goes through ``given_sync_legacy_creative``, which uses the
-    door.
-    """
-    from tests.factories.creative import CreativeFactory
-    from tests.factories.creative_asset import build_assets, manifest_image_spec
-
-    arm: dict[str, Any] = {"canonical_kind": kind}
-    creative = CreativeFactory(
-        tenant=ctx["tenant"],
-        principal=ctx["principal"],
-        status=status,
-        data={"assets": assets if assets is not None else build_assets(manifest_image_spec(asset_key))},
-        **arm,
-        **row,
-    )
-    ctx["env"]._commit_factory_data()
-    ctx["manifest_creative_id"] = creative.creative_id
-    return creative
+    store_package_creative(ctx, None, build_assets(manifest_image_spec(asset_key)), kind=kind)
 
 
 @given(parsers.parse('the buyer assigns a canonical "{kind}" creative carrying the "{manifest}" manifest'))
@@ -1764,8 +1711,15 @@ def given_canonical_creative_with_manifest(ctx: dict, kind: str, manifest: str) 
     The create path grades the STORED creative, so it is seeded as stored -- the same
     production identity mapping a sync writes -- and only its assets vary between rows.
     """
-    creative = _seed_canonical_creative(ctx, kind=kind, assets=_manifest(manifest))
-    ctx["request_kwargs"]["packages"][0]["creative_ids"] = [creative.creative_id]
+    store_package_creative(ctx, None, _manifest(manifest), kind=kind)
+
+
+@given(
+    parsers.parse('the buyer assigns canonical "{kind}" creative "{creative_id}" carrying the "{manifest}" manifest')
+)
+def given_named_canonical_creative_with_manifest(ctx: dict, kind: str, creative_id: str, manifest: str) -> None:
+    """The stored canonical creative above under *creative_id*, so a Then can name what the ad server was handed."""
+    store_package_creative(ctx, creative_id, _manifest(manifest), kind=kind)
 
 
 @given(parsers.parse('the buyer assigns canonical "{kind}" creatives carrying the "{manifests}" manifests'))
@@ -1797,9 +1751,7 @@ def given_canonical_creatives_with_manifests_and_options(ctx: dict, kind: str, m
 
 def _assign_canonical_creatives(ctx: dict, kind: str, manifests: str, options: str | None = None) -> None:
     """Seed :func:`_seed_canonical_creatives` and put every one on the package being built."""
-    ctx["request_kwargs"]["packages"][0]["creative_ids"] = [
-        creative.creative_id for creative in _seed_canonical_creatives(ctx, kind, manifests, options)
-    ]
+    _seed_canonical_creatives(ctx, kind, manifests, options, store=store_package_creative)
 
 
 def _product_option_refs(ctx: dict, options: str | None, count: int) -> list[dict[str, str] | None]:
@@ -1820,8 +1772,7 @@ def _product_option_refs(ctx: dict, options: str | None, count: int) -> list[dic
         if option.get("format_option_id") and option.get("publisher_domain")
     }
     refs: list[dict[str, str] | None] = []
-    for option in options.split(","):
-        option_id = option.strip()
+    for option_id in comma_list(options):
         domain = scoped.get(option_id)
         refs.append(
             {"scope": "publisher", "publisher_domain": domain, "format_option_id": option_id}
@@ -1832,14 +1783,17 @@ def _product_option_refs(ctx: dict, options: str | None, count: int) -> list[dic
     return refs
 
 
-def _seed_canonical_creatives(ctx: dict, kind: str, manifests: str, options: str | None = None) -> list[Any]:
+def _seed_canonical_creatives(
+    ctx: dict, kind: str, manifests: str, options: str | None = None, *, store: Any = store_creative
+) -> list[Any]:
     """One committed canonical creative per comma-separated :func:`_manifest` name, in order.
 
     *options*, when given, routes each to the aligned product option (:func:`_product_option_refs`).
+    *store* is :func:`store_creative`, or :func:`store_package_creative` to name each on the package.
     """
-    names = [name.strip() for name in manifests.split(",")]
+    names = comma_list(manifests)
     return [
-        _seed_canonical_creative(ctx, kind=kind, assets=_manifest(name), format_option_ref_document=ref)
+        store(ctx, None, _manifest(name), kind=kind, option_ref=ref)
         for name, ref in zip(names, _product_option_refs(ctx, options, len(names)), strict=True)
     ]
 
@@ -1847,7 +1801,7 @@ def _seed_canonical_creatives(ctx: dict, kind: str, manifests: str, options: str
 @given(parsers.parse('a canonical "{kind}" creative carrying the "{manifest}" manifest exists'))
 def given_canonical_creative_with_manifest_exists(ctx: dict, kind: str, manifest: str) -> None:
     """The update path's creative: stored with the named manifest, assigned by the When."""
-    ctx["creative_to_assign"] = _seed_canonical_creative(ctx, kind=kind, assets=_manifest(manifest))
+    ctx["creative_to_assign"] = store_creative(ctx, None, _manifest(manifest), kind=kind)
 
 
 @given(
@@ -1893,10 +1847,33 @@ def given_existing_media_buy(ctx: dict) -> None:
     ctx["existing_package"] = package
 
 
+@given(parsers.re(r"^that package was booked selecting (?P<selection>that option|no option)$"))
+def given_package_booked(ctx: dict, selection: str) -> None:
+    """The held package's format contract as create records it, from the product as it is now.
+
+    ``that option``: the snapshot of the product's one declaration in ``formats_to_provide``.
+    ``no option``: no snapshot, and the product's whole contract under ``booked_format_contract``.
+    Both through the production builders, so the row is one create writes.
+    """
+    from src.core.format_resolver import BOOKED_FORMAT_CONTRACT, booked_contract_record, package_format_snapshot
+
+    package, product = ctx["existing_package"], ctx["default_product"]
+    if selection == "that option":
+        (declaration,) = product.format_options
+        recorded: dict[str, Any] = {
+            "formats_to_provide": [package_format_snapshot(declaration, product_id=product.product_id)],
+            BOOKED_FORMAT_CONTRACT: None,
+        }
+    else:
+        recorded = {"formats_to_provide": None, BOOKED_FORMAT_CONTRACT: booked_contract_record(product.format_contract)}
+    package.package_config = {**(package.package_config or {}), **recorded}
+    ctx["env"]._commit_factory_data()
+
+
 @given(parsers.parse('a creative identified by canonical kind "{kind}" exists'))
 def given_creative_exists(ctx: dict, kind: str) -> None:
     """Seed the creative the update will assign, without assigning it yet."""
-    ctx["creative_to_assign"] = _seed_canonical_creative(ctx, kind=kind)
+    ctx["creative_to_assign"] = store_creative(ctx, None, _manifest("image_300x250"), kind=kind)
 
 
 @when("the Buyer Agent assigns that creative through update_media_buy")
@@ -1935,7 +1912,7 @@ def when_update_assigns_routed_creatives(ctx: dict, routing: str) -> None:
     creative there through ``placement_ids``, and ``any`` omits the member. The package's
     ``creative_assignments`` replace its creatives, so this is the whole set the seller grades.
     """
-    targets = [target.strip() for target in routing.split(",")]
+    targets = comma_list(routing)
     creatives = ctx["creatives_to_assign"]
     assert len(targets) == len(creatives), f"{len(targets)} routes for {len(creatives)} creatives"
     _dispatch_package_update(
@@ -1995,7 +1972,7 @@ def when_update_replaces_inline_creatives(ctx: dict, kind: str, manifests: str, 
     array replaces them all, and each names the aligned product option
     (:func:`_product_option_refs`). The ids sent are kept in ``ctx["uploaded_creative_ids"]``.
     """
-    names = [name.strip() for name in manifests.split(",")]
+    names = comma_list(manifests)
     ctx["uploaded_creative_ids"] = [mint_id("satisfaction_inline") for _ in names]
     _dispatch_package_update(
         ctx,
@@ -2372,7 +2349,7 @@ def given_canonical_creative_in_library(ctx: dict, kind: str, status: str) -> No
     Same id as the sync Givens' item, and the route's principal, so the sync takes the
     update path (``creative_repo.get_by_id(creative_id, principal_id)``).
     """
-    _seed_canonical_creative(ctx, kind=kind, status=status, creative_id=_SYNC_CREATIVE_ID)
+    store_creative(ctx, _SYNC_CREATIVE_ID, _manifest("image_300x250"), kind=kind, status=status)
 
 
 def _sync_legacy_claim(ctx: dict, format_id: str, *, assets: dict[str, Any] | None = None, **parameters: int) -> None:
@@ -2476,7 +2453,7 @@ def _legacy_manifest(format_id: str, manifest: str) -> dict[str, Any]:
     The asset id must be one the format requires, so a row cannot name an asset whose absence
     the format would not notice.
     """
-    from tests.factories.creative_asset import build_assets, named_format_assets, text_spec
+    from tests.factories.creative_asset import named_format_assets, text_spec
 
     assets = named_format_assets(format_id)
     if manifest == "complete":
@@ -2715,23 +2692,15 @@ def given_legacy_only_named_product(ctx: dict, format_id: str) -> None:
 def given_stored_legacy_creative_assigned(ctx: dict, format_id: str, width: int, height: int) -> None:
     """A library creative on a legacy id the agent does not list, named in the package's creative_ids.
 
-    Seeded through ``CreativeFactory``, which derives the stored identity with the production
-    accessor the sync path writes through, so the row is what a sync of that id stores. Its
-    one media asset carries the URL and the size the create path's asset gate reads.
+    Seeded through ``CreativeFactory`` (:func:`store_package_creative`), which derives the stored
+    identity with the production accessor the sync path writes through, so the row is what a
+    sync of that id stores; the factory's agent is the standard one. Its one legacy media asset
+    carries the URL and the size the create path's asset gate reads.
     """
-    from tests.factories.creative import CreativeFactory
-
     _assert_unlisted_by_the_agent(format_id)
-    creative = CreativeFactory(
-        tenant=ctx["tenant"],
-        principal=ctx["principal"],
-        format=format_id,
-        agent_url=DEFAULT_CREATIVE_AGENT_URL,
-        approved=True,
-        data={"assets": {"banner_image": {"url": "https://example.com/banner.png", "width": width, "height": height}}},
+    store_package_creative(
+        ctx, None, make_legacy_image_assets("banner_image", width=width, height=height), fmt=format_id
     )
-    ctx["env"]._commit_factory_data()
-    ctx["request_kwargs"]["packages"][0]["creative_ids"] = [creative.creative_id]
 
 
 @given("the buyer syncs a creative identified by that served format")
@@ -3171,15 +3140,15 @@ def _assert_entry_failed_and_nothing_stored(ctx: dict, code: str) -> None:
     assert_sync_entry_refused_and_not_stored(ctx, _SYNC_CREATIVE_ID, code)
 
 
-@then(parsers.parse("the creative is refused {code:w} naming the packages field"))
-def then_creative_refused_naming_packages(ctx: dict, code: str) -> None:
-    """The create path's manifest refusal: the code, the ``packages`` pointer and the creative.
+@then(parsers.parse('the creative is refused {code:w} naming the creative at "{field}"'))
+def then_creative_refused_naming_creative(ctx: dict, code: str, field: str) -> None:
+    """The create path's creative refusal, pointing at the creative where the request named it.
 
-    enums/error-code.json on CREATIVE_SIZE_MISMATCH: "Sellers SHOULD identify the offending
-    creative" -- the pointer names the request field the buyer sent (the packages array, as
-    every creative refusal on this path does) and ``details.creative_id`` names the creative.
+    One pointer for every creative code on that path. enums/error-code.json on
+    CREATIVE_SIZE_MISMATCH: "Sellers SHOULD identify the offending creative in error.field";
+    core/error.json ``field``: "Field path associated with the error".
     """
-    _assert_creative_refused(ctx, code, field="packages")
+    _assert_creative_refused(ctx, code, field=field)
 
 
 @then(parsers.parse('the creative is refused {code:w} naming the "{array}" array'))
@@ -3208,7 +3177,7 @@ def then_creative_value_not_allowed(ctx: dict, path: str, allowed: str) -> None:
     codes on this path, the pointer is the manifest path rather than absent, and the set is
     graded where the entry puts it. *allowed* is comma-separated in the feature.
     """
-    values = [value.strip() for value in allowed.split(",")]
+    values = comma_list(allowed)
     _assert_creative_refused(ctx, "CREATIVE_VALUE_NOT_ALLOWED", field=path, details={"allowed_values": values})
 
 
@@ -3321,7 +3290,7 @@ def _problem_at(details: dict[str, Any], path: str, subject_id: str) -> dict[str
 def _assert_states(problem: dict[str, Any], path: str, rejected: str, accepted: str) -> None:
     """*problem* states *rejected* where the comma-separated *accepted* is accepted."""
     assert problem.get("rejected_value") == rejected, f"{path}: stated {problem.get('rejected_value')!r}"
-    assert problem.get("accepted_values") == [value.strip() for value in accepted.split(",")], (
+    assert problem.get("accepted_values") == comma_list(accepted), (
         f"{path}: accepted {problem.get('accepted_values')!r}"
     )
 
@@ -3375,7 +3344,7 @@ def then_refusal_names_compatible_options(ctx: dict, options: str) -> None:
     name to disambiguate.
     """
     details = ctx["result"].wire_error_details(ctx["refused_code"])
-    assert details.get("accepted_values") == [option.strip() for option in options.split(",")], details
+    assert details.get("accepted_values") == comma_list(options), details
 
 
 @then("the buyer is refused UNSUPPORTED_FEATURE")
@@ -3544,7 +3513,7 @@ def then_conflict_route_selects(ctx: dict, arm: str, options: str) -> None:
     ``media-buy/package-request.json`` compares "the selected option sets", so a summary
     carries the set its route selected and this compares it as a set.
     """
-    _assert_conflict_route_selected(ctx, arm, set(options.split(",")))
+    _assert_conflict_route_selected(ctx, arm, set(comma_list(options)))
 
 
 @then(parsers.parse('the conflict summarizes the "{arm}" route as selecting nothing'))
@@ -3690,18 +3659,6 @@ def then_no_legacy_formats_to_provide(ctx: dict) -> None:
         "the declaration asserts no v1_format_ref, so there is nothing to project -- yet the "
         f"package carries format_ids_to_provide={package['format_ids_to_provide']!r}"
     )
-
-
-@then("the buyer is refused UNSUPPORTED_FEATURE naming the packages field")
-def then_refused_naming_packages(ctx: dict) -> None:
-    """The creative-side refusal, which names ``packages`` rather than one selector arm.
-
-    A creative is not a selector: the buyer sent ``creative_ids``, and WHICH creative is in
-    ``details.creative_id`` rather than in the pointer, because the pointer names a request
-    FIELD and the request field here is the packages array. The same pointer the sibling
-    creative refusals on this path already use (``PACKAGES_FIELD``).
-    """
-    ctx["result"].assert_wire_error("UNSUPPORTED_FEATURE", field="packages")
 
 
 # ── The MANUAL-APPROVAL path ────────────────────────────────────────
@@ -3862,7 +3819,7 @@ def assert_approval_executed(ctx: dict) -> None:
     approval = ctx.get("approval_result")
     assert approval is not None, "no approval was run — the When must dispatch it before this Then"
     assert approval.outcome is ApprovalOutcome.EXECUTED, (
-        f"the approval did not execute the order: outcome={approval.outcome!r}, error={approval.error_msg!r}"
+        f"the approval did not execute the order: outcome={approval.outcome!r}, error={approval.error!r}"
     )
 
 

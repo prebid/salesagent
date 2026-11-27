@@ -397,7 +397,7 @@ class TestCreateMediaBuyManualApproval:
         media_buy_id = resolve_media_buy_id_from_task(result.task_id)
 
         result = run_approval(media_buy_id, mb_tenant_with_approval["tenant_id"])
-        assert result.ok, f"execute_approved_media_buy should succeed, got error: {result.error_msg}"
+        assert result.ok, f"execute_approved_media_buy should succeed, got error: {result.error!r}"
 
         with get_db_session() as session:
             mb = session.scalars(select(MediaBuy).where(MediaBuy.media_buy_id == media_buy_id)).first()

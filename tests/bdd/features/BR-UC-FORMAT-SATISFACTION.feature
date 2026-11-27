@@ -1266,7 +1266,20 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     Given the seller declares a canonical format option "fixed_300x250"
     And the buyer assigns a creative identified by canonical kind "video_hosted" with its media asset keyed "image_main"
     When the Buyer Agent sends the create_media_buy request
-    Then the buyer is refused UNSUPPORTED_FEATURE naming the packages field
+    Then the creative is refused UNSUPPORTED_FEATURE naming the creative at "packages[0].creative_ids[0]"
+
+    # ONE POINTER RULE for every creative refusal on the create path, the gate's and the ad
+    # server's pre-booking check's alike: error.field names the creative where the request
+    # named it. core/error.json `field`: "Field path associated with the error"; the path
+    # associated with a refused creative is its position in the package's creative_ids.
+    # enums/error-code.json asks for that pointer on the creative codes that say anything
+    # about it -- CREATIVE_SIZE_MISMATCH "Sellers SHOULD identify the offending creative in
+    # error.field", CREATIVE_MISSING_CLICK_URL "Sellers SHOULD identify the missing
+    # buyer-visible field in error.field" -- and states no other pointer for UNSUPPORTED_FEATURE
+    # or CREATIVE_VALIDATION_FAILED_GENERIC. The gate used to keep `packages` for every code
+    # but CREATIVE_SIZE_MISMATCH.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/error.json pointer=/properties/field
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json
 
     # The pair is what makes either one informative. Both creatives are seeded the same way
     # and differ ONLY in the canonical kind they carry, against the SAME image-only product
@@ -1306,7 +1319,7 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     Given the seller declares a canonical format option "fixed_300x250"
     And the buyer assigns a creative identified by canonical kind "image" with its media asset keyed "banner"
     When the Buyer Agent sends the create_media_buy request
-    Then the creative is refused CREATIVE_VALIDATION_FAILED_GENERIC naming the packages field
+    Then the creative is refused CREATIVE_VALIDATION_FAILED_GENERIC naming the creative at "packages[0].creative_ids[0]"
     And the refusal names "assets.image_main" missing where "image" is accepted
 
     # THE CODE MOVED, from VALIDATION_ERROR to CREATIVE_VALIDATION_FAILED_GENERIC, and the
@@ -1941,6 +1954,70 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # create path, so a transport that persisted a malformed one would be caught. It is not
     # four approval executions, and nothing here pretends otherwise.
 
+  @T-UC-FORMAT-SATISFACTION-approval-books-creative-on-booked-contract @format_satisfaction @requires_db
+  Scenario Outline: approving a parked buy books its creative against the contract it was booked on - <selector>
+    Given the seller declares a canonical format option "fixed_300x250"
+    And the tenant requires manual approval
+    And the buyer's package selects "<selector>"
+    And the buyer assigns canonical "image" creative "cr_mrec" carrying the "image_300x250" manifest
+    And the Buyer Agent sent the create_media_buy request
+    And the seller then republishes that option fixed at 728x90
+    When the publisher approves the parked buy
+    Then the approval executes the order
+    And the ad server's creative manager receives creative "cr_mrec" sized "300x250"
+
+    # create_media_buy.mdx (v3.2.7) line 339: "validation and serving use the package-time
+    # contract, never mutable Product discovery". get-media-buys-response.json line 655:
+    # "readback, assignment, and serving never fall back to a mutable live Product
+    # declaration". The creative fits the 300x250 option the buy was booked on, and not the
+    # 728x90 the product was republished at, so checking it against the live product
+    # refuses the approval.
+    #
+    # Both rows hold: a package that selected the option records it in formats_to_provide,
+    # and a package that named no selector ("omitting both selects all formats supported
+    # by the product", media-buy/package-request.json) records the product's whole contract
+    # internally, off the wire.
+    Examples:
+      | selector           |
+      | product_option_ref |
+      | no_selector        |
+
+  @T-UC-FORMAT-SATISFACTION-update-assigns-on-booked-contract @format_satisfaction @requires_db
+  Scenario Outline: update_media_buy assigns a creative against the contract its package was booked on - <selection>
+    Given the seller declares a canonical format option "fixed_300x250"
+    And the buyer already holds a media buy for that product
+    And that package was booked selecting <selection>
+    And the seller then republishes that option fixed at 728x90
+    And a canonical "image" creative carrying the "image_300x250" manifest exists
+    When the Buyer Agent assigns that creative through update_media_buy
+    Then the update is accepted
+
+    # creative/tracker-execution-contracts.mdx (v3.2.7) line 156: "Package assignment and
+    # create_media_buy revalidate the selected manifest against the immutable package
+    # snapshot before spend". The package was booked on the 300x250 option; the product now
+    # publishes it at 728x90. A seller checking the assignment against the live product
+    # refuses the 300x250 creative.
+    Examples:
+      | selection   |
+      | that option |
+      | no option   |
+
+  @T-UC-FORMAT-SATISFACTION-sync-assigns-on-booked-contract @format_satisfaction_sync @requires_db
+  Scenario Outline: sync_creatives assigns a creative against the contract its package was booked on - <selection>
+    Given a packaged product declaring a canonical image option fixed at 300x250
+    And that package was booked selecting <selection>
+    And the seller then republishes that option fixed at 728x90
+    And the buyer syncs a canonical "image" creative carrying the "image_300x250" manifest
+    When the Buyer Agent assigns it to that package
+    Then the assignment is recorded with no assignment error
+
+    # The same rule on the sync_creatives assignment gate, the other way a creative reaches a
+    # booked package.
+    Examples:
+      | selection   |
+      | that option |
+      | no option   |
+
   @T-UC-FORMAT-SATISFACTION-approval-unsnapshotted-canonical-only @format_satisfaction @requires_db
   Scenario: approving a parked buy with no recorded snapshot places a canonical-only product on its declarations
     Given the seller declares a canonical format option "fixed_300x250" and no format_ids
@@ -2430,7 +2507,7 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     Given the seller declares a canonical format option "fixed_300x250"
     And the buyer assigns a canonical "image" creative carrying the "image_728x90" manifest
     When the Buyer Agent sends the create_media_buy request
-    Then the creative is refused CREATIVE_SIZE_MISMATCH naming the packages field
+    Then the creative is refused CREATIVE_SIZE_MISMATCH naming the creative at "packages[0].creative_ids[0]"
     And the refusal names "assets.image_main.width" stating "728" where "300" is accepted
     And the refusal names "assets.image_main.height" stating "90" where "250" is accepted
 

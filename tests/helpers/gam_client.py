@@ -28,14 +28,17 @@ import gzip
 import io
 import itertools
 from collections.abc import Callable, Mapping, Sequence
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 from googleads.errors import GoogleAdsServerFault
 
+from src.adapters.gam.utils.formatters import format_datetime_for_gam
 from src.adapters.google_ad_manager import GoogleAdManager
 from src.core.schemas import Principal
 from src.core.security.egress.response import OutboundResult
+from src.core.traffic_carrier import AdapterCreativeAsset, CreativeToTraffic, TagUrlRepresentation, TrafficSize
 
 
 class SoapObject(dict):
@@ -48,6 +51,31 @@ class SoapObject(dict):
             raise AttributeError(name) from exc
 
 
+def _bound(statement: Mapping[str, Any]) -> dict[str, str]:
+    """The bind variables of a PQL *statement* GAM was sent, by name, each value as text."""
+    return {v["key"]: str(v["value"]["value"]) for v in statement.get("values") or []}
+
+
+def _update_held(held: list[SoapObject], objects: list[Any], *, readonly: tuple[str, ...] = ()) -> list[SoapObject]:
+    """GAM's ``update*``: each sent object replaces the one *held* under its ``id``, except its *readonly* fields.
+
+    A *readonly* field keeps the value the network holds, or stays absent, whatever was sent.
+
+    An id the network does not hold raises ``gam_fault``. Each answer is a copy.
+    """
+    by_id = {str(item["id"]): item for item in held}
+    answered = []
+    for obj in objects:
+        item = by_id.get(str(obj["id"]))
+        if item is None:
+            raise gam_fault("CommonError.NOT_FOUND")
+        kept = {key: item[key] for key in readonly if key in item}
+        item.clear()
+        item.update({key: value for key, value in obj.items() if key not in readonly}, **kept)
+        answered.append(SoapObject(item))
+    return answered
+
+
 def gam_line_item(name: str, *, item_id: str = "1001", sizes: tuple[tuple[int, int], ...] = ((728, 90),)) -> SoapObject:
     """One line item in a GAM order, carrying the creative sizes it accepts."""
     return SoapObject(
@@ -56,6 +84,33 @@ def gam_line_item(name: str, *, item_id: str = "1001", sizes: tuple[tuple[int, i
         creativePlaceholders=[
             SoapObject(size=SoapObject(width=width, height=height), creativeSizeType="PIXEL") for width, height in sizes
         ],
+    )
+
+
+def gam_tag_asset(
+    creative_id: str, *, line_item_id: str = "1001", package_id: str = "test_package", size: tuple[int, int] = (728, 90)
+) -> AdapterCreativeAsset:
+    """One creative as core hands ``add_creative_assets`` it: a display_tag tag URL fixed at *size*, on one line item."""
+    width, height = size
+    sizes = (TrafficSize(width=width, height=height),)
+    carrier = CreativeToTraffic(
+        creative_id=creative_id,
+        format_kind="display_tag",
+        representation=TagUrlRepresentation(url=f"https://ads.example.com/{creative_id}.js"),
+        sizes=sizes,
+        option_sizes=sizes,
+        option_size_ranges=(),
+    )
+    return AdapterCreativeAsset(
+        creative_id=creative_id,
+        creative=carrier,
+        name=f"Creative {creative_id}",
+        package_assignments=[
+            {"package_id": package_id, "weight": 100, "platform_line_item_id": line_item_id, "creative": carrier}
+        ],
+        platform_creative_id=None,
+        platform_creative_outdated=False,
+        click_url=None,
     )
 
 
@@ -135,9 +190,15 @@ def stub_gam_client(
       refuses instead, raising ``gam_fault``.
     * ``LineItemService.getLineItemsByStatement`` answers the line items the network holds,
       read at call time: ``client.line_items`` (seeded from ``line_items``; a test adds held
-      line items there), then the line items it created.
+      line items there), then the line items it created. Each answer is a copy, as a real
+      network's is: a caller that edits it changes nothing the network holds.
+    * ``LineItemService.updateLineItems`` replaces each sent line item's fields on the one it holds by ``id``
+      (an id it does not hold raises ``gam_fault``), except ``status``:
+      ``LineItemSummary.status`` is "readonly" (Ad Manager API v202602).
     * ``OrderService.performOrderAction`` answers ``numChanges: 1``, so the adapter's
-      in-request approval takes its success branch (``approve_order``).
+      in-request approval takes its success branch (``approve_order``). An approval action
+      (``ApproveOrders``, ``ApproveAndOverbookOrders``) sets ``status`` APPROVED on the order it
+      created whose ``id`` the statement binds (``orderId``).
     * The ``create*`` methods in ``GAM_CREATE_METHODS`` answer each sent object with a copy
       carrying a fresh NUMERIC id, and keep that answer in ``client.created_objects``, keyed
       by ``(service, method)``: what the network holds after the scenario. The ids are
@@ -150,9 +211,12 @@ def stub_gam_client(
     * ``CreativeService.updateCreatives`` replaces each sent creative in
       ``client.created_objects``, by the ``id`` GAM requires on an update, and answers it. An id
       the network does not hold raises ``gam_fault``. Given a reason in
-      ``client.creative_update_fault`` it refuses instead, with ``gam_fault``. Ceiling: nobody has
-      tried this call against real GAM; the stand-in does not model which fields GAM lets an
-      update change (``Creative.size`` is read-only after creation).
+      ``client.creative_update_fault`` it refuses instead, with ``gam_fault``. Each update stamps
+      the creative's ``lastModifiedDateTime`` (``Creative.lastModifiedDateTime``, "assigned by
+      Google and is readonly"), one second later than the update before it, so two updates
+      never read back the same stamp. Ceiling: nobody has tried this call against real GAM; the
+      stand-in does not model which fields GAM lets an update change (``Creative.size`` is
+      read-only after creation), and it stamps no creative at creation.
     * ``LineItemCreativeAssociationService.performLineItemCreativeAssociationAction`` sets
       ``status`` (ACTIVE for ActivateLineItemCreativeAssociations, INACTIVE for
       DeactivateLineItemCreativeAssociations) on the associations it created for the statement's
@@ -186,15 +250,45 @@ def stub_gam_client(
 
         return _answer
 
+    def _held_line_items() -> list[SoapObject]:
+        return [*client.line_items, *created.get(("LineItemService", "createLineItems"), [])]
+
+    def _update_line_items(objects: list[Any], *_args: Any, **_kwargs: Any) -> list[SoapObject]:
+        return _update_held(_held_line_items(), objects, readonly=("status",))
+
+    def _order_action(action: Mapping[str, Any], statement: Mapping[str, Any], *_a: Any, **_k: Any) -> SoapObject:
+        if action["xsi_type"] in ("ApproveOrders", "ApproveAndOverbookOrders"):
+            bound = _bound(statement)
+            for order in created.get(("OrderService", "createOrders"), []):
+                if str(order["id"]) == bound.get("orderId"):
+                    order["status"] = "APPROVED"
+        return SoapObject(numChanges=1)
+
+    def _read_back(line_item: SoapObject) -> SoapObject:
+        """A created line item as GAM answers for it: its placeholders in another order than written.
+
+        One observed sample, not a known GAM sort rule: R9's e2e run 025d613f wrote a line item's
+        placeholders [300x600, 728x90] and read its association back [728x90, 300x600]. Reversed
+        here, so nothing graded may depend on which order comes back.
+        """
+        placeholders = line_item.get("creativePlaceholders")
+        if not placeholders:
+            return SoapObject(line_item)
+        return SoapObject(line_item, creativePlaceholders=list(reversed(placeholders)))
+
     services: dict[str, MagicMock] = {
         "LineItemService": MagicMock(
             getLineItemsByStatement=MagicMock(
                 side_effect=lambda *_args: SoapObject(
-                    results=[*client.line_items, *created.get(("LineItemService", "createLineItems"), [])]
+                    results=[
+                        *(SoapObject(item) for item in client.line_items),
+                        *(_read_back(item) for item in created.get(("LineItemService", "createLineItems"), [])),
+                    ]
                 )
-            )
+            ),
+            updateLineItems=MagicMock(side_effect=_update_line_items),
         ),
-        "OrderService": MagicMock(performOrderAction=MagicMock(return_value=SoapObject(numChanges=1))),
+        "OrderService": MagicMock(performOrderAction=MagicMock(side_effect=_order_action)),
         "NetworkService": MagicMock(
             getCurrentNetwork=MagicMock(
                 return_value=SoapObject(timeZone=network_time_zone),
@@ -213,18 +307,17 @@ def stub_gam_client(
     for service, method in GAM_CREATE_METHODS:
         setattr(services.setdefault(service, MagicMock()), method, MagicMock(side_effect=_creates(service, method)))
 
+    updates = itertools.count(1)
+    first_update = datetime.now(UTC)
+
     def _update_creatives(objects: list[Any], *_args: Any, **_kwargs: Any) -> list[SoapObject]:
         if client.creative_update_fault is not None:
             raise gam_fault(client.creative_update_fault)
-        held = created.setdefault(("CreativeService", "createCreatives"), [])
-        answered = []
-        for obj in objects:
-            index = next((i for i, creative in enumerate(held) if creative["id"] == obj["id"]), None)
-            if index is None:
-                raise gam_fault("CommonError.NOT_FOUND")
-            held[index] = SoapObject(obj)
-            answered.append(held[index])
-        return answered
+        stamp = format_datetime_for_gam(first_update + timedelta(seconds=next(updates)), network_time_zone)
+        return _update_held(
+            created.setdefault(("CreativeService", "createCreatives"), []),
+            [{**obj, "lastModifiedDateTime": stamp} for obj in objects],
+        )
 
     services["CreativeService"].updateCreatives = MagicMock(side_effect=_update_creatives)
     lica = "LineItemCreativeAssociationService"
@@ -242,11 +335,11 @@ def stub_gam_client(
     _serving = {"ActivateLineItemCreativeAssociations": "ACTIVE", "DeactivateLineItemCreativeAssociations": "INACTIVE"}
 
     def _association_action(action: Mapping[str, Any], statement: Mapping[str, Any], *_a: Any, **_k: Any) -> SoapObject:
-        (creative_id,) = [int(v["value"]["value"]) for v in statement["values"] if v["key"] == "creativeId"]
+        creative_id = _bound(statement)["creativeId"]
         held = [
             a
             for a in created.get((lica, "createLineItemCreativeAssociations"), [])
-            if int(a["creativeId"]) == creative_id
+            if str(a["creativeId"]) == creative_id
         ]
         for association in held:
             association["status"] = _serving[action["xsi_type"]]

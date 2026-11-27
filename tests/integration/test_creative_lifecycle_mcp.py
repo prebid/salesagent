@@ -978,7 +978,7 @@ class TestCreativeLifecycleMCP:
             patch("src.core.tools.products.get_product_catalog") as mock_catalog,
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
             patch(
-                "src.core.tools.media_buy_create._validate_creatives_before_adapter_call"
+                "src.core.tools._creative_trafficking._validate_creatives_before_adapter_call"
             ),  # Skip creative validation
         ):
             # No principal patch: the resolver loads the seeded row from the credential in

@@ -142,6 +142,38 @@ def package_rows_for(media_buy_id: str, packages: Iterable[dict[str, Any]]) -> l
     ]
 
 
+def _with_booked_contract(session: Any, row: dict[str, Any]) -> dict[str, Any]:
+    """The row's ``package_config`` as create writes it: with its product's contract when it selected nothing.
+
+    Create records the product's contract on a package with no ``formats_to_provide``
+    (``format_resolver.booked_format_contract`` reads it back), through the same
+    ``booked_contract_record``, so a seeded package is one production can write. A package
+    whose product is not stored yet has no contract to record, as the gate has none to read.
+    The record is :func:`booked_on`'s.
+    """
+    from src.core.database.models import Product
+    from src.core.format_resolver import BOOKED_FORMAT_CONTRACT
+
+    config = dict(row["package_config"] or {})
+    product_id = config.get("product_id")
+    if not product_id or config.get("formats_to_provide") or config.get(BOOKED_FORMAT_CONTRACT) is not None:
+        return config
+    media_buy = row.get("media_buy") or session.get(MediaBuy, row["media_buy_id"])
+    product = session.get(Product, (media_buy.tenant_id, product_id)) if media_buy else None
+    return config if product is None else booked_on(config, product)
+
+
+def booked_on(package_config: dict[str, Any], product: Any) -> dict[str, Any]:
+    """*package_config* booked on *product* as it is now: the product's contract recorded, as create records it.
+
+    For a fixture whose product is given its formats after the package row exists: the
+    product the scenario states is the one the package was booked on.
+    """
+    from src.core.format_resolver import BOOKED_FORMAT_CONTRACT, booked_contract_record
+
+    return {**package_config, BOOKED_FORMAT_CONTRACT: booked_contract_record(product.format_contract)}
+
+
 def bare_package_row(media_buy_id: str, package_id: str) -> MediaPackage:
     """The unpersisted row of a package that carries only its id, for a buy built outside ``MediaBuyFactory``.
 
@@ -354,6 +386,8 @@ class MediaPackageFactory(factory.alchemy.SQLAlchemyModelFactory):
     @classmethod
     def _create(cls, model_class, *args, **kwargs):
         session = cls._meta.sqlalchemy_session
+        if session is not None and "package_config" in kwargs:
+            kwargs["package_config"] = _with_booked_contract(session, kwargs)
         existing = session.get(model_class, (kwargs["media_buy_id"], kwargs["package_id"])) if session else None
         if existing is None:
             return super()._create(model_class, *args, **kwargs)

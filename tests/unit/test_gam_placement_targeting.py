@@ -281,9 +281,10 @@ class TestPlacementIdsValidation:
             mock_media_buy.approved_at = None
             mock_uow.media_buys.get_by_id_or_buyer_ref.return_value = mock_media_buy
 
-            # Mock package lookup via repo
-            mock_package = MagicMock()
-            mock_package.package_config = {"product_id": "prod_no_placements"}
+            # Mock package lookup via repo: a stored row, with the contract create records
+            from tests.helpers.media_buy_row_stubs import stub_package_row
+
+            mock_package = stub_package_row(package_id="pkg_1", package_config={"product_id": "prod_no_placements"})
             mock_uow.media_buys.get_package_or_raise.return_value = mock_package
             mock_uow.media_buys.get_package.return_value = mock_package
 

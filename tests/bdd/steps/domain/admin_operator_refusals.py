@@ -372,6 +372,66 @@ def when_add_authorized_domain(ctx: dict, domain: str) -> None:
     ctx["admin_page"] = _env(ctx).fetch_tenant_route(_other_tenant_id(ctx), "users/domains", {"domain": domain})
 
 
+# ── Media buy approval ──
+
+
+def _parsed_size(size: str) -> tuple[int, int]:
+    width, height = size.split("x")
+    return int(width), int(height)
+
+
+@given(
+    parsers.re(
+        r"another tenant of this seller, holding a media buy awaiting approval"
+        r"(?: whose product accepts images of (?P<size>\d+x\d+))?$"
+    )
+)
+def given_other_tenant_with_buy_awaiting_approval(ctx: dict, size: str | None) -> None:
+    seeded = _env(ctx).seed_media_buy_awaiting_approval(accepted_image_size=_parsed_size(size) if size else None)
+    ctx["admin_other_tenant_id"] = seeded.tenant_id
+    ctx["admin_pending_buy"] = seeded
+
+
+@given(parsers.parse('that media buy\'s package is assigned the approved {size} image creative "{creative_id}"'))
+def given_pending_buy_assigned_image_creative(ctx: dict, size: str, creative_id: str) -> None:
+    _env(ctx).assign_image_creative_to_pending_buy(ctx["admin_pending_buy"], creative_id, size=_parsed_size(size))
+
+
+@given("that tenant's ad server fails every media buy it is asked to create")
+def given_other_tenant_ad_server_fails_creation(ctx: dict) -> None:
+    _env(ctx).fail_ad_server_creation(_other_tenant_id(ctx))
+
+
+@when("the workflow page approves that media buy's approval step")
+def when_workflow_page_approves_step(ctx: dict) -> None:
+    ctx["admin_page"] = _env(ctx).approve_workflow_step(ctx["admin_pending_buy"])
+
+
+def _assert_details_follow_code_line(ctx: dict, code: str, rest: list[str]) -> None:
+    """The refusal's details: the typed error's code line (its code and the code table's message), then *rest*."""
+    from src.core.errors.codes import CODE_TABLE
+
+    details = _require_admin_page(ctx).get_json().get("details")
+    expected = [f"{code}: {CODE_TABLE[code].message}", *rest]
+    assert details == expected, f"Expected details {expected!r}, got {details!r}"
+
+
+@then(parsers.parse('the JSON details are the "{code}" error\'s line, then:'))
+def then_json_details_code_line_then(ctx: dict, code: str, datatable: list) -> None:
+    _assert_details_follow_code_line(ctx, code, [str(row[0]) for row in datatable[1:]])
+
+
+@then(parsers.parse('the JSON details are only the "{code}" error\'s line'))
+def then_json_details_only_code_line(ctx: dict, code: str) -> None:
+    _assert_details_follow_code_line(ctx, code, [])
+
+
+@then("that media buy still awaits approval")
+def then_pending_buy_still_awaits_approval(ctx: dict) -> None:
+    status = _env(ctx).media_buy_status(ctx["admin_pending_buy"].media_buy_id)
+    assert status == "pending_approval", f"Expected the media buy to await approval, it is {status!r}"
+
+
 @given(parsers.parse('the deployment\'s super-admin domain is "{domain}"'))
 def given_super_admin_domain(ctx: dict, domain: str) -> None:
     _env(ctx).name_super_admin_domain(domain)
