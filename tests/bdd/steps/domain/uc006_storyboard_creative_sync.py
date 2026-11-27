@@ -51,7 +51,6 @@ from tests.bdd.steps.domain.uc006_sync_creatives import (
     _action_str,
     _build_creative_payload,
     _creative_format_id_entry,
-    _e2e_unique_id,
     _product_format_entry,
     _setup_product_with_creative_policy,
     latest_creative_id,
@@ -66,6 +65,7 @@ from tests.factories.creative_asset import (
     named_format_assets,
     url_spec,
 )
+from tests.factories.mint import mint_id
 from tests.factories.request import OMIT, CreativeAssetRequestFactory
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -725,7 +725,7 @@ def _sync_canonical_creative(ctx: dict, kind: str, scope: str, **members: Any) -
     reference = format_option_ref_for_scope(scope)
     ctx["creatives"] = [
         CreativeAssetRequestFactory.payload(
-            creative_id=_e2e_unique_id("creative_canonical"),
+            creative_id=mint_id("creative_canonical"),
             format_id=OMIT,
             format_kind=kind,
             format_option_ref=reference,

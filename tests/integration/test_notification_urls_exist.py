@@ -35,7 +35,7 @@ class TestNotificationUrlsExist:
         # We control this file - it should always exist
         assert slack_notifier_path.exists(), f"slack_notifier.py must exist at {slack_notifier_path}"
 
-        content = slack_notifier_path.read_text()
+        content = slack_notifier_path.read_text(encoding="utf-8")
 
         # Extract URL patterns like: f"{admin_url}/admin/tenant/{tenant_id}/workflows"
         # Pattern matches: /admin/tenant/{var}/something or /something

@@ -310,12 +310,16 @@ class TestProductDeletion:
             # SQLAlchemy 2.0 uses scalars() instead of query()
             mock_context.scalars.side_effect = Exception("Database connection failed")
 
-            response = client.delete(f"/tenant/{tenant_id}/products/{product_id}/delete")
+            # The products page's fetch sends this header, so the app's error handler answers JSON.
+            response = client.delete(
+                f"/tenant/{tenant_id}/products/{product_id}/delete", headers={"Content-Type": "application/json"}
+            )
 
             assert response.status_code == 500
             data = response.get_json()
-            assert "error" in data
-            assert "Failed to delete product" in data["error"]
+            assert data["success"] is False
+            assert data["error"].startswith("An unexpected error occurred")
+            assert "Database connection failed" not in data["error"]
 
     def test_delete_multiple_products_different_statuses(
         self, client, test_tenant_and_products, authenticated_session, setup_super_admin_config

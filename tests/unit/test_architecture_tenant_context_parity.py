@@ -45,7 +45,7 @@ def _tenant_context_field_names() -> set[str]:
 
 def _from_orm_model_kwargs() -> set[str]:
     """Keyword names passed to the ``cls(...)`` call inside ``from_orm_model``."""
-    src = Path("src/core/tenant_context.py").read_text()
+    src = Path("src/core/tenant_context.py").read_text(encoding="utf-8")
     tree = ast.parse(src)
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == "from_orm_model":

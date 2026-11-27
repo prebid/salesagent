@@ -8,6 +8,7 @@ from typing import Any
 
 import factory
 from factory import LazyAttribute, Sequence, SubFactory
+from sqlalchemy.orm.attributes import flag_modified, set_committed_value
 
 from src.core.database.models import PricingOption, Product, ProductPublisherSelection
 from src.core.helpers.publisher_property_helpers import AuthorizedPropertyRef
@@ -133,6 +134,18 @@ class ProductFactory(SellsPublishersMixin, factory.alchemy.SQLAlchemyModelFactor
         if kwargs.get("tenant") is None and kwargs.get("tenant_id") is not None:
             kwargs.pop("tenant", None)
         return kwargs
+
+
+def store_channel_residue(product: Product, channels: list[str]) -> None:
+    """Give *product* stored channels the column's validator refuses, as residue of GH #1532 holds them.
+
+    ``Product.channels`` refuses a value outside ``MediaChannel`` on every write, and the repair
+    migration rewrites only the four legacy picker values, so anything else a row held before
+    (a typo, ``hologram``) is still in the database. A row loaded from it never passes the
+    validator; this sets the value the same way, and flags it so the next flush writes it.
+    """
+    set_committed_value(product, "channels", channels)
+    flag_modified(product, "channels")
 
 
 class StoredPlacementFactory(factory.DictFactory):

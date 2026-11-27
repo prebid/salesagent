@@ -200,3 +200,30 @@ def tenant_row(monkeypatch):
         return TenantFactory.build(**{"tenant_id": "t1", **fields})
 
     return make
+
+
+@pytest.fixture
+def scalars_by_entity():
+    """A ``session.scalars`` side effect that answers each query with the row of its entity.
+
+    A unit test that mocks the session used to set ``scalars.return_value.first.return_value``
+    to its tenant, which then answered every ``scalars(...)`` query the code made, whatever
+    the selected model: a signing-key lookup got the tenant back. This answers a
+    ``select(Model)`` with the row of that model passed in, and with nothing for a model it
+    was not given (``first()`` is ``None``, ``all()`` is empty), as an empty table would.
+    """
+    from unittest.mock import MagicMock
+
+    def make(*rows):
+        by_entity = {type(row): row for row in rows}
+
+        def scalars(stmt):
+            row = by_entity.get(stmt.column_descriptions[0].get("entity"))
+            result = MagicMock()
+            result.first.return_value = row
+            result.all.return_value = [] if row is None else [row]
+            return result
+
+        return scalars
+
+    return make

@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-import os
-from copy import deepcopy
 from decimal import Decimal
+from urllib.parse import urlsplit
 
-from tests.factories import PricingOptionFactory, ProductFactory, SignalsAgentFactory, TenantFactory
+from tests.factories import PricingOptionFactory, ProductFactory, SignalFactory, SignalsAgentFactory, TenantFactory
 from tests.harness.egress import EgressHatchMixin
 from tests.harness.product import ProductEnv
-from tests.helpers.tls_material import start_tls_origin, trust_test_ca
+from tests.helpers.local_http_origin import guarded_origin
+from tests.helpers.local_mcp_origin import run_mcp_origin
+from tests.helpers.tls_material import start_tls_mcp_origin, trust_test_ca
 
 
 class DynamicProductEnv(EgressHatchMixin, ProductEnv):
@@ -26,13 +27,24 @@ class DynamicProductEnv(EgressHatchMixin, ProductEnv):
         self.set_egress_hatches(private=True)
         self._signals = []
         self._signals_fail = False
-        self.origin = start_tls_origin(
-            self._guard,
-            "signals_origin",
-            tools={"get_signals": self._get_signals},
-            listen_host="0.0.0.0" if self.is_e2e else "127.0.0.1",
-            public_host=os.getenv("E2E_ORIGIN_HOST", "signals.adcp-e2e.dev") if self.is_e2e else "127.0.0.1",
-        )
+        tools = {"get_signals": self._get_signals}
+        if self.is_e2e:
+            config = self.e2e_config
+            assert config is not None and config.signals_origin, "The live stack declares no signals TLS front"
+            front = urlsplit(config.signals_origin)
+            self.origin = guarded_origin(
+                self._guard,
+                "signals_origin",
+                run_mcp_origin(
+                    tools=tools,
+                    listen_host="0.0.0.0",
+                    port=config.signals_port,
+                    path=front.path,
+                    public_origin=f"{front.scheme}://{front.netloc}",
+                ),
+            )
+        else:
+            self.origin = start_tls_mcp_origin(self._guard, "signals_origin", tools=tools)
         trust_test_ca(self._guard)
 
     def _get_signals(self, signal_spec: str, discovery_mode: str) -> dict:
@@ -72,25 +84,26 @@ class DynamicProductEnv(EgressHatchMixin, ProductEnv):
         SignalsAgentFactory(tenant=tenant, agent_url=self.origin.base_url)
         key = {"type": "key_value", "key": "audience", "value": "premium"}
         self.variant_id = generate_variant_id("template", key)
-        self._signals = [
-            {
-                "name": "Premium audience",
-                "description": "Premium readers",
-                "signal_agent_segment_id": "premium",
-                "signal_type": "marketplace",
-                "deployments": [
-                    {"type": "agent", "agent_url": tenant.agent_url, "is_live": True, "activation_key": key}
-                ],
-            }
-        ]
-        from adcp.types import GetSignalsResponse
-
-        GetSignalsResponse.model_validate({"signals": self._signals})
+        signal_fields = {
+            "signal_agent_segment_id": "premium",
+            "name": "Premium audience",
+            "description": "Premium readers",
+            "agent_url": tenant.agent_url,
+            "key": "audience",
+            "value": "premium",
+        }
+        self._signals = [SignalFactory.payload(**signal_fields)]
         if invalid_signal:
-            invalid = deepcopy(self._signals[0])
-            invalid["name"] = "x" * 300
-            invalid["deployments"][0]["activation_key"]["value"] = "invalid"
-            self._signals.insert(0, invalid)
+            self._signals.insert(
+                0,
+                SignalFactory.payload(
+                    **{
+                        **signal_fields,
+                        "name": "x" * 300,
+                        "value": "invalid",
+                    }
+                ),
+            )
         if legacy or priced:
             saved = ProductFactory(
                 tenant=tenant,

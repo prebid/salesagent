@@ -12,7 +12,7 @@ from pathlib import Path
 import psycopg2
 import pytest
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
-from sqlalchemy import create_engine, delete, select
+from sqlalchemy import create_engine
 
 from scripts.setup.seed_products import seed_verified_website, whole_publisher_selections
 from src.admin.app import create_app
@@ -26,11 +26,11 @@ from tests.integration.conftest_ci_seed import ci_test_principal  # noqa: F401
 
 admin_app = create_app()
 from src.core.database.database_session import get_db_session
-from src.core.database.models import MediaBuy, MediaPackage, Principal, ProductPublisherSelection, Tenant
+from src.core.database.models import MediaBuy, MediaPackage, ProductPublisherSelection, Tenant
 from tests.fixtures import TenantFactory
 from tests.helpers.local_http_origin import run_local_origin
-from tests.helpers.local_mcp_origin import MCPOrigin, run_mcp_origin
-from tests.helpers.tls_material import load_gen_test_tls, server_ssl_context
+from tests.helpers.local_mcp_origin import MCPOrigin
+from tests.helpers.tls_material import ready_test_tls, server_ssl_context, start_tls_mcp_origin, trust_test_ca
 from tests.integration.migration_helpers import parse_postgres_url
 from tests.utils.database_helpers import vhost_for
 
@@ -40,18 +40,6 @@ from tests.utils.database_helpers import vhost_for
 
 # integration_db fixture moved to tests/conftest_db.py (visible to all test suites including tests/bdd/)
 # It is available here via tests/conftest.py -> from tests.conftest_db import *
-
-
-def cleanup_tenant(tenant_id: str) -> None:
-    """Delete tenant and all dependent data (correct FK order)."""
-    with get_db_session() as session:
-        mb_ids = session.scalars(select(MediaBuy.media_buy_id).where(MediaBuy.tenant_id == tenant_id)).all()
-        if mb_ids:
-            session.execute(delete(MediaPackage).where(MediaPackage.media_buy_id.in_(mb_ids)))
-        session.execute(delete(MediaBuy).where(MediaBuy.tenant_id == tenant_id))
-        session.execute(delete(Principal).where(Principal.tenant_id == tenant_id))
-        session.execute(delete(Tenant).where(Tenant.tenant_id == tenant_id))
-        session.commit()
 
 
 def make_media_buy(tenant_id: str, principal_id: str, media_buy_id: str, **kwargs) -> MediaBuy:
@@ -112,8 +100,7 @@ def local_origin_tls(monkeypatch):
     Callers that need a plain-http origin (refusal tests, e.g. verifying a
     URL is never dialled) keep using :func:`local_origin` unchanged.
     """
-    gen_test_tls = load_gen_test_tls()
-    gen_test_tls.ensure_test_tls()
+    gen_test_tls = ready_test_tls()
     monkeypatch.setenv("SSL_CERT_FILE", str(gen_test_tls.COMBINED_CERT))
     with run_local_origin(ssl_context=server_ssl_context(gen_test_tls)) as origin:
         yield origin
@@ -130,20 +117,15 @@ def mcp_origin_tls(monkeypatch):
     own — a fixture cannot know whether the tool under test succeeds, fails, or
     fails only the first time.
     """
-    gen_test_tls = load_gen_test_tls()
-    gen_test_tls.ensure_test_tls()
-    monkeypatch.setenv("SSL_CERT_FILE", str(gen_test_tls.COMBINED_CERT))
-
     with ExitStack() as stack:
 
+        def guard(label, cleanup):
+            stack.callback(cleanup)
+
+        trust_test_ca(guard)
+
         def start(**tools) -> MCPOrigin:
-            return stack.enter_context(
-                run_mcp_origin(
-                    tools=tools,
-                    certfile=gen_test_tls.SERVER_CERT,
-                    keyfile=gen_test_tls.SERVER_KEY,
-                )
-            )
+            return start_tls_mcp_origin(guard, "mcp_origin", tools=tools)
 
         yield start
 
@@ -173,15 +155,16 @@ def gam_oauth_configured(admin_client, monkeypatch):
     live settings object the views read (the environment is loaded once).
     """
     from src.core.config import get_settings
+    from tests.helpers.admin_session import no_configured_super_admins
 
     auth = get_settings().auth
-    monkeypatch.setattr(auth, "super_admin_emails", "")
-    monkeypatch.setattr(auth, "super_admin_domains", "")
     monkeypatch.setattr(auth, "gam_oauth_client_id", "gam-oauth-client.apps.googleusercontent.com")
     monkeypatch.setattr(auth, "gam_oauth_client_secret", "GOCSPX-gam-oauth-client-secret")
     # ``gam_authorize`` only tests ``current_app.oauth`` for presence; whether the
     # module-level app registered a provider depends on the shell's GOOGLE_CLIENT_ID.
     monkeypatch.setattr(admin_client.application, "oauth", object(), raising=False)
+    with no_configured_super_admins():
+        yield
 
 
 @pytest.fixture
@@ -241,7 +224,6 @@ def test_tenant_with_data(integration_db):
             auth_setup_mode=False,  # Disable setup mode for production-ready auth
             auto_approve_format_ids=[],  # JSONType expects list, not json.dumps()
             human_review_required=False,
-            policy_settings={},  # JSONType expects dict, not json.dumps()
             authorized_emails=["test@example.com"],  # Required for access control
             created_at=now,
             updated_at=now,
@@ -1225,17 +1207,10 @@ def bound_factory_session(integration_db):
     because a caller that only borrowed the binding would still have to manage the
     SASession itself and that is where the hand-rolled versions diverge.
     """
-    from sqlalchemy.orm import Session as SASession
+    from tests.utils.database_helpers import bound_factory_session as bound
 
-    from src.core.database.database_session import get_engine
-    from tests.utils.database_helpers import bind_factories_to_session
-
-    session = SASession(bind=get_engine())
-    try:
-        with bind_factories_to_session(session):
-            yield session
-    finally:
-        session.close()
+    with bound() as session:
+        yield session
 
 
 #: Integration tests ledgered pending rewrite — see ``known_failures.txt`` next to this

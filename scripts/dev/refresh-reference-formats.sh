@@ -20,7 +20,8 @@ dc=(docker compose -f docker-compose.e2e.yml -p "$PROJECT")
 
 scripts/creative-agent-stack.sh build    # the pinned agent image
 scripts/dev/ensure-test-tls.sh           # the CA the front serves
-eval "export $(scripts/dev/alloc-e2e-subnet.sh)"
+_slice=$(scripts/dev/alloc-e2e-subnet.sh) || exit   # stop on the allocator's own refusal
+export "$_slice"
 
 "${dc[@]}" --profile runner build tests
 trap '"${dc[@]}" down -v' EXIT

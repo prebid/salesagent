@@ -150,7 +150,7 @@ def test_git_unavailable_fallback_warns_and_prunes_claude(tmp_path: Path) -> Non
     with pytest.warns(RuntimeWarning, match="git ls-files.*failed.*falling back"):
         files = list(iter_git_tracked_files(tmp_path))
 
-    names = {f.relative_to(tmp_path).as_posix() for f in files}
+    names = {rel(f, tmp_path) for f in files}
     assert "kept.py" in names, f"fallback walk must yield regular files, got {sorted(names)}"
     assert not any(n.startswith(".claude/") for n in names), (
         f"fallback walk must prune .claude/ (untracked local notes leak into guard scans), got {sorted(names)}"
@@ -171,7 +171,7 @@ def test_git_available_never_engages_fallback(tmp_path: Path) -> None:
         warnings.simplefilter("error", RuntimeWarning)
         files = list(iter_git_tracked_files(tmp_path))
 
-    names = {f.relative_to(tmp_path).as_posix() for f in files}
+    names = {rel(f, tmp_path) for f in files}
     assert names == {"tracked.py"}, (
         f"with working git the helper must yield exactly the tracked set (hermetic), got {sorted(names)}"
     )

@@ -22,6 +22,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from src.core.resolved_identity import TransportProtocol
+from tests.helpers.signals_origin import SHARED_SIGNALS_PORT
 
 
 def is_pinned_error_code(code: str | None) -> bool:
@@ -205,6 +206,8 @@ class E2EConfig:
     tls_base_url: str | None = None
     ca_bundle: str | None = None
     server_host: str | None = None
+    signals_origin: str | None = None
+    signals_port: int = SHARED_SIGNALS_PORT
 
 
 # The two values TransportResult.envelope["status"] may take. A DERIVED enum,

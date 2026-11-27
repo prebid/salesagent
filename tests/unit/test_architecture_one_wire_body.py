@@ -33,7 +33,7 @@ _TRANSPORT_RESPONSE_PATHS: dict[str, str] = {
 
 
 def _function(path: str, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef:
-    tree = ast.parse(Path(path).read_text())
+    tree = ast.parse(Path(path).read_text(encoding="utf-8"))
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == name:
             return node

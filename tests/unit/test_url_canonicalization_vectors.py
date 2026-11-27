@@ -48,7 +48,7 @@ VECTORS = Path(__file__).parent.parent / "fixtures" / "adcp_canonicalization_vec
 
 
 def _load() -> list[dict[str, Any]]:
-    return json.loads(VECTORS.read_text())["cases"]
+    return json.loads(VECTORS.read_text(encoding="utf-8"))["cases"]
 
 
 def _case_id(case: dict[str, Any]) -> str:

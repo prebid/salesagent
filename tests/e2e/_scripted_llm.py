@@ -16,7 +16,7 @@ from typing import Any, NamedTuple
 
 import httpx
 
-from tests.e2e.scripted_llm_origin_service import SCRIPT_CONTROL_PREFIX
+from tests.e2e.scripted_llm_origin_service import SCRIPT_CONTROL_PREFIX, prompt_carries
 
 _CONTROL_TIMEOUT_SECONDS = 10.0
 
@@ -31,14 +31,16 @@ def scripted_llm_origin() -> str:
     return os.environ.get("SCRIPTED_LLM_ORIGIN", "http://scripted-llm:8080")
 
 
-def install_script(api_key: str, **entries: dict) -> None:
+def install_script(api_key: str, *, origin: str | None = None, **entries: dict) -> None:
     """Script the answers the origin gives a call carrying ``api_key``, one entry per question.
 
-    ``entries`` is ``ranking=``, ``policy=`` and/or ``naming=``, each an entry as the service module
-    documents it. Raises when the origin does not accept the script: a script that silently
-    failed to install would surface as a catalog-order mismatch, blaming production.
+    ``entries`` is ``ranking=``, ``policy=``, ``naming=`` and/or ``connection_test=``, each an
+    entry as the service module documents it. *origin* is the origin to script, the compose
+    service (:func:`scripted_llm_origin`) by default. Raises when the origin does not accept the
+    script: a script that silently failed to install would surface as a catalog-order
+    mismatch, blaming production.
     """
-    url = f"{scripted_llm_origin()}{SCRIPT_CONTROL_PREFIX}{api_key}"
+    url = f"{origin or scripted_llm_origin()}{SCRIPT_CONTROL_PREFIX}{api_key}"
     try:
         response = httpx.put(url, json=entries, timeout=_CONTROL_TIMEOUT_SECONDS)
     except httpx.HTTPError as exc:
@@ -70,6 +72,35 @@ class ScriptedFailure(NamedTuple):
             raise self.exception()
 
         return FunctionModel(_fail)
+
+
+def scripted_answer_model(arguments: dict[str, Any], require_text: list[str]) -> Any:
+    """The in-process twin of an origin ``{"output": arguments, "require_text": [...]}`` entry.
+
+    A pydantic-ai model that answers the agent's output tool with ``arguments`` when the
+    user prompt contains every text of ``require_text``, and otherwise fails with the 400
+    the origin answers a call no entry matches. Production runs its real agent on it, so
+    the prompt graded here is the one production built.
+    """
+    from pydantic_ai.exceptions import ModelHTTPError
+    from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, UserPromptPart
+    from pydantic_ai.models.function import FunctionModel
+
+    def _answer(messages: list[Any], info: Any) -> ModelResponse:
+        prompt = "\n".join(
+            part.content
+            for message in messages
+            if isinstance(message, ModelRequest)
+            for part in message.parts
+            if isinstance(part, UserPromptPart) and isinstance(part.content, str)
+        )
+        if not prompt_carries(prompt, require_text):
+            missing = [text for text in require_text if text not in prompt]
+            raise ModelHTTPError(status_code=400, model_name="scripted", body=f"prompt lacks {missing}")
+        (output_tool,) = info.output_tools
+        return ModelResponse(parts=[ToolCallPart(tool_name=output_tool.name, args=arguments)])
+
+    return FunctionModel(_answer)
 
 
 def _http_503() -> Exception:

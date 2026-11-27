@@ -87,7 +87,7 @@
         <strong style="line-height: 2;">Actions:</strong>
         {% for status in allowed_transitions %}
         <button class="btn btn-sm {{ 'btn-success' if status == 'active' else 'btn-danger' if status in ('suspended', 'closed', 'rejected') else 'btn-warning' }}"
-                onclick="changeStatus('{{ status }}')">
+                onclick="changeStatus({{ status|tojson|forceescape }})">
             {{ status | replace('_', ' ') | title }}
         </button>
         {% endfor %}
@@ -98,10 +98,9 @@
 
 {% block scripts %}
 <script>
-const scriptRoot = '{{ request.script_root }}' || '';
 function changeStatus(newStatus) {
     if (!confirm('Change account status to "' + newStatus + '"?')) return;
-    fetch(scriptRoot + '/tenant/{{ tenant_id }}/accounts/{{ account.account_id }}/status', {
+    fetch(scriptRoot + '/tenant/' + {{ tenant_id|tojson }} + '/accounts/' + {{ account.account_id|tojson }} + '/status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
@@ -110,7 +109,7 @@ function changeStatus(newStatus) {
     .then(r => r.json())
     .then(data => {
         if (data.success) { window.location.reload(); }
-        else { alert(data.error || 'Failed to change status'); }
+        else { alert(adminErrorText(data)); }
     })
     .catch(err => alert('Error: ' + err));
 }

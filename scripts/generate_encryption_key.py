@@ -8,7 +8,8 @@ Usage:
     python scripts/generate_encryption_key.py
 
 The generated key should be:
-1. Added to .env.secrets as ENCRYPTION_KEY=<generated_key>
+1. Added to .env as ENCRYPTION_KEY=<generated_key>; docs/security.md#secrets-configuration
+   says which file each Docker Compose file reads
 2. Backed up securely (lost key = lost API keys!)
 3. Never committed to version control
 4. Rotated periodically for security
@@ -39,7 +40,7 @@ def main():
     print("IMPORTANT: Save this key securely!")
     print("=" * 80)
     print()
-    print("1. Add to .env.secrets:")
+    print("1. Add to .env (docs/security.md#secrets-configuration says which file each Docker Compose file reads):")
     print(f"   ENCRYPTION_KEY={key}")
     print()
     print("2. Backup securely:")

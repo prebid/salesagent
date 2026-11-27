@@ -28,7 +28,7 @@ from src.services.dynamic_products import (
     generate_variants_for_brief,
     generate_variants_from_signals,
 )
-from tests.factories import InventoryProfileFactory, ProductFactory, TenantFactory
+from tests.factories import InventoryProfileFactory, ProductFactory, SignalFactory, TenantFactory
 from tests.harness._base import IntegrationEnv
 
 # ---------------------------------------------------------------------------
@@ -257,29 +257,14 @@ def _make_signal(
     key: str = "audience",
     value: str = "premium",
 ) -> dict:
-    """Create a realistic signal dict matching signals agent response format."""
-    activation_key = (
-        {"type": key_type, "key": key, "value": value}
-        if key_type == "key_value"
-        else {"type": key_type, "segment_id": value}
+    return SignalFactory.payload(
+        signal_agent_segment_id=segment_id,
+        name=name,
+        agent_url=our_url,
+        key_type=key_type,
+        key=key,
+        value=value,
     )
-    return {
-        "signal_agent_segment_id": segment_id,
-        "name": name,
-        "description": f"Description for {name}",
-        "data_provider": "TestProvider",
-        "coverage_percentage": 85.0,
-        "deployments": [
-            {
-                "type": "platform",
-                "platform": "web",
-                "is_live": True,
-                "deployed_at": "2025-01-01T00:00:00Z",
-                "destination": {"agent_url": our_url},
-                "activation_key": activation_key,
-            }
-        ],
-    }
 
 
 def _make_template(tenant, product_id: str = "template_1"):
@@ -451,24 +436,6 @@ class TestGenerateVariantsForBrief:
             assert any("Auto Intenders" in v.name for v in variants)
 
     @pytest.mark.asyncio
-    async def test_registry_error_persists_nothing(self, factory_env):
-        """Pipeline catches registry errors without persisting variants."""
-        tenant = TenantFactory(tenant_id="test-gvfb-err", subdomain="gvfb-err")
-        _make_template(tenant)
-        factory_env._commit_factory_data()
-
-        mock_registry = AsyncMock()
-        mock_registry.get_signals = AsyncMock(side_effect=RuntimeError("Connection refused"))
-
-        with patch(
-            "src.services.dynamic_products.get_signals_agent_registry",
-            return_value=mock_registry,
-        ):
-            result = await generate_variants_for_brief("test-gvfb-err", "brief")
-
-        assert result is None
-
-    @pytest.mark.asyncio
     async def test_empty_signals_persists_nothing(self, factory_env):
         """Pipeline persists nothing when the signals agent returns no signals."""
         tenant = TenantFactory(tenant_id="test-gvfb-empty", subdomain="gvfb-empty")
@@ -624,3 +591,14 @@ class TestCreateVariantFromTemplate:
         factory_env.get_session().flush()
         assert variant.inventory_profile_id == profile.id
         assert list(variant.format_contract.format_options) == profile_declarations
+
+
+def test_generation_propagates_a_foreign_template_tenant_guard(factory_env):
+    """A repository ownership defect cannot become an empty successful catalogue."""
+    own_tenant = factory_env.ensure_tenant()
+    other_tenant = TenantFactory()
+    template = _make_template(other_tenant)
+    repository = ProductRepository(factory_env.get_session(), own_tenant.tenant_id)
+
+    with pytest.raises(ValueError, match="tenant"):
+        generate_variants_from_signals(repository, template, [_make_signal()], "brief", "https://our.example.com/mcp")

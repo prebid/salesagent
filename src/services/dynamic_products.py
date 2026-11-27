@@ -29,6 +29,10 @@ from src.core.signals_agent_registry import get_signals_agent_registry
 logger = logging.getLogger(__name__)
 
 
+class VariantNameTooLong(ValueError):
+    """A signal produces a variant name that does not fit the stored name column."""
+
+
 def _draws_signals(template: Product) -> bool:
     """An absent agent list uses tenant defaults; an empty list opts out."""
     return template.signals_agent_ids is None or bool(template.signals_agent_ids)
@@ -46,13 +50,9 @@ async def generate_variants_for_brief(tenant_id: str, brief: str, our_agent_url:
     if not template_ids:
         return
 
-    # No transaction spans the remote call. Programming and database failures
-    # reach the boundary under the seller's #1093 error policy.
-    try:
-        signals = await get_signals_agent_registry().get_signals(brief=brief, tenant_id=tenant_id)
-    except (RuntimeError, OSError):
-        logger.exception("Signals service unavailable for tenant %s; serving the persisted catalogue", tenant_id)
-        return
+    # The registry degrades per agent. Local generation and database failures
+    # remain outside that boundary, and no transaction spans the remote call.
+    signals = await get_signals_agent_registry().get_signals(brief=brief, tenant_id=tenant_id)
 
     with ProductUoW(tenant_id) as uow:
         assert uow.products is not None
@@ -130,7 +130,7 @@ def generate_variants_from_signals(
                 f"for signal {signal.get('signal_agent_segment_id')}"
             )
 
-        except (RuntimeError, OSError, ValueError):
+        except VariantNameTooLong:
             logger.exception("Failed to generate a variant for template %s", template.product_id)
             continue
 
@@ -256,7 +256,7 @@ def create_variant_from_template(
     name = customize_name(template.name, signal, activation_key, template.variant_name_template)
     name_limit = Product.name.property.columns[0].type.length
     if len(name) > name_limit:
-        raise ValueError(f"Signal-generated product name exceeds the stored limit of {name_limit} characters")
+        raise VariantNameTooLong(f"Signal-generated product name exceeds the stored limit of {name_limit} characters")
 
     # Inherit mapped data by default. Variant identity, lifecycle and access have explicit owners.
     variant_data = mapped_column_values(template, _VARIANT_OWNED_COLUMNS)

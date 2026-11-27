@@ -11,8 +11,6 @@ import logging
 import os
 import sys
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -43,9 +41,11 @@ def run_uvicorn_asgi(app, port: int):
         import uvicorn
         from asgiref.wsgi import WsgiToAsgi
 
+        from src.core.logging_config import uvicorn_logging_kwargs
+
         asgi_app = WsgiToAsgi(app)
         logger.info(f"Starting Admin UI with Uvicorn on port {port}")
-        uvicorn.run(asgi_app, host="0.0.0.0", port=port, log_level="info")
+        uvicorn.run(asgi_app, host="0.0.0.0", port=port, **uvicorn_logging_kwargs())
     except ImportError as e:
         logger.error(f"Required packages not installed: {e}")
         logger.error("Install with: pip install uvicorn asgiref")
@@ -68,9 +68,7 @@ def main():
     except SystemExit:
         logger.error("❌ Admin UI initialization failed - check logs")
         sys.exit(1)
-    except Exception as e:
-        logger.error(f"❌ Admin UI startup error: {e}")
-        sys.exit(1)
+    # Any other start-up failure propagates: Python prints its traceback and exits 1.
 
     # Import the app factory
     from src.admin.app import create_app

@@ -2,13 +2,13 @@
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import wire_field
+from tests.bdd.steps._outcome_helpers import wire_field, wire_product_ids
 from tests.bdd.steps.generic._dispatch import dispatch_request
 
 
 def _wire_variant(ctx, expected_ids):
     products = wire_field(ctx, "products")
-    assert sorted(product["product_id"] for product in products) == sorted(expected_ids)
+    assert sorted(wire_product_ids(ctx)) == sorted(expected_ids)
     return next(product for product in products if product["product_id"] == ctx["env"].variant_id)
 
 
@@ -84,7 +84,7 @@ def then_existing_price(ctx):
 
 @then("the catalogue contains only static inventory")
 def then_only_static(ctx):
-    assert [p["product_id"] for p in wire_field(ctx, "products")] == ["static"]
+    assert sorted(wire_product_ids(ctx)) == ["static"]
 
 
 @then(parsers.parse('the variant name is "{name}"'))
@@ -105,4 +105,4 @@ def when_open_template(ctx):
 
 @then("the catalogue contains static inventory and its template")
 def then_static_and_template(ctx):
-    assert sorted(p["product_id"] for p in wire_field(ctx, "products")) == ["static", "template"]
+    assert sorted(wire_product_ids(ctx)) == ["static", "template"]

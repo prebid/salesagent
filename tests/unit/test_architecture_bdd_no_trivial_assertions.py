@@ -310,7 +310,7 @@ def _imported_asserting_helpers(tree: ast.Module, cache: dict[str, frozenset[str
             continue
         key = f"import::{node.module}"
         if key not in cache:
-            cache[key] = _asserting_helpers(ast.parse(path.read_text(), filename=str(path)))
+            cache[key] = _asserting_helpers(ast.parse(path.read_text(encoding="utf-8"), filename=str(path)))
         defined = cache[key]
         # The step binds `asname or name`; the DEFINITION is `name`.
         names.update(alias.asname or alias.name for alias in node.names if alias.name in defined)
@@ -327,7 +327,7 @@ def _asserting_helpers_for(relative: str, cache: dict[str, frozenset[str]]) -> f
     """
     if relative not in cache:
         path = BDD_STEPS_DIR.parent.parent / relative
-        tree = ast.parse(path.read_text(), filename=str(path))
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         cache[relative] = _asserting_helpers(tree) | _imported_asserting_helpers(tree, cache)
     return cache[relative]
 

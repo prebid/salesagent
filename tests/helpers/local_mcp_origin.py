@@ -74,10 +74,13 @@ def _recording(origin: MCPOrigin, name: str, handler: Callable[..., Any]) -> Cal
 def run_mcp_origin(
     *,
     tools: Mapping[str, Callable[..., Any]],
-    certfile: Path | str,
-    keyfile: Path | str,
+    certfile: Path | str | None = None,
+    keyfile: Path | str | None = None,
     listen_host: str = "127.0.0.1",
     public_host: str = "127.0.0.1",
+    port: int = 0,
+    path: str = "/mcp",
+    public_origin: str | None = None,
 ) -> Iterator[MCPOrigin]:
     """Serve *tools* as a real MCP endpoint at ``<base_url>`` until the block exits.
 
@@ -96,12 +99,12 @@ def run_mcp_origin(
 
     server = uvicorn.Server(
         uvicorn.Config(
-            server_mcp.http_app(path="/mcp"),
+            server_mcp.http_app(path=path),
             host=listen_host,
-            port=0,
+            port=port,
             log_level="critical",
-            ssl_certfile=str(certfile),
-            ssl_keyfile=str(keyfile),
+            ssl_certfile=str(certfile) if certfile is not None else None,
+            ssl_keyfile=str(keyfile) if keyfile is not None else None,
         )
     )
     thread = threading.Thread(target=server.run, daemon=True)
@@ -114,7 +117,9 @@ def run_mcp_origin(
             raise TimeoutError("the stub MCP origin never started listening")
         time.sleep(0.01)
 
-    origin.base_url = f"https://{public_host}:{server.servers[0].sockets[0].getsockname()[1]}/mcp"
+    scheme = "https" if certfile is not None else "http"
+    advertised = public_origin or f"{scheme}://{public_host}:{server.servers[0].sockets[0].getsockname()[1]}"
+    origin.base_url = f"{advertised}{path}"
     try:
         yield origin
     finally:

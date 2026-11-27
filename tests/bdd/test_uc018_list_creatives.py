@@ -516,14 +516,13 @@ def given_principal_has_n_creatives(ctx: dict, principal_id: str, count: int) ->
     Two ``@given`` phrasings map to this one body: ``parsers.parse`` requires a
     whole-string match, so the "in the same tenant" variant needs its own decorator.
     """
-    from uuid import uuid4
-
     from tests.factories import PrincipalFactory, TenantFactory
+    from tests.factories.mint import mint_id
 
     env = ctx["env"]
     tenant = ctx.get("tenant")
     if tenant is None:
-        tenant_id = f"uc018_iso_{uuid4().hex[:8]}"
+        tenant_id = mint_id("uc018_iso")
         tenant = TenantFactory(tenant_id=tenant_id)
         env.switch_tenant(tenant_id)
         ctx["tenant"] = tenant
@@ -643,11 +642,15 @@ def _seed_media_buy(tenant: Any, principal: Any, media_buy_id: str) -> Any:
     return MediaBuyFactory(tenant=tenant, principal=principal, media_buy_id=media_buy_id)
 
 
-def _assign(tenant: Any, creative: Any, media_buy: Any) -> Any:
-    """Attach *creative* to *media_buy*; the media_buy_ids filter joins on this row."""
+def _assign(tenant: Any, creative: Any, media_buy: Any, package_id: str | None = None) -> Any:
+    """Attach *creative* to *media_buy*, to *package_id* or the factory's default package of it.
+
+    The media_buy_ids filter joins on this row.
+    """
     from tests.factories import CreativeAssignmentFactory
 
-    return CreativeAssignmentFactory(creative=creative, media_buy=media_buy)
+    package = {} if package_id is None else {"package_id": package_id}
+    return CreativeAssignmentFactory(creative=creative, media_buy=media_buy, **package)
 
 
 @given(parsers.parse("the authenticated principal has {count:d} approved creatives"))
@@ -1152,6 +1155,19 @@ def _seed_library(ctx: dict, specs: Sequence[_Spec]) -> list[_Seeded]:
             media_buys[media_buy_id] = _seed_media_buy(tenant, principal, media_buy_id)
         return media_buys[media_buy_id]
 
+    count_packages: list[str] = []
+
+    def count_package(index: int) -> str:
+        """The *index*-th package of the counts buy, seeded once: one creative's assignments are each to their own package."""
+        from tests.factories import MediaPackageFactory
+
+        while len(count_packages) <= index:
+            package = MediaPackageFactory(
+                media_buy=media_buy(_ASSIGNMENT_COUNT_MEDIA_BUY_ID), package_id=f"pkg_count_{len(count_packages)}"
+            )
+            count_packages.append(package.package_id)
+        return count_packages[index]
+
     seeded: list[_Seeded] = []
     for spec in specs:
         overrides: dict[str, Any] = {"status": spec.status, "name": spec.label}
@@ -1163,9 +1179,9 @@ def _seed_library(ctx: dict, specs: Sequence[_Spec]) -> list[_Seeded]:
         if spec.media_buy_id is not None:
             _assign(tenant, creative, media_buy(spec.media_buy_id))
         # Extra assignments on a buy no filter names: the count is the subject here, and
-        # the factory's own package_id sequence keeps them distinct rows.
-        for _ in range(spec.assignment_count):
-            _assign(tenant, creative, media_buy(_ASSIGNMENT_COUNT_MEDIA_BUY_ID))
+        # each is to its own package of that buy, which keeps them distinct rows.
+        for index in range(spec.assignment_count):
+            _assign(tenant, creative, media_buy(_ASSIGNMENT_COUNT_MEDIA_BUY_ID), count_package(index))
         seeded.append(
             _Seeded(
                 creative.creative_id,

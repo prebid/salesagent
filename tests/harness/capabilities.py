@@ -81,14 +81,6 @@ class IdentityMode(Enum):
 DERIVE_IDENTITY = IdentityMode.DERIVE
 OMIT_IDENTITY = IdentityMode.OMIT
 
-#: docker-compose.e2e.yml's adcp-server service, whose environment names the ONE
-#: KEK the LIVE SERVER CONTAINER holds. e2e_rest scenarios resolve a provisioned
-#: key through THAT container, not through this test process, so the runner's KEK
-#: must match it exactly -- a hardcoded literal that drifts from compose is
-#: precisely the KEK mismatch salesagent-dn4i's fix now correctly detects and
-#: refuses to sign with (previously masked by the bug that fix closed).
-_COMPOSE_SERVICE = "adcp-server"
-
 
 def mock_adapter_pricing_models() -> set[str]:
     """The pricing-model set the REAL ``MockAdServer`` adapter reports.
@@ -232,13 +224,20 @@ class CapabilitiesEnv(PublisherAdagentsMixin, AdminOperatorMixin, IntegrationEnv
         product would not exercise it.
         """
         from src.core.database.models import Tenant
+        from src.core.media_channels import MEDIA_CHANNEL_VALUES
         from tests.factories import ProductFactory
+        from tests.factories.product import store_channel_residue
 
         tenant = self.get_session().get(Tenant, self._tenant_id)
         for channel in channels:
             # Channels only: an authorizing publisher would add a publisher to the portfolio
             # the scenario did not declare.
-            ProductFactory(tenant=tenant, channels=[channel], authorize_publisher=False)
+            if channel in MEDIA_CHANNEL_VALUES:
+                ProductFactory(tenant=tenant, channels=[channel], authorize_publisher=False)
+            else:
+                # Outside the enum, which the column refuses on write: only residue of the
+                # channel repair holds one (GH #1532).
+                store_channel_residue(ProductFactory(tenant=tenant, authorize_publisher=False), [channel])
         self._commit_factory_data()
 
     def declare_signing(
@@ -332,34 +331,11 @@ class CapabilitiesEnv(PublisherAdagentsMixin, AdminOperatorMixin, IntegrationEnv
         salesagent-dn4i's production fix now correctly detects and refuses to sign
         with, instead of the previous bug silently masking it.
         """
-        import os
-        from pathlib import Path
-        from unittest.mock import patch
-
-        import yaml
-
         from src.core.database.repositories.signing_key import SigningKeyRepository
         from src.core.signing.keys import provision_signing_key
+        from tests.helpers.signing import hold_stack_kek
 
-        compose_path = Path(__file__).resolve().parents[2] / "docker-compose.e2e.yml"
-        service_env = yaml.safe_load(compose_path.read_text())["services"][_COMPOSE_SERVICE]["environment"]
-        kek_pointer = service_env["ADCP_SIGNING_KEY_PASSPHRASE_ENV"]
-        kek_value = service_env[kek_pointer]
-
-        for label, patcher in (
-            (
-                "kek_env",
-                patch.dict(os.environ, {"ADCP_SIGNING_KEY_PASSPHRASE_ENV": kek_pointer, kek_pointer: kek_value}),
-            ),
-            # The Settings object carrying `key_passphrase_env` is a process global
-            # (src.core.config._settings) and is already built by the time a Given runs, so
-            # it is dropped to make `get_settings()` re-read the environment just set above.
-            # The passphrase ITSELF needs no such reset: `SigningSettings.key_passphrase`
-            # resolves it through `secret_from_env` on every use.
-            ("settings_cache", patch("src.core.config._settings", None)),
-        ):
-            patcher.start()
-            self._guard(f"patch:signing_{label}", patcher.stop)
+        hold_stack_kek(self._guard)
 
         self._commit_factory_data()
         provision_signing_key(

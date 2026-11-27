@@ -23,11 +23,7 @@ from __future__ import annotations
 
 import ast
 
-from tests.unit._architecture_helpers import (
-    assert_guard_subject_resolves,
-    repo_root,
-    src_python_files,
-)
+from tests.unit._architecture_helpers import assert_guard_subject_resolves, rel, repo_root, src_python_files
 
 _ADAGENTS_EXCEPTION_NAMES = frozenset(
     {
@@ -158,13 +154,13 @@ class TestNoRawAdagentsErrorText:
         repo = repo_root()
         all_violations: dict[str, list[str]] = {}
         for path in src_python_files(repo):
-            rel = str(path.relative_to(repo))
-            if rel == _EXEMPT_FILE:
+            rel_path = rel(path, repo)
+            if rel_path == _EXEMPT_FILE:
                 continue
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             lines = find_raw_adagents_error_violations(tree)
             if lines:
-                all_violations[rel] = [f"{lineno}: except {names}" for lineno, names in lines]
+                all_violations[rel_path] = [f"{lineno}: except {names}" for lineno, names in lines]
 
         assert not all_violations, (
             "except-Adagents*Error clause(s) do not route through describe_adagents_error() "

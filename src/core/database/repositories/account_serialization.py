@@ -31,6 +31,7 @@ from adcp.types.domains.core.business_entity import BusinessEntity
 from pydantic import BaseModel
 
 from src.core.schemas.notification import NotificationConfig
+from src.core.webhooks.write_only import scrub_webhook_secrets
 
 if TYPE_CHECKING:
     from src.core.database.models import Account as AccountRow
@@ -121,20 +122,15 @@ def scrub_notification_credentials(
     and the ``sync_accounts`` result -- rather than at each call site, so a future echo
     path cannot forget it.
 
+    The removal itself is :func:`~src.core.webhooks.write_only.scrub_webhook_secrets`,
+    the rule the admin workflow step page applies to a stored request too.
+
     Returns ``None`` for ``None`` and ``[]`` for ``[]``: "never configured" and
     "explicitly cleared" are different states to the buyer.
     """
     if configs is None:
         return None
-    scrubbed: list[NotificationConfig] = []
-    for config in configs:
-        data = as_json_dict(config)
-        auth = data.get("authentication")
-        if isinstance(auth, dict) and "credentials" in auth:
-            auth = {k: v for k, v in auth.items() if k != "credentials"}
-            data["authentication"] = auth
-        scrubbed.append(NotificationConfig.model_validate(data))
-    return scrubbed
+    return [NotificationConfig.model_validate(scrub_webhook_secrets(as_json_dict(config))) for config in configs]
 
 
 def scrub_business_entity(entity: BusinessEntity | Mapping[str, object] | None) -> BusinessEntity | None:

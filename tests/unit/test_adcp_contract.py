@@ -118,7 +118,7 @@ class TestSchemaMatchesLibrary:
         # push_notification_config — a real library field on GetProductsWholesaleRequest
         #   (adcp 6.6 / spec 3.1.1); inherited, present in both sets
         # buying_mode and account are in the library (adcp 3.9) but overridden locally
-        # (buying_mode widened to str|None, account made optional)
+        # (buying_mode made optional, still the pinned BuyingMode enum; account made optional)
         lib_fields = set(LibGetProductsRequest.model_fields.keys())
         local_fields = set(GetProductsRequest.model_fields.keys())
         assert lib_fields == local_fields, f"GetProductsRequest drift: lib={lib_fields}, local={local_fields}"
@@ -183,6 +183,32 @@ class TestSchemaMatchesLibrary:
         our_req = GetProductsRequest()
         assert our_req.brief is None
         assert our_req.brand is None  # adcp 3.6.0: brand replaces brand_manifest
+
+    @pytest.mark.parametrize(
+        "request_fields",
+        [
+            {"buying_mode": "brief", "brief": "video ads"},
+            {"buying_mode": "wholesale"},
+            {"buying_mode": "refine", "refine": [{"scope": "request", "ask": "more video"}]},
+            {"brief": "video ads"},
+        ],
+        ids=["brief", "wholesale", "refine", "absent"],
+    )
+    def test_get_products_request_accepts_each_pinned_buying_mode(self, request_fields):
+        """Each mode in the pinned ``BuyingMode`` enum parses, and the field stays optional.
+
+        Optional on purpose: get-products-request.json says sellers receiving requests from
+        pre-v3 clients without buying_mode "SHOULD default to 'brief'" (#2710, D1 lenient).
+        """
+        assert GetProductsRequest(**request_fields).buying_mode == request_fields.get("buying_mode")
+
+    def test_get_products_request_refuses_a_buying_mode_outside_the_enum(self):
+        """A mode the pinned enum does not list is a schema violation on ``buying_mode`` (#2117)."""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError) as excinfo:
+            GetProductsRequest(buying_mode="auction", brief="video ads")
+        assert [error["loc"] for error in excinfo.value.errors()] == [("buying_mode",)]
 
     def test_get_products_request_brand_accepts_domain(self):
         """Verify brand (BrandReference) accepts domain field per adcp 3.6.0."""

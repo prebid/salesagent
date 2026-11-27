@@ -29,6 +29,22 @@ from threading import Thread
 from time import sleep as _sleep
 from typing import Any, ClassVar
 
+
+def guarded_origin[OriginValue](
+    guard: Callable[[str, Callable[[], None]], None],
+    label: str,
+    context: contextlib.AbstractContextManager[OriginValue],
+) -> OriginValue:
+    """Enter one origin and register its release with the owning harness."""
+    origin = context.__enter__()
+
+    def close() -> None:
+        context.__exit__(None, None, None)
+
+    guard(label, close)
+    return origin
+
+
 # Default body for a programmable origin that a test never configures.
 _DEFAULT_BODY = b'{"ok": true}'
 

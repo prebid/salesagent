@@ -18,8 +18,10 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import InventoryProfile, PricingOption, Product, Publisher, Tenant
 from src.core.database.product_pricing import pricing_option_terms
+from src.core.database.repositories.base import Repository
 from src.core.database.repositories.effects import SessionEffectsMixin
-from src.core.format_satisfaction import refuse_outside_common_intersection
+from src.core.format_satisfaction import FormatOptionsOutsideCommonIntersection, refuse_outside_common_intersection
+from src.core.operator_errors import ProductNotFound
 from src.core.publisher_format_catalog import PublisherCatalog, format_option_refusal
 
 logger = logging.getLogger(__name__)
@@ -75,7 +77,7 @@ def offer_refusal(product: Product, publisher_properties: list[dict], catalog: P
     return format_option_refusal(authored or product.format_options, publisher_properties, catalog)
 
 
-class ProductRepository(SessionEffectsMixin):
+class ProductRepository(SessionEffectsMixin, Repository):
     """Tenant-scoped data access for Product.
 
     All queries filter by tenant_id automatically. Callers cannot bypass
@@ -88,6 +90,8 @@ class ProductRepository(SessionEffectsMixin):
         session: SQLAlchemy session (caller manages lifecycle).
         tenant_id: Tenant scope for all queries.
     """
+
+    NOT_FOUND = ProductNotFound
 
     _IMMUTABLE_FIELDS: frozenset[str] = frozenset({"tenant_id", "product_id"})
 
@@ -198,10 +202,17 @@ class ProductRepository(SessionEffectsMixin):
     # Writes
     # ------------------------------------------------------------------
 
+    def _require_owned(self, *products: Product) -> None:
+        """Require every row being copied or persisted to belong to this repository."""
+        for product in products:
+            if product.tenant_id != self._tenant_id:
+                raise ValueError(
+                    f"Tenant mismatch: product.tenant_id={product.tenant_id!r} != repository tenant_id={self._tenant_id!r}"
+                )
+
     def get_or_create_variant(self, template: Product, variant_id: str, build: Callable[[], Product]) -> Product:
         """Create or repair one variant; a concurrent winner owns its existing pricing."""
-        if template.tenant_id != self._tenant_id:
-            raise ValueError("Template must belong to the repository tenant")
+        self._require_owned(template)
         with self.savepoint():
             candidate = self.get_by_id_with_pricing(variant_id)
             is_new = candidate is None
@@ -230,22 +241,20 @@ class ProductRepository(SessionEffectsMixin):
         """Persist a new product within this tenant.
 
         The product.tenant_id must match the repository's tenant_id.
-        Raises ValueError if there is a tenant mismatch, or if the product sells several
-        publishers without placements and declares an option not all of them accept
-        (:func:`~src.core.format_satisfaction.refuse_outside_common_intersection`).
+        Raises ValueError if there is a tenant mismatch, and
+        :class:`~src.core.format_satisfaction.FormatOptionsOutsideCommonIntersection` if the
+        product sells several publishers without placements and declares an option not all of
+        them accept.
 
         Does NOT commit — the UoW handles that.
         """
-        if product.tenant_id != self._tenant_id:
-            raise ValueError(
-                f"Tenant mismatch: product.tenant_id={product.tenant_id!r} != repository tenant_id={self._tenant_id!r}"
-            )
+        self._require_owned(product)
         # Added before the check, so the pending product reads its tenant's publishers' format
         # catalogs (``Product.format_contract``); a refused product leaves the session again.
         self._session.add(product)
         try:
             refuse_outside_common_intersection(product)
-        except ValueError:
+        except FormatOptionsOutsideCommonIntersection:
             self._session.expunge(product)
             raise
         self._session.flush()
@@ -280,8 +289,7 @@ class ProductRepository(SessionEffectsMixin):
 
     def inherit_missing_variant_pricing(self, variant: Product, template: Product) -> None:
         """Complete an unpriced variant once, preserving any existing pricing."""
-        if variant.tenant_id != self._tenant_id or template.tenant_id != self._tenant_id:
-            raise ValueError("Variant and template must belong to the repository tenant")
+        self._require_owned(variant, template)
         if variant.pricing_options:
             return
         variant.pricing_options = [
@@ -293,13 +301,3 @@ class ProductRepository(SessionEffectsMixin):
             )
             for option in template.pricing_options
         ]
-
-    def get_all_pricing_options(self) -> list[PricingOption]:
-        """Get all pricing options for the tenant."""
-        return list(
-            self._session.scalars(
-                select(PricingOption).where(
-                    PricingOption.tenant_id == self._tenant_id,
-                )
-            ).all()
-        )

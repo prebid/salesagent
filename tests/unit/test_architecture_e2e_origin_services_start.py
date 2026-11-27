@@ -250,3 +250,19 @@ def test_front_disagreements_name_each_missing_piece() -> None:
     assert front_disagreements(["radio-psatest.com"], ["radio-psatest.com"], sans) == [
         "radio-psatest.com is not covered by SAN_DNS_NAMES"
     ]
+
+
+@pytest.mark.arch_guard
+def test_standalone_tls_sets_every_template_variable() -> None:
+    """The standalone creative front must render every shared template variable."""
+    template = _NGINX_TLS_TEMPLATE.read_text(encoding="utf-8")
+    required = set(re.findall(r"\$\{([A-Z_][A-Z0-9_]*)\}", template))
+    script = (_REPO_ROOT / "scripts/creative-agent-stack.sh").read_text(encoding="utf-8")
+    launches = script.replace("\\\n", " ").splitlines()
+    launch = next(line for line in launches if "docker run" in line and '--name "$TLS_PROXY"' in line)
+    supplied = set(re.findall(r"-e\s+([A-Z_][A-Z0-9_]*)=", launch))
+    assert not (required - supplied), format_failure(
+        summary="the standalone TLS front leaves nginx template variables undefined",
+        violations=sorted(required - supplied),
+        fix_hint="Pass each shared template variable in the standalone creative-agent TLS launch.",
+    )

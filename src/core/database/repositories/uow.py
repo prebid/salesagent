@@ -36,15 +36,18 @@ from sqlalchemy.orm import Session
 
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.account import AccountRepository
+from src.core.database.repositories.audit_log import AuditLogRepository
 from src.core.database.repositories.creative import CreativeAssignmentRepository, CreativeRepository
 from src.core.database.repositories.currency_limit import CurrencyLimitRepository
 from src.core.database.repositories.effects import begin_effects, drain_after_commit, end_effects
 from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
+from src.core.database.repositories.principal import PrincipalRepository
 from src.core.database.repositories.product import OfferedProduct, ProductRepository, offered_products
 from src.core.database.repositories.publisher import PublisherRepository
 from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
 from src.core.database.repositories.signing_key import SigningKeyRepository
+from src.core.database.repositories.sync_job import SyncJobRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.database.repositories.workflow import WorkflowRepository
 
@@ -318,7 +321,9 @@ class WorkflowUoW(BaseUoW):
 class TenantConfigUoW(BaseUoW):
     """Unit of Work for tenant configuration reads.
 
-    Wraps a database session and provides a tenant-scoped TenantConfigRepository.
+    Wraps a database session and provides a tenant-scoped TenantConfigRepository, and the
+    tenant's audit log for a settings page that shows what its configuration did (the
+    Policy page's recent policy checks).
     Auto-commits on clean exit, rolls back on exception.
 
     Args:
@@ -326,13 +331,33 @@ class TenantConfigUoW(BaseUoW):
     """
 
     tenant_config: TenantConfigRepository | None
+    audit_logs: AuditLogRepository | None
 
     def _init_repos(self) -> None:
         assert self._session is not None
         self.tenant_config = TenantConfigRepository(self._session, self._tenant_id)
+        self.audit_logs = AuditLogRepository(self._session, self._tenant_id)
 
     def _clear_repos(self) -> None:
         self.tenant_config = None
+        self.audit_logs = None
+
+
+class PrincipalUoW(BaseUoW):
+    """Unit of Work for reading a tenant's principals (advertisers).
+
+    Args:
+        tenant_id: Tenant scope for all repository queries.
+    """
+
+    principals: PrincipalRepository | None
+
+    def _init_repos(self) -> None:
+        assert self._session is not None
+        self.principals = PrincipalRepository(self._session, self._tenant_id)
+
+    def _clear_repos(self) -> None:
+        self.principals = None
 
 
 class AccountUoW(BaseUoW):
@@ -530,3 +555,18 @@ class PublisherUoW(BaseUoW):
         "publishers": PublisherRepository,
         "tenant_config": TenantConfigRepository,
     }
+
+
+class SyncJobUoW(BaseUoW):
+    """Unit of Work for a tenant's sync jobs.
+
+    For a caller that records a job's failure with no session of its own open
+    (``src.services.sync_jobs.record_sync_failure``).
+
+    Args:
+        tenant_id: Tenant scope for all repository queries.
+    """
+
+    sync_jobs: SyncJobRepository | None
+
+    _REPOSITORIES: ClassVar[Mapping[str, type]] = {"sync_jobs": SyncJobRepository}

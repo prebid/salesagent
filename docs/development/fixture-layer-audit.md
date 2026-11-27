@@ -101,9 +101,9 @@ pair with a different signature.
 
 ## The one cause under all of it: the env half-seeds
 
-`IntegrationEnv.__enter__` does not seed a tenant or principal in process. Its
-`_seed_e2e_identity` (`tests/harness/_base.py:1196`) is called at `:1332` in e2e
-mode only, and the docstring gives the reason:
+`IntegrationEnv.__enter__` does not seed a tenant or principal in process. It
+calls `_seed_identity` (in `tests/harness/_base.py`; `_seed_e2e_identity` when this
+was measured) in e2e mode only, and the docstring gave the reason:
 
 > "in-process they don't need one (identity is a mock)"
 

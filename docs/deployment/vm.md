@@ -180,10 +180,11 @@ configured ad server. It is not for a deployment buyers use.
 
 ## Step 6: Build the reference creative agent
 
-Products name creative formats, and the app lists them by asking a creative agent. The public agent
-at `https://creative.adcontextprotocol.org` serves AdCP 3.2, whose catalog this release's AdCP 3.1.1
-parser rejects (#2274), so `list_creative_formats` comes back empty. Run the reference agent at the
-version the repository pins:
+Products name creative formats, and the app lists them by asking a creative agent. With
+`CREATIVE_AGENT_URL` unset, it asks the public agent at `https://creative.adcontextprotocol.org`,
+whose catalog changes without notice, and leaves out every format that does not validate against
+the AdCP version this release pins. Run the reference agent at the version the repository pins,
+which serves the catalog of the AdCP release that matches that version:
 
 ```bash
 cd /opt/salesagent
@@ -381,7 +382,9 @@ docker compose start app
 
 ## Upgrades and rollback
 
-Migrations run when the app starts, so an upgrade is: back up, build, switch.
+Migrations run when the app starts, so an upgrade is: back up, build, switch. First run the
+read-only [checks before an upgrade](single-tenant.md#checks-before-an-upgrade) for the migrations
+the new version carries.
 
 ```bash
 cd /opt/salesagent
@@ -417,9 +420,9 @@ schema in a way the old version cannot read; check `docker compose logs app` fir
 |---|---|
 | TLS handshake fails (`tlsv1 alert internal error`) for a host | Caddy asked `/tls/ask` and got 403: the host is not an active tenant's host. The refusal is in the app's log, not Caddy's: `docker compose logs app \| grep tls/ask`. Ask it yourself: `docker compose exec app curl -s -o /dev/null -w '%{http_code}\n' 'http://localhost:8000/tls/ask?domain=<host>'` must print 200. A 404 for every host means the route is not mounted: the `app` service is missing `TLS_ASK_ENABLED=true` (`docker compose exec app printenv TLS_ASK_ENABLED`). If it prints 200 and the handshake still fails, the host's DNS does not point at the VM yet, so Let's Encrypt cannot validate it (`docker compose logs caddy`). |
 | `app` is healthy but every request returns 502 | The image's nginx did not start. You built an image without #2310; rebuild from a ref that has it. |
-| `list_creative_formats` returns no formats | The app cannot read the creative agent's catalog. With `CREATIVE_AGENT_URL` unset it asks the public agent, whose AdCP 3.2 catalog is rejected (#2274); run the reference agent (step 6). With it set, check `curl https://<apex>/api/creative-agent/health` from the VM, which also proves the VM reaches its own public address. |
-| Admin login fails after the provider redirects back | The redirect URI registered with the provider differs from `GOOGLE_OAUTH_REDIRECT_URI` in `.env`, or the ID token has no `email`. |
-| A tenant answers `CONFIGURATION_ERROR` | The `Host` the request named is not a tenant's host. Check the tenant's **Custom Domain** in the Admin UI. |
+| `list_creative_formats` returns no formats | The app cannot read the creative agent's catalog. With `CREATIVE_AGENT_URL` unset it asks the public agent, and the response's `errors` name the cause: `AGENT_UNREACHABLE` when the agent did not answer, `AGENT_FORMATS_DISCARDED` when its formats do not validate against the pinned AdCP version. Run the reference agent (step 6). With it set, check `curl https://<apex>/api/creative-agent/health` from the VM, which also proves the VM reaches its own public address. |
+| Admin login fails at the provider or after it redirects back | The redirect URI registered with the provider differs from `GOOGLE_OAUTH_REDIRECT_URI` in `.env`, or the ID token has no `email`. |
+| A request answers `TENANT_UNDEFINED` (HTTP 421, "No seller is served at the address this request named") | The request's `Host` is not a tenant's host, and the request sends no `x-adcp-tenant` header that names a tenant. Check the tenant's **Custom Domain** in the Admin UI. |
 | A publisher authorizes nothing although its file names the tenant | Open the publisher under **Inventory → Publishers**: its last fetch status says whether the file was not found, unreachable or invalid. A file is fetched at `https://<publisher>/.well-known/adagents.json`, and its entry `url` must name the tenant's agent URL. Fix the file, then **Sync All**. |
 | Seeded sample products show formats no buyer can build | Fixed by #2311 (the seed scripts used format ids the creative agent does not publish). |
 

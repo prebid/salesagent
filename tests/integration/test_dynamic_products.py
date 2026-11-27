@@ -15,12 +15,12 @@ import pytest
 
 from scripts.setup.seed_products import whole_publisher_selections
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Product, Tenant
+from src.core.database.models import Product
 from src.services.dynamic_products import (
     archive_expired_variants,
     generate_variants_for_brief,
 )
-from tests.factories import ProductFactory, TenantFactory
+from tests.factories import ProductFactory, SignalFactory
 from tests.harness._base import BareIntegrationEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -28,32 +28,13 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 OUR_AGENT_URL = "https://sales.example.com"
 
 
-def _get_variants(tenant_id: str) -> list[Product]:
-    """Read all dynamic variants from DB (fresh session, not detached)."""
-    from sqlalchemy import select
+def _get_variants(env: BareIntegrationEnv, tenant_id: str) -> list[Product]:
+    """Read persisted variants through the harness's open session and tenant scope."""
+    from src.core.database.repositories.product import ProductRepository
 
-    with get_db_session() as session:
-        return list(session.scalars(select(Product).filter_by(tenant_id=tenant_id, is_dynamic_variant=True)).all())
-
-
-def _ensure_tenant(tenant_id: str) -> Tenant:
-    """Create a tenant in the DB if it doesn't exist."""
-    from sqlalchemy import select
-
-    from tests.utils.database_helpers import vhost_for
-
-    session = TenantFactory._meta.sqlalchemy_session
-    assert session is not None
-    existing = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-    if existing is None:
-        existing = TenantFactory(
-            tenant_id=tenant_id,
-            name=f"Test {tenant_id}",
-            subdomain=tenant_id,
-            virtual_host=vhost_for(tenant_id),
-            ad_server="mock",
-        )
-    return existing
+    session = env.get_session()
+    session.expire_all()
+    return [product for product in ProductRepository(session, tenant_id).list_all() if product.is_dynamic_variant]
 
 
 def _make_signal(
@@ -68,31 +49,22 @@ def _make_signal(
     key: str = "axe_segment",
     value: str = "auto_intender_123",
 ) -> dict:
-    """Build a realistic signal dict matching the structure from signals agents."""
-    activation_key: dict = {"type": key_type}
-    if key_type == "key_value":
-        activation_key["key"] = key
-        activation_key["value"] = value
-    elif key_type == "segment_id":
-        activation_key["segment_id"] = value
-
-    return {
-        "signal_agent_segment_id": segment_id,
-        "name": name,
-        "description": description,
-        "data_provider": data_provider,
-        "coverage_percentage": coverage_percentage,
-        "deployments": [
-            {
-                "destination": {"agent_url": agent_url},
-                "is_live": is_live,
-                "activation_key": activation_key,
-            }
-        ],
-    }
+    return SignalFactory.payload(
+        signal_agent_segment_id=segment_id,
+        name=name,
+        description=description,
+        data_provider=data_provider,
+        coverage_percentage=float(coverage_percentage),
+        agent_url=agent_url,
+        is_live=is_live,
+        key_type=key_type,
+        key=key,
+        value=value,
+    )
 
 
 def _create_dynamic_template(
+    factory_env,
     tenant_id: str,
     product_id: str = "tmpl_001",
     name: str = "Display Template",
@@ -110,7 +82,7 @@ def _create_dynamic_template(
         countries = ["US"]
 
     return ProductFactory(
-        tenant=_ensure_tenant(tenant_id),
+        tenant=factory_env.ensure_tenant(tenant_id),
         product_id=product_id,
         name=name,
         description=f"Dynamic template for {name}",
@@ -138,9 +110,9 @@ def factory_env(integration_db):
 class TestGenerateVariantsForBrief:
     """End-to-end tests for generate_variants_for_brief with mock registry."""
 
-    def test_no_templates_persists_nothing(self, integration_db):
+    def test_no_templates_persists_nothing(self, integration_db, factory_env):
         """No dynamic templates in DB → persists no variants."""
-        _ensure_tenant("test_tenant")
+        factory_env.ensure_tenant("test_tenant")
 
         with patch("src.services.dynamic_products.get_signals_agent_registry") as mock_get:
             registry = AsyncMock()
@@ -148,13 +120,13 @@ class TestGenerateVariantsForBrief:
             result = asyncio.run(generate_variants_for_brief("test_tenant", "display ads", OUR_AGENT_URL))
 
         assert result is None
-        assert _get_variants("test_tenant") == []
+        assert _get_variants(factory_env, "test_tenant") == []
         registry.get_signals.assert_not_called()
 
-    def test_templates_with_signals_generates_variants(self, integration_db):
+    def test_templates_with_signals_generates_variants(self, integration_db, factory_env):
         """Templates + signals → variants with correct fields."""
-        _ensure_tenant("test_tenant")
-        _create_dynamic_template("test_tenant", product_id="tmpl_001")
+        factory_env.ensure_tenant("test_tenant")
+        _create_dynamic_template(factory_env, "test_tenant", product_id="tmpl_001")
 
         signals = [
             _make_signal(segment_id="seg_001", name="Auto Intenders", value="auto_123"),
@@ -169,28 +141,20 @@ class TestGenerateVariantsForBrief:
             result = asyncio.run(generate_variants_for_brief("test_tenant", "targeting brief", OUR_AGENT_URL))
 
         assert result is None
-        assert len(_get_variants("test_tenant")) == 2
+        variants = _get_variants(factory_env, "test_tenant")
+        assert len(variants) == 2
+        for variant in variants:
+            assert variant.is_dynamic_variant is True
+            assert variant.is_dynamic is False
+            assert variant.parent_product_id == "tmpl_001"
+            assert variant.activation_key is not None
+            assert variant.signal_metadata is not None
+            assert variant.tenant_id == "test_tenant"
 
-        # Verify persisted variants in DB (result objects are detached from session)
-        from sqlalchemy import select
-
-        with get_db_session() as session:
-            variants = session.scalars(
-                select(Product).filter_by(tenant_id="test_tenant", is_dynamic_variant=True)
-            ).all()
-            assert len(variants) == 2
-            for variant in variants:
-                assert variant.is_dynamic_variant is True
-                assert variant.is_dynamic is False
-                assert variant.parent_product_id == "tmpl_001"
-                assert variant.activation_key is not None
-                assert variant.signal_metadata is not None
-                assert variant.tenant_id == "test_tenant"
-
-    def test_signals_agent_persists_nothing(self, integration_db):
+    def test_signals_agent_persists_nothing(self, integration_db, factory_env):
         """Signals agent returns empty list → no variants generated."""
-        _ensure_tenant("test_tenant")
-        _create_dynamic_template("test_tenant")
+        factory_env.ensure_tenant("test_tenant")
+        _create_dynamic_template(factory_env, "test_tenant")
 
         with patch("src.services.dynamic_products.get_signals_agent_registry") as mock_get:
             registry = AsyncMock()
@@ -200,27 +164,12 @@ class TestGenerateVariantsForBrief:
             result = asyncio.run(generate_variants_for_brief("test_tenant", "brief", OUR_AGENT_URL))
 
         assert result is None
-        assert _get_variants("test_tenant") == []
+        assert _get_variants(factory_env, "test_tenant") == []
 
-    def test_signals_agent_exception_persists_nothing(self, integration_db):
-        """Signals agent raises exception → caught, persists no variants."""
-        _ensure_tenant("test_tenant")
-        _create_dynamic_template("test_tenant")
-
-        with patch("src.services.dynamic_products.get_signals_agent_registry") as mock_get:
-            registry = AsyncMock()
-            registry.get_signals = AsyncMock(side_effect=RuntimeError("Connection failed"))
-            mock_get.return_value = registry
-
-            result = asyncio.run(generate_variants_for_brief("test_tenant", "brief", OUR_AGENT_URL))
-
-        assert result is None
-        assert _get_variants("test_tenant") == []
-
-    def test_max_signals_limits_variants(self, integration_db):
+    def test_max_signals_limits_variants(self, integration_db, factory_env):
         """max_signals=2 limits variant generation to 2 signals."""
-        _ensure_tenant("test_tenant")
-        _create_dynamic_template("test_tenant", max_signals=2)
+        factory_env.ensure_tenant("test_tenant")
+        _create_dynamic_template(factory_env, "test_tenant", max_signals=2)
 
         signals = [_make_signal(segment_id=f"seg_{i}", name=f"Signal {i}", value=f"val_{i}") for i in range(5)]
 
@@ -232,13 +181,13 @@ class TestGenerateVariantsForBrief:
             result = asyncio.run(generate_variants_for_brief("test_tenant", "brief", OUR_AGENT_URL))
 
         assert result is None
-        assert len(_get_variants("test_tenant")) == 2
+        assert len(_get_variants(factory_env, "test_tenant")) == 2
 
-    def test_multiple_templates(self, integration_db):
+    def test_multiple_templates(self, integration_db, factory_env):
         """Multiple templates × signals → variants from each template."""
-        _ensure_tenant("test_tenant")
-        _create_dynamic_template("test_tenant", product_id="tmpl_A", name="Template A")
-        _create_dynamic_template("test_tenant", product_id="tmpl_B", name="Template B")
+        factory_env.ensure_tenant("test_tenant")
+        _create_dynamic_template(factory_env, "test_tenant", product_id="tmpl_A", name="Template A")
+        _create_dynamic_template(factory_env, "test_tenant", product_id="tmpl_B", name="Template B")
 
         signals = [_make_signal(segment_id="seg_001", value="val_001")]
 
@@ -250,15 +199,15 @@ class TestGenerateVariantsForBrief:
             result = asyncio.run(generate_variants_for_brief("test_tenant", "brief", OUR_AGENT_URL))
 
         assert result is None
-        assert len(_get_variants("test_tenant")) == 2
-        variants = _get_variants("test_tenant")
+        variants = _get_variants(factory_env, "test_tenant")
+        assert len(variants) == 2
         parent_ids = {v.parent_product_id for v in variants}
         assert parent_ids == {"tmpl_A", "tmpl_B"}
 
-    def test_variant_id_is_deterministic(self, integration_db):
+    def test_variant_id_is_deterministic(self, integration_db, factory_env):
         """Same template + signal → same variant ID across calls."""
-        _ensure_tenant("test_tenant")
-        _create_dynamic_template("test_tenant")
+        factory_env.ensure_tenant("test_tenant")
+        _create_dynamic_template(factory_env, "test_tenant")
 
         signals = [_make_signal()]
 
@@ -278,17 +227,17 @@ class TestGenerateVariantsForBrief:
             result2 = asyncio.run(generate_variants_for_brief("test_tenant", "brief", OUR_AGENT_URL))
 
         assert result1 is None
-        assert len(_get_variants("test_tenant")) == 1
+        assert len(_get_variants(factory_env, "test_tenant")) == 1
         assert result2 is None
-        assert len(_get_variants("test_tenant")) == 1
+        assert len(_get_variants(factory_env, "test_tenant")) == 1
         # Both calls produce same variant — verify via DB
-        variants = _get_variants("test_tenant")
+        variants = _get_variants(factory_env, "test_tenant")
         assert len(variants) == 1  # Only one variant, reused
 
-    def test_existing_variant_updated_not_duplicated(self, integration_db):
+    def test_existing_variant_updated_not_duplicated(self, integration_db, factory_env):
         """Second call with same signal updates existing variant, doesn't create duplicate."""
-        _ensure_tenant("test_tenant")
-        _create_dynamic_template("test_tenant")
+        factory_env.ensure_tenant("test_tenant")
+        _create_dynamic_template(factory_env, "test_tenant")
 
         signals = [_make_signal()]
 
@@ -302,20 +251,13 @@ class TestGenerateVariantsForBrief:
 
         # Should be the same variant (updated, not new)
         assert result2 is None
-        assert len(_get_variants("test_tenant")) == 1
+        variants = _get_variants(factory_env, "test_tenant")
+        assert len(variants) == 1
 
-        # Verify only one variant in DB
-        from sqlalchemy import select
-
-        with get_db_session() as session:
-            stmt = select(Product).filter_by(tenant_id="test_tenant", is_dynamic_variant=True)
-            all_variants = session.scalars(stmt).all()
-        assert len(all_variants) == 1
-
-    def test_variant_has_signal_metadata(self, integration_db):
+    def test_variant_has_signal_metadata(self, integration_db, factory_env):
         """Variant stores signal metadata for traceability."""
-        _ensure_tenant("test_tenant")
-        _create_dynamic_template("test_tenant")
+        factory_env.ensure_tenant("test_tenant")
+        _create_dynamic_template(factory_env, "test_tenant")
 
         signals = [
             _make_signal(
@@ -335,18 +277,18 @@ class TestGenerateVariantsForBrief:
             result = asyncio.run(generate_variants_for_brief("test_tenant", "brief", OUR_AGENT_URL))
 
         assert result is None
-        assert len(_get_variants("test_tenant")) == 1
-        variants = _get_variants("test_tenant")
+        variants = _get_variants(factory_env, "test_tenant")
+        assert len(variants) == 1
         meta = variants[0].signal_metadata
         assert meta["signal_agent_segment_id"] == "seg_meta"
         assert meta["name"] == "Metadata Signal"
         assert meta["data_provider"] == "Test Provider"
         assert meta["coverage_percentage"] == 92
 
-    def test_variant_name_customized(self, integration_db):
+    def test_variant_name_customized(self, integration_db, factory_env):
         """Variant name includes signal name by default."""
-        _ensure_tenant("test_tenant")
-        _create_dynamic_template("test_tenant", name="Display Banner")
+        factory_env.ensure_tenant("test_tenant")
+        _create_dynamic_template(factory_env, "test_tenant", name="Display Banner")
 
         signals = [_make_signal(name="Sports Fans")]
 
@@ -358,15 +300,16 @@ class TestGenerateVariantsForBrief:
             result = asyncio.run(generate_variants_for_brief("test_tenant", "brief", OUR_AGENT_URL))
 
         assert result is None
-        assert len(_get_variants("test_tenant")) == 1
-        variants = _get_variants("test_tenant")
+        variants = _get_variants(factory_env, "test_tenant")
+        assert len(variants) == 1
         assert "Sports Fans" in variants[0].name
         assert "Display Banner" in variants[0].name
 
-    def test_variant_name_template_macro(self, integration_db):
+    def test_variant_name_template_macro(self, integration_db, factory_env):
         """Custom variant_name_template with macros is expanded."""
-        _ensure_tenant("test_tenant")
+        factory_env.ensure_tenant("test_tenant")
         _create_dynamic_template(
+            factory_env,
             "test_tenant",
             name="Banner",
             variant_name_template="{{name}} ({{signal.name}})",
@@ -382,14 +325,14 @@ class TestGenerateVariantsForBrief:
             result = asyncio.run(generate_variants_for_brief("test_tenant", "brief", OUR_AGENT_URL))
 
         assert result is None
-        assert len(_get_variants("test_tenant")) == 1
-        variants = _get_variants("test_tenant")
+        variants = _get_variants(factory_env, "test_tenant")
+        assert len(variants) == 1
         assert variants[0].name == "Banner (Auto Intenders)"
 
-    def test_signal_without_matching_deployment_skipped(self, integration_db):
+    def test_signal_without_matching_deployment_skipped(self, integration_db, factory_env):
         """Signal with no live deployment matching our URL is skipped."""
-        _ensure_tenant("test_tenant")
-        _create_dynamic_template("test_tenant")
+        factory_env.ensure_tenant("test_tenant")
+        _create_dynamic_template(factory_env, "test_tenant")
 
         signals = [_make_signal(is_live=False)]
 
@@ -401,12 +344,12 @@ class TestGenerateVariantsForBrief:
             result = asyncio.run(generate_variants_for_brief("test_tenant", "brief", OUR_AGENT_URL))
 
         assert result is None
-        assert _get_variants("test_tenant") == []
+        assert _get_variants(factory_env, "test_tenant") == []
 
-    def test_variant_has_expiration(self, integration_db):
+    def test_variant_has_expiration(self, integration_db, factory_env):
         """Variant has expires_at set based on template TTL."""
-        _ensure_tenant("test_tenant")
-        _create_dynamic_template("test_tenant", variant_ttl_days=14)
+        factory_env.ensure_tenant("test_tenant")
+        _create_dynamic_template(factory_env, "test_tenant", variant_ttl_days=14)
 
         signals = [_make_signal()]
 
@@ -418,18 +361,18 @@ class TestGenerateVariantsForBrief:
             result = asyncio.run(generate_variants_for_brief("test_tenant", "brief", OUR_AGENT_URL))
 
         assert result is None
-        assert len(_get_variants("test_tenant")) == 1
-        variants = _get_variants("test_tenant")
+        variants = _get_variants(factory_env, "test_tenant")
+        assert len(variants) == 1
         assert variants[0].expires_at is not None
         # Should expire roughly 14 days from now
         expected_min = datetime.now(UTC) + timedelta(days=13)
         expected_max = datetime.now(UTC) + timedelta(days=15)
         assert expected_min < variants[0].expires_at < expected_max
 
-    def test_template_without_signals_agent_ids_skipped(self, integration_db):
+    def test_template_without_signals_agent_ids_skipped(self, integration_db, factory_env):
         """Template with signals_agent_ids=[] (empty list) is skipped."""
-        _ensure_tenant("test_tenant")
-        _create_dynamic_template("test_tenant", signals_agent_ids=[])
+        factory_env.ensure_tenant("test_tenant")
+        _create_dynamic_template(factory_env, "test_tenant", signals_agent_ids=[])
 
         signals = [_make_signal()]
 
@@ -442,7 +385,7 @@ class TestGenerateVariantsForBrief:
 
         # Empty signals_agent_ids → skipped in the template loop
         assert result is None
-        assert _get_variants("test_tenant") == []
+        assert _get_variants(factory_env, "test_tenant") == []
 
 
 # ---------------------------------------------------------------------------
@@ -453,9 +396,9 @@ class TestGenerateVariantsForBrief:
 class TestArchiveExpiredVariants:
     """Tests for archive_expired_variants()."""
 
-    def test_expired_variants_archived(self, integration_db):
+    def test_expired_variants_archived(self, integration_db, factory_env):
         """Expired variants get archived_at set."""
-        _ensure_tenant("test_tenant")
+        factory_env.ensure_tenant("test_tenant")
 
         with get_db_session() as session:
             variant = Product(
@@ -482,9 +425,9 @@ class TestArchiveExpiredVariants:
             archived = session.scalars(select(Product).filter_by(product_id="variant_expired")).first()
             assert archived.archived_at is not None
 
-    def test_non_expired_variants_untouched(self, integration_db):
+    def test_non_expired_variants_untouched(self, integration_db, factory_env):
         """Non-expired variants are not archived."""
-        _ensure_tenant("test_tenant")
+        factory_env.ensure_tenant("test_tenant")
 
         with get_db_session() as session:
             variant = Product(
@@ -505,9 +448,9 @@ class TestArchiveExpiredVariants:
         count = archive_expired_variants("test_tenant")
         assert count == 0
 
-    def test_already_archived_not_rearchived(self, integration_db):
+    def test_already_archived_not_rearchived(self, integration_db, factory_env):
         """Already-archived variants are not re-archived."""
-        _ensure_tenant("test_tenant")
+        factory_env.ensure_tenant("test_tenant")
 
         with get_db_session() as session:
             variant = Product(
@@ -529,10 +472,10 @@ class TestArchiveExpiredVariants:
         count = archive_expired_variants("test_tenant")
         assert count == 0
 
-    def test_tenant_filter_scoping(self, integration_db):
+    def test_tenant_filter_scoping(self, integration_db, factory_env):
         """archive_expired_variants only affects specified tenant."""
-        _ensure_tenant("tenant_a")
-        _ensure_tenant("tenant_b")
+        factory_env.ensure_tenant("tenant_a")
+        factory_env.ensure_tenant("tenant_b")
 
         with get_db_session() as session:
             for tid in ["tenant_a", "tenant_b"]:
@@ -561,10 +504,10 @@ class TestArchiveExpiredVariants:
             b_variant = session.scalars(select(Product).filter_by(product_id="variant_expired_tenant_b")).first()
             assert b_variant.archived_at is None
 
-    def test_no_tenant_archives_all(self, integration_db):
+    def test_no_tenant_archives_all(self, integration_db, factory_env):
         """archive_expired_variants(tenant_id=None) archives all tenants."""
-        _ensure_tenant("tenant_x")
-        _ensure_tenant("tenant_y")
+        factory_env.ensure_tenant("tenant_x")
+        factory_env.ensure_tenant("tenant_y")
 
         with get_db_session() as session:
             for tid in ["tenant_x", "tenant_y"]:

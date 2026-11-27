@@ -19,7 +19,6 @@ resolved once by the boundary and carried on the identity.
 ``is_served_host`` answers the reverse proxy's on-demand TLS question from the same decision.
 """
 
-import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
@@ -28,15 +27,7 @@ from typing import Literal
 # This ensures all servers (MCP, Admin, A2A) use the same lookup logic
 from src.core.config_loader import get_tenant_by_virtual_host, tenant_id_for
 from src.core.domain_config import get_sales_agent_domain, is_admin_domain
-from src.core.http_utils import requested_host, same_hostname
-
-# A DNS hostname: 1-253 characters of dot-separated labels, each 1-63 of [a-z0-9-] with no
-# leading or trailing hyphen. No port, no wildcard, no path. ``re.ASCII`` keeps IGNORECASE
-# from folding non-ASCII letters (the Kelvin sign, a dotless i) into ``[a-z]``.
-_HOSTNAME = re.compile(
-    r"(?=.{1,253}\Z)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\Z",
-    re.ASCII | re.IGNORECASE,
-)
+from src.core.http_utils import normalize_hostname, requested_host, same_hostname
 
 
 @dataclass
@@ -125,16 +116,6 @@ def route_landing_page(request_headers: dict) -> RoutingResult:
     # for a tenant we do not serve" (it can offer signup) from "no host at all" (the generic
     # fallback above). Which of those to show is the caller's decision, not this function's.
     return RoutingResult(kind, tenant, effective_host)
-
-
-def normalize_hostname(host: str) -> str | None:
-    """``host`` lower-cased with any trailing dot dropped, or None when it is not a DNS hostname.
-
-    Matched BEFORE folding: ``str.lower`` maps the Kelvin sign to ``k``, so folding first would
-    let a non-ASCII name through as an ASCII one.
-    """
-    candidate = host.strip().removesuffix(".")
-    return candidate.lower() if _HOSTNAME.match(candidate) else None
 
 
 def is_served_host(host: str) -> bool:

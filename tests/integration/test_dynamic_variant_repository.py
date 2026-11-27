@@ -10,7 +10,7 @@ from src.core.database.product_pricing import PRICING_TERM_COLUMNS
 from src.core.database.repositories.product import ProductRepository
 from src.core.database.repositories.uow import ProductUoW
 from src.services.dynamic_products import generate_variant_id, generate_variants_from_signals
-from tests.factories import PricingOptionFactory, ProductFactory
+from tests.factories import PricingOptionFactory, ProductFactory, SignalFactory
 from tests.harness._base import BareIntegrationEnv
 
 pytestmark = pytest.mark.requires_db
@@ -58,7 +58,7 @@ def test_inherited_pricing_owns_new_rows_and_json(integration_db, is_fixed):
 @pytest.mark.parametrize("legacy", [False, True], ids=["new", "unpriced-existing"])
 def test_concurrent_variant_writes_keep_one_complete_product(integration_db, legacy):
     key = {"type": "segment_id", "segment_id": "premium"}
-    signal = {"name": "Premium", "deployments": [{"is_live": True, "activation_key": key}]}
+    signal = SignalFactory.payload(name="Premium", key_type="segment_id", value="premium")
     variant_id = generate_variant_id("template", key)
     with BareIntegrationEnv() as env:
         tenant, _ = env.setup_default_data()
