@@ -77,6 +77,8 @@ from tests.harness.transport import (
 )
 
 if TYPE_CHECKING:
+    from httpx2 import Response
+
     from tests.harness._base import BaseTestEnv
 
 # NoAddressForTransport re-exported here for callers that only import
@@ -245,18 +247,21 @@ def _deliver_e2e_rest(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str,
         return getattr(client, method)(wrapped["url"], json=wrapped["body"], headers=headers)
 
 
-def _mcp_http_client(*, refusals: list[Any] | None = None, **kwargs: Any):
-    """Keep JSON refusal bodies readable after the SDK closes its HTTP stream."""
+def _mcp_http_client(*, refusals: list[Response] | None = None, **kwargs: Any):
+    """Retain failed tools/call POSTs; discovery and session traffic are separate."""
+    import json
+
     from mcp.shared._httpx_utils import create_mcp_http_client
 
     async def _read_error_body(response):
-        if response.is_error and response.request.method == "POST":
-            await response.aread()
-            if refusals is not None:
-                refusals.append(response)
+        request = response.request
+        if response.is_error and request.method == "POST":
+            frame = json.loads(request.content)
+            if isinstance(frame, dict) and frame.get("method") == "tools/call":
+                await response.aread()
+                if refusals is not None:
+                    refusals.append(response)
 
-    # fastmcp calls create_mcp_http_client(headers, timeout, auth). Drop
-    # follow_redirects so this factory stays that call plus the body hook.
     kwargs.pop("follow_redirects", None)
     client = create_mcp_http_client(**kwargs)
     client.event_hooks["response"].append(_read_error_body)
@@ -287,7 +292,7 @@ def _deliver_e2e_mcp(
     from fastmcp import Client
     from fastmcp.client.transports import StreamableHttpTransport
 
-    from tests.harness._base import _mcp_wire_error
+    from tests.harness._base import _call_mcp_tool, _mcp_wire_error
 
     if not env.e2e_config:
         raise RuntimeError("E2E dispatch requires env.e2e_config (pass e2e_config= to env)")
@@ -302,14 +307,14 @@ def _deliver_e2e_mcp(
 
     from functools import partial
 
-    refusals: list[Any] = []
+    refusals: list[Response] = []
 
     async def _call() -> DeliverResult:
         mcp_transport = StreamableHttpTransport(
             url=url, headers=headers, httpx_client_factory=partial(_mcp_http_client, refusals=refusals)
         )
         async with Client(transport=mcp_transport) as mcp_client:
-            result = await mcp_client.call_tool(address.name, wrapped)
+            result = await _call_mcp_tool(mcp_client, address.name, wrapped)
             return DeliverResult(payload=result.structured_content, wire_response=result.structured_content)
 
     try:
@@ -317,23 +322,11 @@ def _deliver_e2e_mcp(
     except Exception as exc:
         # Preserve the received envelope and HTTP challenge through one reader.
         # Unrecognized bodies remain transport failures with no invented code.
-        import httpx
-        import httpx2
-
         from tests.harness._base import WireRefusal, _mcp_jsonrpc_result
 
-        response = (
-            refusals[-1]
-            if refusals
-            else exc.response
-            if isinstance(exc, httpx.HTTPStatusError | httpx2.HTTPStatusError)
-            else None
-        )
-        if response is not None:
-            try:
-                _mcp_jsonrpc_result(response)
-            except (httpx.ResponseNotRead, httpx2.ResponseNotRead):
-                pass
+        if refusals:
+            response = refusals[-1]
+            _mcp_jsonrpc_result(response)
             raise WireRefusal(f"MCP HTTP {response.status_code} without an AdCP error envelope", response) from exc
         wire_error = _mcp_wire_error(exc)
         if wire_error is not exc:

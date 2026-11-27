@@ -9,7 +9,7 @@ import asyncio
 from flask import Blueprint, Response, jsonify, request
 from pydantic import BaseModel
 
-from src.admin.utils import require_auth
+from src.admin.utils import require_auth, tenant_access_refusal
 from src.core.creative_agent_registry import get_creative_agent_registry
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.agent import CreativeAgentRepository
@@ -18,16 +18,21 @@ from src.core.database.repositories.uow import TenantConfigUoW
 bp = Blueprint("format_search", __name__, url_prefix="/api/formats")
 
 
-def _unknown_tenant(tenant_id: str | None) -> tuple[Response, int] | None:
-    """The 404 for a ``tenant_id`` that names no tenant; None when it names one or is absent.
+def _tenant_refusal(tenant_id: str | None) -> Response | tuple[Response, int] | None:
+    """The refusal for a ``tenant_id`` the caller may not use, or that names no tenant; else None.
 
-    These routes take the tenant from a query parameter, and the registry reads the named
-    tenant's federation setting with ``one()``, which raises for a tenant that does not
-    exist. An absent or empty ``tenant_id`` is the registry's own "no tenant" case (the
-    default agent alone), so only a named tenant is looked up.
+    These routes take the tenant from a query parameter, so ``require_tenant_access``
+    cannot see it and the same check runs here: a caller who is not a user of the tenant
+    is refused before anything about the tenant is read or fetched with its credentials.
+    The registry reads the named tenant's federation setting with ``one()``, which raises
+    for a tenant that does not exist, hence the 404. An absent or empty ``tenant_id`` is the
+    registry's own "no tenant" case (the default agent alone), so only a named tenant is
+    checked.
     """
     if not tenant_id:
         return None
+    if (refusal := tenant_access_refusal(tenant_id)) is not None:
+        return refusal
     with TenantConfigUoW(tenant_id) as uow:
         assert uow.tenant_config is not None
         if uow.tenant_config.get_tenant() is not None:
@@ -54,48 +59,44 @@ def search_formats():
     if not query or len(query) < 2:
         return jsonify({"error": "Query must be at least 2 characters"}), 400
 
-    if (refusal := _unknown_tenant(tenant_id)) is not None:
+    if (refusal := _tenant_refusal(tenant_id)) is not None:
         return refusal
 
+    # Get registry and search
+    registry = get_creative_agent_registry()
+
+    # Run async search in sync context
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     try:
-        # Get registry and search
-        registry = get_creative_agent_registry()
+        formats = loop.run_until_complete(registry.search_formats(query=query, tenant_id=tenant_id))
+    finally:
+        loop.close()
 
-        # Run async search in sync context
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            formats = loop.run_until_complete(registry.search_formats(query=query, tenant_id=tenant_id))
-        finally:
-            loop.close()
+    # Convert to dict format for JSON response
+    results = []
+    for fmt in formats:
+        # Handle FormatId object - extract string value
+        format_id_str = fmt.format_id.id
 
-        # Convert to dict format for JSON response
-        results = []
-        for fmt in formats:
-            # Handle FormatId object - extract string value
-            format_id_str = fmt.format_id.id
+        result = {
+            "agent_url": fmt.agent_url,
+            "format_id": format_id_str,
+            "name": fmt.name,
+            "description": fmt.description,
+            "is_standard": fmt.is_standard,
+        }
 
-            result = {
-                "agent_url": fmt.agent_url,
-                "format_id": format_id_str,
-                "name": fmt.name,
-                "description": fmt.description,
-                "is_standard": fmt.is_standard,
-            }
+        # Add dimensions if available
+        if fmt.requirements:
+            if "width" in fmt.requirements and "height" in fmt.requirements:
+                result["dimensions"] = f"{fmt.requirements['width']}x{fmt.requirements['height']}"
+            if "duration" in fmt.requirements:
+                result["duration"] = fmt.requirements["duration"]
 
-            # Add dimensions if available
-            if fmt.requirements:
-                if "width" in fmt.requirements and "height" in fmt.requirements:
-                    result["dimensions"] = f"{fmt.requirements['width']}x{fmt.requirements['height']}"
-                if "duration" in fmt.requirements:
-                    result["duration"] = fmt.requirements["duration"]
+        results.append(result)
 
-            results.append(result)
-
-        return jsonify({"formats": results, "count": len(results)})
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify({"formats": results, "count": len(results)})
 
 
 @bp.route("/list", methods=["GET"])
@@ -113,62 +114,56 @@ def list_all_formats():
     tenant_id = request.args.get("tenant_id")
     force_refresh = request.args.get("force_refresh", "false").lower() == "true"
 
-    if (refusal := _unknown_tenant(tenant_id)) is not None:
+    if (refusal := _tenant_refusal(tenant_id)) is not None:
         return refusal
 
+    registry = get_creative_agent_registry()
+
+    # Run async list in sync context
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     try:
-        registry = get_creative_agent_registry()
+        formats = loop.run_until_complete(registry.list_all_formats(tenant_id=tenant_id, force_refresh=force_refresh))
+    finally:
+        loop.close()
 
-        # Run async list in sync context
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            formats = loop.run_until_complete(
-                registry.list_all_formats(tenant_id=tenant_id, force_refresh=force_refresh)
-            )
-        finally:
-            loop.close()
+    # Group by agent_url
+    by_agent = {}
+    for fmt in formats:
+        agent_url = fmt.agent_url or "unknown"
+        if agent_url not in by_agent:
+            by_agent[agent_url] = []
 
-        # Group by agent_url
-        by_agent = {}
-        for fmt in formats:
-            agent_url = fmt.agent_url or "unknown"
-            if agent_url not in by_agent:
-                by_agent[agent_url] = []
+        # Keep format_id as nested object (matches library schema)
+        # Frontend will access format_id.id when needed
+        format_id_obj = fmt.format_id
+        if isinstance(format_id_obj, BaseModel):
+            # Pydantic object - serialize to dict
+            format_id_value = format_id_obj.model_dump(mode="json")
+        elif isinstance(format_id_obj, dict):
+            format_id_value = format_id_obj
+        else:
+            # Fallback for string format_ids (legacy)
+            format_id_value = {"id": str(format_id_obj), "agent_url": agent_url}
 
-            # Keep format_id as nested object (matches library schema)
-            # Frontend will access format_id.id when needed
-            format_id_obj = fmt.format_id
-            if isinstance(format_id_obj, BaseModel):
-                # Pydantic object - serialize to dict
-                format_id_value = format_id_obj.model_dump(mode="json")
-            elif isinstance(format_id_obj, dict):
-                format_id_value = format_id_obj
-            else:
-                # Fallback for string format_ids (legacy)
-                format_id_value = {"id": str(format_id_obj), "agent_url": agent_url}
+        # Get dimensions for matching
+        dimensions_str = None
+        dims = fmt.get_primary_dimensions()
+        if dims:
+            width, height = dims
+            dimensions_str = f"{width}x{height}"
 
-            # Get dimensions for matching
-            dimensions_str = None
-            dims = fmt.get_primary_dimensions()
-            if dims:
-                width, height = dims
-                dimensions_str = f"{width}x{height}"
+        by_agent[agent_url].append(
+            {
+                "format_id": format_id_value,  # Nested object, not flattened string
+                "name": fmt.name,
+                "description": fmt.description,
+                "is_standard": fmt.is_standard,
+                "dimensions": dimensions_str,  # Add dimensions for size matching
+            }
+        )
 
-            by_agent[agent_url].append(
-                {
-                    "format_id": format_id_value,  # Nested object, not flattened string
-                    "name": fmt.name,
-                    "description": fmt.description,
-                    "is_standard": fmt.is_standard,
-                    "dimensions": dimensions_str,  # Add dimensions for size matching
-                }
-            )
-
-        return jsonify({"agents": by_agent, "total_formats": len(formats)})
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify({"agents": by_agent, "total_formats": len(formats)})
 
 
 @bp.route("/templates", methods=["GET"])
@@ -282,43 +277,39 @@ def list_creative_agents():
     if not tenant_id:
         return jsonify({"error": "tenant_id is required"}), 400
 
-    if (refusal := _unknown_tenant(tenant_id)) is not None:
+    if (refusal := _tenant_refusal(tenant_id)) is not None:
         return refusal
 
-    try:
-        with get_db_session() as session:
-            # Get creative agents from config
-            agents = []
+    with get_db_session() as session:
+        # Get creative agents from config
+        agents = []
 
-            # Default agent (always present)
+        # Default agent (always present)
+        agents.append(
+            {
+                "agent_url": "https://creative.adcontextprotocol.org",
+                "name": "AdCP Standard Creative Agent",
+                "enabled": True,
+                "priority": 1,
+                "is_default": True,
+            }
+        )
+
+        # Tenant-specific agents from database
+        db_agents = CreativeAgentRepository(session, tenant_id).get_enabled()
+
+        for db_agent in db_agents:
             agents.append(
                 {
-                    "agent_url": "https://creative.adcontextprotocol.org",
-                    "name": "AdCP Standard Creative Agent",
-                    "enabled": True,
-                    "priority": 1,
-                    "is_default": True,
+                    "agent_url": db_agent.agent_url,
+                    "name": db_agent.name,
+                    "enabled": db_agent.enabled,
+                    "priority": db_agent.priority,
+                    "is_default": False,
                 }
             )
 
-            # Tenant-specific agents from database
-            db_agents = CreativeAgentRepository(session, tenant_id).get_enabled()
+        # Sort by priority
+        agents.sort(key=lambda a: a["priority"])
 
-            for db_agent in db_agents:
-                agents.append(
-                    {
-                        "agent_url": db_agent.agent_url,
-                        "name": db_agent.name,
-                        "enabled": db_agent.enabled,
-                        "priority": db_agent.priority,
-                        "is_default": False,
-                    }
-                )
-
-            # Sort by priority
-            agents.sort(key=lambda a: a["priority"])
-
-            return jsonify({"agents": agents})
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"agents": agents})

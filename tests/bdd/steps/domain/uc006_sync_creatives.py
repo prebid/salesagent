@@ -55,6 +55,7 @@ from tests.factories.creative_asset import (
     url_spec,
 )
 from tests.factories.malformed import malformed
+from tests.factories.mint import mint_id
 from tests.factories.principal import PrincipalFactory
 from tests.factories.request import OMIT, CreativeAssetRequestFactory
 from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY
@@ -249,20 +250,6 @@ def _scenario_format_id(ctx: dict, env: object) -> str:
         return recorded
     format_id, _agent_url, _assets = _format_payload(ctx, env)
     return format_id
-
-
-def _e2e_unique_id(prefix: str) -> str:
-    """Generate a UUID-based unique ID for e2e tests.
-
-    Factory sequences produce predictable IDs (mb_0000, pkg_0000) that collide
-    with rows persisted in Docker's Postgres from prior runs. Use this for any
-    factory object created for e2e_rest.
-    """
-    import uuid
-
-    from tests.factories.mint import mint
-
-    return mint(f"{prefix}_{uuid.uuid4().hex[:8]}")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -519,35 +506,7 @@ def _action_str(action: object) -> str:
 
 
 def _ensure_tenant_principal_from_db(ctx: dict, env: object) -> None:
-    """Like _ensure_tenant_principal, but resolve existing DB rows first.
-
-    When a prior Given step (e.g., ``the Buyer is authenticated as principal "X"``)
-    triggers ``_ensure_default_data_for_auth``, the tenant and principal are
-    created in the DB but not stored in ctx. Calling ``setup_default_data()``
-    again would fail with a duplicate-key error. This helper checks the DB first.
-    """
-    if "tenant" in ctx:
-        return
-
-    session = env.get_session()
-    if session is not None:
-        from sqlalchemy import select
-
-        from src.core.database.models import Principal, Tenant
-
-        tenant = session.scalars(select(Tenant).filter_by(tenant_id=env.tenant_id)).first()
-        if tenant is not None:
-            principal = session.scalars(
-                select(Principal).filter_by(
-                    principal_id=env.principal_id,
-                    tenant_id=env.tenant_id,
-                )
-            ).first()
-            if principal is not None:
-                ctx["tenant"] = tenant
-                ctx["principal"] = principal
-                return
-
+    """The shared bootstrap reuses rows already seeded by authentication."""
     ensure_tenant_principal(ctx, env)
 
 
@@ -813,7 +772,7 @@ def _readback(ctx: dict) -> Iterator[Session]:
     under test actually writes: the per-test base in process, and the live
     server's own base over e2e_rest (the env's factories write there, and
     ``_db_scope_for`` points production's cached engine at the same URL for the
-    scenario duration — ``_production_db_pointed_at``, tests/bdd/conftest.py).
+    scenario duration — ``production_db_pointed_at``, tests/utils/database_helpers.py).
     A read-back therefore needs no transport branch, which is why the skip this
     replaced was never the right primitive.
 
@@ -1170,8 +1129,8 @@ def given_assignment_to_existing_package(ctx: dict) -> None:
     mb_kwargs: dict = {"tenant": tenant, "principal": principal, "status": "active"}
     prod_kwargs: dict = {"tenant": tenant, "format_ids": [_product_format_entry(ctx, env)]}
     if is_e2e(ctx):
-        mb_kwargs["media_buy_id"] = _e2e_unique_id("mb")
-        prod_kwargs["product_id"] = _e2e_unique_id("prod")
+        mb_kwargs["media_buy_id"] = mint_id("mb")
+        prod_kwargs["product_id"] = mint_id("prod")
 
     media_buy = MediaBuyFactory(**mb_kwargs)
     # Product accepts the default known format so the format check passes.
@@ -1181,7 +1140,7 @@ def given_assignment_to_existing_package(ctx: dict) -> None:
         "package_config": {"product_id": product.product_id, "budget": 1000.0},
     }
     if is_e2e(ctx):
-        pkg_kwargs["package_id"] = _e2e_unique_id("pkg")
+        pkg_kwargs["package_id"] = mint_id("pkg")
     package = MediaPackageFactory(**pkg_kwargs)
     env._commit_factory_data()
     ctx["media_buy"] = media_buy
@@ -1390,7 +1349,7 @@ def given_library_creative_on_buy(ctx: dict, creative_id: str, status: str, paus
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
     fmt = ctx["creatives"][-1]["format_id"]
-    product = ProductFactory(tenant=ctx["tenant"], **({"product_id": _e2e_unique_id("prod")} if is_e2e(ctx) else {}))
+    product = ProductFactory(tenant=ctx["tenant"], **({"product_id": mint_id("prod")} if is_e2e(ctx) else {}))
     media_buy = MediaBuyFactory(
         tenant=ctx["tenant"],
         principal=ctx["principal"],
@@ -1399,12 +1358,12 @@ def given_library_creative_on_buy(ctx: dict, creative_id: str, status: str, paus
         end_date=date(2099, 12, 31),
         start_time=datetime(2025, 1, 1, tzinfo=UTC),
         end_time=datetime(2099, 12, 31, 23, 59, 59, tzinfo=UTC),
-        **({"media_buy_id": _e2e_unique_id("mb")} if is_e2e(ctx) else {}),
+        **({"media_buy_id": mint_id("mb")} if is_e2e(ctx) else {}),
     )
     package = MediaPackageFactory(
         media_buy=media_buy,
         package_config={"product_id": product.product_id, "budget": 1000.0, "paused": paused == "paused"},
-        **({"package_id": _e2e_unique_id("pkg")} if is_e2e(ctx) else {}),
+        **({"package_id": mint_id("pkg")} if is_e2e(ctx) else {}),
     )
     creative = CreativeFactory(
         tenant=ctx["tenant"],
@@ -1516,8 +1475,8 @@ def given_assignment_already_exists(ctx: dict) -> None:
     mb_kwargs: dict = {"tenant": tenant, "principal": principal, "status": "pending_start"}
     prod_kwargs: dict = {"tenant": tenant, "format_ids": [fmt_entry]}
     if is_e2e(ctx):
-        mb_kwargs["media_buy_id"] = _e2e_unique_id("mb")
-        prod_kwargs["product_id"] = _e2e_unique_id("prod")
+        mb_kwargs["media_buy_id"] = mint_id("mb")
+        prod_kwargs["product_id"] = mint_id("prod")
 
     media_buy = MediaBuyFactory(**mb_kwargs)
     product = ProductFactory(**prod_kwargs)
@@ -1526,7 +1485,7 @@ def given_assignment_already_exists(ctx: dict) -> None:
         "package_config": {"product_id": product.product_id, "budget": 1000.0},
     }
     if is_e2e(ctx):
-        pkg_kwargs["package_id"] = _e2e_unique_id("pkg")
+        pkg_kwargs["package_id"] = mint_id("pkg")
     package = MediaPackageFactory(**pkg_kwargs)
     # Use same creative_id as the payload so the pre-existing row matches.
     creative_payload = ctx["creatives"][-1]
@@ -1748,7 +1707,7 @@ def given_assignment_entry_missing_creative_id(ctx: dict) -> None:
     tenant = ctx["tenant"]
     principal = ctx["principal"]
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
-    package = MediaPackageFactory(media_buy=media_buy, package_id=_e2e_unique_id("pkg"))
+    package = MediaPackageFactory(media_buy=media_buy, package_id=mint_id("pkg"))
     env._commit_factory_data()
     ctx["assignment_entries"] = [{"package_id": package.package_id}]
 
@@ -1830,8 +1789,8 @@ def _setup_assignment_package(
     mb_kwargs: dict = {"tenant": tenant, "principal": principal, "status": "active"}
     prod_kwargs: dict = {"tenant": tenant, "format_ids": [_product_format_entry(ctx, env)]}
     if is_e2e(ctx):
-        mb_kwargs["media_buy_id"] = _e2e_unique_id("mb")
-        prod_kwargs["product_id"] = _e2e_unique_id("prod")
+        mb_kwargs["media_buy_id"] = mint_id("mb")
+        prod_kwargs["product_id"] = mint_id("prod")
 
     media_buy = MediaBuyFactory(**mb_kwargs)
     product = ProductFactory(**prod_kwargs)
@@ -1842,7 +1801,7 @@ def _setup_assignment_package(
     if package_id is not None:
         pkg_kwargs["package_id"] = package_id
     elif is_e2e(ctx):
-        pkg_kwargs["package_id"] = _e2e_unique_id("pkg")
+        pkg_kwargs["package_id"] = mint_id("pkg")
     package = MediaPackageFactory(**pkg_kwargs)
     env._commit_factory_data()
     ctx["media_buy"] = media_buy
@@ -3896,9 +3855,9 @@ def _setup_assignment_package_for_format(
     extra_pkg: dict = {}
     extra_prod: dict = {}
     if is_e2e(ctx):
-        extra_mb["media_buy_id"] = _e2e_unique_id("mb")
-        extra_pkg["package_id"] = _e2e_unique_id("pkg")
-        extra_prod["product_id"] = _e2e_unique_id("prod")
+        extra_mb["media_buy_id"] = mint_id("mb")
+        extra_pkg["package_id"] = mint_id("pkg")
+        extra_prod["product_id"] = mint_id("prod")
 
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active", **extra_mb)
     package_config: dict = {"budget": 1000.0}
@@ -4300,26 +4259,12 @@ def given_creative_exists_for_principal(ctx: dict, creative_id: str, principal_i
     principal may differ from the authenticated one (INV-2 seeds the OTHER
     principal's creative), so it gets its own get-or-create row.
     """
-    from src.core.database.models import Principal, Tenant
-    from tests.factories import CreativeFactory, PrincipalFactory, TenantFactory
-    from tests.factories.core import get_or_create
+    from tests.factories import CreativeFactory
 
     env = ctx["env"]
-    tenant = ctx.get("tenant")
-    if tenant is None:
-        tenant = get_or_create(
-            env,
-            Tenant,
-            {"tenant_id": env._tenant_id},
-            lambda: TenantFactory(tenant_id=env.tenant_id),
-        )
-        ctx["tenant"] = tenant
-    principal = get_or_create(
-        env,
-        Principal,
-        {"principal_id": principal_id, "tenant_id": tenant.tenant_id},
-        lambda: PrincipalFactory(tenant=tenant, principal_id=principal_id),
-    )
+    tenant = env.ensure_tenant()
+    ctx.setdefault("tenant", tenant)
+    principal = env.ensure_principal(tenant, principal_id)
     ctx.setdefault("principal", principal)
     creative = CreativeFactory(
         tenant=tenant,
@@ -5854,11 +5799,11 @@ def given_assignments_two_packages_format_compat(ctx: dict) -> None:
     # assignment lookup then resolved both entries to whichever row won, and the
     # "compatible" assignment was graded against the incompatible product. There is no
     # reason to mint ids only for e2e_rest -- a fresh id is right everywhere.
-    extra_mb: dict = {"media_buy_id": _e2e_unique_id("mb")}
-    extra_pkg_compat: dict = {"package_id": _e2e_unique_id("pkg")}
-    extra_pkg_incompat: dict = {"package_id": _e2e_unique_id("pkg")}
-    extra_prod_compat: dict = {"product_id": _e2e_unique_id("prod")}
-    extra_prod_incompat: dict = {"product_id": _e2e_unique_id("prod")}
+    extra_mb: dict = {"media_buy_id": mint_id("mb")}
+    extra_pkg_compat: dict = {"package_id": mint_id("pkg")}
+    extra_pkg_incompat: dict = {"package_id": mint_id("pkg")}
+    extra_prod_compat: dict = {"product_id": mint_id("prod")}
+    extra_prod_incompat: dict = {"product_id": mint_id("prod")}
 
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active", **extra_mb)
 
@@ -5989,17 +5934,7 @@ def when_sync_creative_as_principal(ctx: dict, creative_id: str, principal_id: s
     # (e.g. buyer-B) still needs a DB row — the pre-existing creative's Given
     # seeded only the OTHER principal. Without it the new creative's insert
     # violates the principals FK and the sync reports action='failed'.
-    from src.core.database.models import Principal
-    from tests.factories import PrincipalFactory
-    from tests.factories.core import get_or_create
-
-    tenant = ctx["tenant"]
-    get_or_create(
-        env,
-        Principal,
-        {"principal_id": principal_id, "tenant_id": tenant.tenant_id},
-        lambda: PrincipalFactory(tenant=tenant, principal_id=principal_id),
-    )
+    env.ensure_principal(ctx["tenant"], principal_id)
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id=creative_id,
         name=f"Synced creative {creative_id}",
@@ -6023,18 +5958,11 @@ def when_sync_cross_principal_assignment(ctx: dict) -> None:
     exists to grade, and the refusal it got instead read as a production bug.
     A spec-valid request is the only one that reaches the behavior under test.
     """
-    from src.core.database.models import Principal
-    from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory
-    from tests.factories.core import get_or_create
+    from tests.factories import MediaBuyFactory, MediaPackageFactory
 
     env = ctx["env"]
     tenant = ctx["tenant"]
-    authenticated = get_or_create(
-        env,
-        Principal,
-        {"principal_id": env._principal_id, "tenant_id": tenant.tenant_id},
-        lambda: PrincipalFactory(tenant=tenant, principal_id=env.principal_id),
-    )
+    authenticated = env.ensure_principal(tenant)
     media_buy = MediaBuyFactory(tenant=tenant, principal=authenticated)
     pkg = MediaPackageFactory(media_buy=media_buy)
     env._commit_factory_data()
@@ -6371,12 +6299,12 @@ def given_assignments_three_packages_mixed(ctx: dict) -> None:
     # rows built from it collapsed into one assignment.
     valid_pkg_1 = MediaPackageFactory(
         media_buy=media_buy,
-        package_id=_e2e_unique_id("pkg"),
+        package_id=mint_id("pkg"),
         package_config={"product_id": product.product_id, "budget": 1000.0},
     )
     valid_pkg_2 = MediaPackageFactory(
         media_buy=media_buy,
-        package_id=_e2e_unique_id("pkg"),
+        package_id=mint_id("pkg"),
         package_config={"product_id": product.product_id, "budget": 1000.0},
     )
     env._commit_factory_data()
@@ -6817,28 +6745,13 @@ def _preseed_creative_for_principal(ctx: dict, creative_id: str, principal_id: s
     in the DB under (tenant_id, principal_id, creative_id) so that the sync
     operation can find it (update) or not (create for a different principal).
     """
-    from sqlalchemy import select
-
-    from src.core.database.models import Principal, Tenant
     from tests.factories import CreativeFactory
 
     env = ctx["env"]
     _ensure_tenant_principal_from_db(ctx, env)
-
-    # Retrieve tenant from DB (created by auth step)
-    with db_session(ctx) as session:
-        tenant = session.scalars(select(Tenant).filter_by(tenant_id=env.tenant_id)).first()
-        assert tenant is not None, f"Tenant {env._tenant_id!r} not found — auth step should have created it"
-
-        # The principal owning the pre-existing creative may differ from the
-        # authenticated principal (cross-principal isolation tests).
-        owner_principal = session.scalars(
-            select(Principal).filter_by(principal_id=principal_id, tenant_id=env.tenant_id)
-        ).first()
-
-    if owner_principal is None:
-        owner_principal = PrincipalFactory(tenant=tenant, principal_id=principal_id)
-        env._commit_factory_data()
+    tenant = ctx["tenant"]
+    owner_principal = env.ensure_principal(tenant, principal_id)
+    env._commit_factory_data()
 
     CreativeFactory(
         tenant=tenant,

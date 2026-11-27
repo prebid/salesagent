@@ -207,7 +207,7 @@ class E2EConfig:
     server_host: str | None = None
 
     @classmethod
-    def from_environment(cls) -> E2EConfig | None:
+    def from_environment(cls, *, per_worker: bool = False) -> E2EConfig | None:
         """Read one stack configuration, refusing a configured stack that fails health."""
         import os
         import re
@@ -226,7 +226,7 @@ class E2EConfig:
         tls_base_url = os.environ.get("E2E_TLS_BASE_URL")
         server_host = os.environ.get("E2E_SERVER_HOST")
         worker = os.environ.get("PYTEST_XDIST_WORKER", "")
-        if os.environ.get("E2E_PER_WORKER") == "1" and worker.startswith("gw"):
+        if per_worker and os.environ.get("E2E_PER_WORKER") == "1" and worker.startswith("gw"):
             project = os.environ.get("COMPOSE_PROJECT_NAME", "")
             prefix = f"{project}-" if project else ""
             server_host = f"{prefix}server-{worker}"
@@ -681,6 +681,15 @@ class TransportResult:
                     f"hint at the top level of the error object: {envelope}"
                 )
 
+    def _challenge_response(self, code: str) -> Any:
+        """Require a refused dispatch and the HTTP response that carries its challenge."""
+        assert self.is_error, f"Expected {code}, but the request succeeded"
+        response = self.raw_response
+        assert response is not None and hasattr(response, "status_code") and hasattr(response, "headers"), (
+            f"No raw HTTP response carries the {code} challenge"
+        )
+        return response
+
     def assert_auth_challenge(self, code: str) -> None:
         """Grade the real HTTP bearer refusal, including its supported scheme.
 
@@ -689,11 +698,7 @@ class TransportResult:
         """
         expected = {"AUTH_MISSING": "Bearer", "AUTH_INVALID": 'Bearer error="invalid_token"'}
         assert code in expected, f"Unsupported bearer refusal code: {code!r}"
-        assert self.is_error, f"Expected {code}, but the request succeeded"
-        response = self.raw_response
-        assert response is not None and hasattr(response, "status_code"), (
-            "No raw HTTP response carries the auth challenge"
-        )
+        response = self._challenge_response(code)
         assert response.status_code == 401, f"Expected HTTP 401 for {code}, got {response.status_code}"
         assert response.headers.get("WWW-Authenticate") == expected[code], (
             f"Expected {expected[code]!r}, got {response.headers.get('WWW-Authenticate')!r}"
@@ -752,30 +757,7 @@ class TransportResult:
             f"{', '.join(sorted(c for c in canonical if code.split('_')[-1] in c)) or 'see tests.helpers.signing.request_signature_codes'}?"
         )
 
-        response = self.raw_response
-
-        # Lead with the ACCEPTED case. A result that succeeded is not a missing wire —
-        # it is the finding: the seller waved through a request this scenario says it
-        # must refuse. Diagnosing that as "the env has no signing capability" sends the
-        # reader hunting a harness bug and past the defect, which is the failure mode
-        # this whole surface exists to end (a misdiagnosis of this exact shape survived green CI for that
-        # reason). Order matters: is_error is checkable on every transport, raw_response
-        # is not.
-        assert self.is_error, (
-            f"Expected the {code!r} signature challenge, but the request was ACCEPTED "
-            f"(is_error=False, payload={self.payload!r}). The seller did not refuse a request this "
-            "scenario requires it to refuse. If sibling transports DO refuse the same request, that "
-            "asymmetry is the finding — the operation never reached a graded posture bucket on this "
-            "one, so nothing forced a signature. Read it as a production defect until proven otherwise."
-        )
-
-        assert response is not None and hasattr(response, "status_code") and hasattr(response, "headers"), (
-            f"Expected the {code!r} signature challenge, and this result IS an error "
-            f"(error={self.error!r}) — but it carries no raw HTTP response to read WWW-Authenticate "
-            f"from (raw_response={response!r}). Either the env has no signing capability — call "
-            "env.enable_request_signing() so the leg dispatches over real HTTP instead of in-process — "
-            "or the dispatcher dropped the response. Refusing to grade the refusal on anything else."
-        )
+        response = self._challenge_response(code)
 
         actual = rejection_code(response)
         assert actual == code, (

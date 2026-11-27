@@ -22,6 +22,8 @@ import ast
 import re
 from pathlib import Path
 
+from tests.unit._architecture_helpers import rel
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 #: Capability-gap phrasing. Matched against the joined literal fragments of
@@ -69,10 +71,10 @@ def _find_capability_valueerrors(tree: ast.AST) -> list[tuple[str, int]]:
 def _scan_adapters() -> list[str]:
     violations = []
     for path in (REPO_ROOT / "src" / "adapters").rglob("*.py"):
-        for msg, lineno in _find_capability_valueerrors(ast.parse(path.read_text())):
+        for msg, lineno in _find_capability_valueerrors(ast.parse(path.read_text(encoding="utf-8"))):
             if any(msg.startswith(prefix) for prefix in ALLOWLIST_PREFIXES):
                 continue
-            violations.append(f"{path.relative_to(REPO_ROOT)}:{lineno} ValueError({msg[:60]!r}...)")
+            violations.append(f"{rel(path, REPO_ROOT)}:{lineno} ValueError({msg[:60]!r}...)")
     return violations
 
 
@@ -90,7 +92,7 @@ class TestAdapterCapabilityRaiseGuard:
         """Stale-entry check: every allowlisted prefix still has a live site."""
         live: set[str] = set()
         for path in (REPO_ROOT / "src" / "adapters").rglob("*.py"):
-            for msg, _ in _find_capability_valueerrors(ast.parse(path.read_text())):
+            for msg, _ in _find_capability_valueerrors(ast.parse(path.read_text(encoding="utf-8"))):
                 for prefix in ALLOWLIST_PREFIXES:
                     if msg.startswith(prefix):
                         live.add(prefix)

@@ -23,6 +23,10 @@ from datetime import UTC, datetime
 from functools import wraps
 from typing import Any, TypeVar
 
+import zeep.exceptions
+from google.auth.exceptions import GoogleAuthError
+from googleads.errors import GoogleAdsError
+
 from src.core.exceptions import (
     AdCPAdapterResourceNotFoundError,
     AdCPAuthorizationError,
@@ -39,6 +43,14 @@ from src.core.exceptions import (
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+#: What a googleads SOAP service call raises when GAM, or the way to it, fails: the
+#: client turns a SOAP fault into ``GoogleAdsServerFault`` (a ``GoogleAdsError``), zeep
+#: raises its own ``Error`` for a reply that is not SOAP, google-auth raises
+#: ``GoogleAuthError`` when the credentials cannot be refreshed, and the transport's
+#: ``requests.RequestException`` is an ``OSError`` (``requests`` itself is banned in
+#: ``src/`` by ruff-egress.toml, so it is not named here).
+GAM_CALL_ERRORS: tuple[type[Exception], ...] = (GoogleAdsError, zeep.exceptions.Error, GoogleAuthError, OSError)
 
 
 class RetryConfig:

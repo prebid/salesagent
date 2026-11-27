@@ -32,7 +32,7 @@ import ast
 
 import pytest
 
-from tests.unit._architecture_helpers import format_failure, parse_module, repo_root
+from tests.unit._architecture_helpers import format_failure, parse_module, rel, repo_root
 
 # Fields whose values a repository owns.
 PERSISTED_FIELDS = {"confirmed_at", "revision"}
@@ -90,7 +90,7 @@ def _scan(repo) -> list[str]:
     for path in sorted(schemas.rglob("*.py")):
         tree = parse_module(path)
         if tree is not None:
-            violations.extend(find_persisted_defaults(tree, str(path.relative_to(repo))))
+            violations.extend(find_persisted_defaults(tree, rel(path, repo)))
     return violations
 
 

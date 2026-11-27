@@ -38,9 +38,11 @@ import ast
 
 import pytest
 
+from tests.helpers.environ import isolated_environ
 from tests.unit._architecture_helpers import (
     format_failure,
     iter_call_expressions,
+    rel,
     repo_root,
     safe_parse,
     src_python_files,
@@ -112,7 +114,7 @@ def _is_seam_owned(relative: str) -> bool:
 def _find_private_destination_violations(repo) -> list[str]:
     violations: list[str] = []
     for path in src_python_files(repo):
-        if _is_seam_owned(str(path.relative_to(repo))):
+        if _is_seam_owned(rel(path, repo)):
             continue
         tree = safe_parse(path)
         if tree is None:
@@ -154,7 +156,6 @@ def test_the_env_hatch_defaults_to_off() -> None:
     default, and that the dial actually reads THAT field, so repointing the seam at some
     other flag cannot leave this test passing.
     """
-    import os
     from types import SimpleNamespace
     from unittest.mock import patch
 
@@ -163,7 +164,7 @@ def test_the_env_hatch_defaults_to_off() -> None:
     from src.core.config import LimitSettings
     from src.core.security.outbound_http import _allow_private
 
-    with patch.dict(os.environ, {}, clear=True):
+    with isolated_environ():
         unset = LimitSettings()
 
     assert unset.adcp_outbound_allow_private is False, (
@@ -185,7 +186,7 @@ def test_the_env_hatch_defaults_to_off() -> None:
     # The typed boundary takes pydantic's standard truthy set, WIDER than the ``== "true"``
     # the withdrawn ``_env_flag`` accepted; "1" is here to record that, not to invite it.
     for truthy in ("true", "TRUE", "True", "1"):
-        with patch.dict(os.environ, {FORBIDDEN_ENV_HATCH: truthy}, clear=True):
+        with isolated_environ({FORBIDDEN_ENV_HATCH: truthy}):
             assert LimitSettings().adcp_outbound_allow_private is True, (
                 f"the hatch must respond to {truthy!r} — otherwise the in-runner loopback fixtures "
                 "it exists for are silently unreachable and the default-off assertion is vacuous."
@@ -194,7 +195,7 @@ def test_the_env_hatch_defaults_to_off() -> None:
     # An empty value is NOT a relaxation (``env_ignore_empty``), and neither is any spelling
     # of off. An unset-looking variable must land on the pin, not off it.
     for falsy in ("", "false", "FALSE", "0", "no", "off"):
-        with patch.dict(os.environ, {FORBIDDEN_ENV_HATCH: falsy}, clear=True):
+        with isolated_environ({FORBIDDEN_ENV_HATCH: falsy}):
             assert LimitSettings().adcp_outbound_allow_private is False, (
                 f"{falsy!r} must NOT open the hatch — a near-miss spelling that silently relaxed the "
                 "pin would be worse than one that silently kept it."
@@ -203,7 +204,7 @@ def test_the_env_hatch_defaults_to_off() -> None:
     # The typed boundary's real answer to a near-miss: it refuses at startup rather than
     # silently picking a side. That is stronger than the string reader it replaced, which
     # quietly returned False for anything it did not recognise.
-    with patch.dict(os.environ, {FORBIDDEN_ENV_HATCH: "maybe"}, clear=True):
+    with isolated_environ({FORBIDDEN_ENV_HATCH: "maybe"}):
         with pytest.raises(pydantic.ValidationError):
             LimitSettings()
 
@@ -269,11 +270,11 @@ def _find_env_hatch_violations(repo) -> list[str]:
             continue
         if FORBIDDEN_ENV_HATCH not in text:
             continue
-        if _is_seam_owned(str(path.relative_to(repo))):
+        if _is_seam_owned(rel(path, repo)):
             continue
         for lineno, line in enumerate(text.splitlines(), start=1):
             if FORBIDDEN_ENV_HATCH in line:
-                violations.append(f"{path.relative_to(repo)}:{lineno}: names {FORBIDDEN_ENV_HATCH}")
+                violations.append(f"{rel(path, repo)}:{lineno}: names {FORBIDDEN_ENV_HATCH}")
     return violations
 
 

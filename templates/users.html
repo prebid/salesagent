@@ -545,7 +545,15 @@
                 <label for="email">Email Address</label>
                 <input type="email" id="email" name="email" placeholder="user@example.com" required>
             </div>
-            <input type="hidden" name="role" value="viewer">
+            <div class="form-group">
+                <label for="role">Role</label>
+                {# Least access first, so the first option, viewer, is the default. #}
+                <select id="role" name="role">
+                    {% for role, description in role_descriptions.items() %}
+                    <option value="{{ role.value }}">{{ role.value|capitalize }}: {{ description }}</option>
+                    {% endfor %}
+                </select>
+            </div>
             <button type="submit" class="btn btn-primary">Add User</button>
         </form>
         <p class="help-text" style="margin-top: 0.5rem;">Name will be populated when the user logs in via SSO.</p>
@@ -573,7 +581,7 @@
             {% for domain in authorized_domains %}
             <span class="tag" data-domain="{{ domain }}">
                 {{ domain }}
-                <span class="tag-remove" onclick="removeDomain('{{ domain }}')">&times;</span>
+                <span class="tag-remove" onclick="removeDomain({{ domain|tojson|forceescape }})">&times;</span>
             </span>
             {% endfor %}
         </div>
@@ -594,6 +602,7 @@
                 <tr>
                     <th>User</th>
                     <th>Name</th>
+                    <th>Role</th>
                     <th>Status</th>
                     <th>Last Login</th>
                     <th></th>
@@ -607,6 +616,16 @@
                         <div class="meta-text">Added {{ user.created_at.strftime('%b %d, %Y') if user.created_at else 'Unknown' }}</div>
                     </td>
                     <td>{{ user.name or '-' }}</td>
+                    <td>
+                        <form method="post" action="{{ url_for('users.update_role', tenant_id=tenant_id, user_id=user.user_id) }}" class="role-form">
+                            <select name="role" aria-label="Role for {{ user.email }}">
+                                {% for role in role_descriptions %}
+                                <option value="{{ role.value }}" {% if user.role == role %}selected{% endif %}>{{ role.value|capitalize }}</option>
+                                {% endfor %}
+                            </select>
+                            <button type="submit" class="btn btn-secondary btn-sm">Change</button>
+                        </form>
+                    </td>
                     <td>
                         {% if user.is_active %}
                         <span class="status-badge status-active">Active</span>
@@ -654,8 +673,7 @@
 </div>
 
 <script>
-const tenantId = '{{ tenant_id }}';
-const scriptRoot = '{{ request.script_root }}' || '';
+const tenantId = {{ tenant_id|tojson }};
 
 // Domain management
 document.getElementById('add-domain-form').addEventListener('submit', async function(e) {
@@ -681,12 +699,12 @@ document.getElementById('add-domain-form').addEventListener('submit', async func
             const tag = document.createElement('span');
             tag.className = 'tag';
             tag.dataset.domain = domain;
-            tag.innerHTML = `${domain} <span class="tag-remove" onclick="removeDomain('${domain}')">&times;</span>`;
+            tag.innerHTML = `${escapeHtml(domain)} <span class="tag-remove" onclick="removeDomain(${jsArg(domain)})">&times;</span>`;
             domainList.appendChild(tag);
 
             document.getElementById('domain').value = '';
         } else {
-            alert(data.error || 'Failed to add domain');
+            alert(adminErrorText(data));
         }
     } catch (err) {
         console.error('Error adding domain:', err);
@@ -722,7 +740,7 @@ async function removeDomain(domain) {
                 domainList.parentNode.appendChild(msg);
             }
         } else {
-            alert(data.error || 'Failed to remove domain');
+            alert(adminErrorText(data));
         }
     } catch (err) {
         console.error('Error removing domain:', err);
@@ -865,7 +883,7 @@ document.getElementById('oidc-form').addEventListener('submit', async function(e
             document.getElementById('test-oidc-btn').disabled = false;
             loadAuthConfig();
         } else {
-            alert(data.error || 'Failed to save configuration');
+            alert(adminErrorText(data));
         }
     } catch (err) {
         console.error('Error saving config:', err);
@@ -873,9 +891,14 @@ document.getElementById('oidc-form').addEventListener('submit', async function(e
     }
 });
 
-// Test OIDC connection - navigate directly (OAuth redirects don't work with fetch due to CORS)
+// Test OIDC connection - submit a form (OAuth redirects don't work with fetch due to CORS).
+// A POST, so a link from another site cannot start a test that enables SSO.
 document.getElementById('test-oidc-btn').addEventListener('click', function() {
-    window.location.href = `${scriptRoot}/auth/oidc/test/${tenantId}`;
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = `${scriptRoot}/auth/oidc/test/${tenantId}`;
+    document.body.appendChild(form);
+    form.submit();
 });
 
 // Deactivate SSO
@@ -893,7 +916,7 @@ document.getElementById('disable-oidc-btn').addEventListener('click', async func
             alert('SSO deactivated');
             loadAuthConfig();
         } else {
-            alert(data.error || 'Failed to deactivate SSO');
+            alert(adminErrorText(data));
         }
     } catch (err) {
         console.error('Error deactivating SSO:', err);
@@ -918,7 +941,7 @@ if (disableSetupBtn) {
                 alert(data.message);
                 window.location.reload();
             } else {
-                alert(data.error || 'Failed to disable setup mode');
+                alert(adminErrorText(data));
             }
         } catch (err) {
             console.error('Error disabling setup mode:', err);
@@ -944,7 +967,7 @@ if (enableSetupBtn) {
                 alert(data.message);
                 window.location.reload();
             } else {
-                alert(data.error || 'Failed to enable setup mode');
+                alert(adminErrorText(data));
             }
         } catch (err) {
             console.error('Error enabling setup mode:', err);
@@ -956,8 +979,8 @@ if (enableSetupBtn) {
 // Show SSO access warning if configured but no users/domains
 function updateSsoAccessWarning(oidcConfigured) {
     const warning = document.getElementById('sso-access-warning');
-    const hasUsers = {{ users|length }} > 0;
-    const hasDomains = {{ authorized_domains|length }} > 0;
+    const hasUsers = {{ users|length|tojson }} > 0;
+    const hasDomains = {{ authorized_domains|length|tojson }} > 0;
 
     if (oidcConfigured && !hasUsers && !hasDomains) {
         warning.style.display = 'block';

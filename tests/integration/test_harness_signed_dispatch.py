@@ -56,6 +56,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from adcp.types import GetAdcpCapabilitiesResponse
@@ -454,7 +455,11 @@ def test_an_unsignable_leg_refuses_every_realization(integration_db, signed):
     """
     from tests.harness.transport import MissingToolNameError
 
-    with _SignedDispatchEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+    # The unsigned control needs an environment with no declared MCP tool.
+    with (
+        _SignedDispatchEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env,
+        patch.object(env, "MCP_TOOL", None),
+    ):
         for leg in UNSIGNABLE_LEGS:
             with pytest.raises(NotImplementedError, match="cannot be realized"):
                 env.call_via(leg, signed=signed)

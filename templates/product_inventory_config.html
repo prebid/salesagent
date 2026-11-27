@@ -132,9 +132,8 @@
 {% include 'partials/hierarchical_tree_scripts.html' %}
 
 <script>
-const scriptRoot = '{{ request.script_root }}' || '';
-const tenantId = '{{ tenant_id }}';
-const productId = '{{ product.product_id }}';
+const tenantId = {{ tenant_id|tojson }};
+const productId = {{ product.product_id|tojson }};
 const treeApiUrl = `${scriptRoot}/api/tenant/${tenantId}/inventory/tree`;
 let selectedAdUnits = new Set();
 let adUnitTree = null;
@@ -170,34 +169,34 @@ function loadCurrentConfig() {
                 return;
             }
 
-            let html = '';
+            let inventoryHtml = '';
 
             if (data.ad_units && data.ad_units.length > 0) {
-                html += '<h6>Ad Units (' + data.ad_units.length + ')</h6>';
-                html += '<ul class="list-unstyled">';
+                inventoryHtml += '<h6>Ad Units (' + escapeHtml(data.ad_units.length) + ')</h6>';
+                inventoryHtml += '<ul class="list-unstyled">';
                 data.ad_units.forEach(unit => {
                     selectedAdUnits.add(unit.id);
-                    html += `<li>• ${unit.path.join(' > ')}`;
-                    if (unit.is_primary) html += ' <span class="badge bg-primary">Primary</span>';
-                    html += '</li>';
+                    inventoryHtml += `<li>• ${escapeHtml(unit.path.join(' > '))}`;
+                    if (unit.is_primary) inventoryHtml += ' <span class="badge bg-primary">Primary</span>';
+                    inventoryHtml += '</li>';
                 });
-                html += '</ul>';
+                inventoryHtml += '</ul>';
             }
 
             if (data.placements && data.placements.length > 0) {
-                html += '<h6>Placements (' + data.placements.length + ')</h6>';
-                html += '<ul class="list-unstyled">';
+                inventoryHtml += '<h6>Placements (' + escapeHtml(data.placements.length) + ')</h6>';
+                inventoryHtml += '<ul class="list-unstyled">';
                 data.placements.forEach(placement => {
-                    html += `<li>• ${placement.name}</li>`;
+                    inventoryHtml += `<li>• ${escapeHtml(placement.name)}</li>`;
                 });
-                html += '</ul>';
+                inventoryHtml += '</ul>';
             }
 
-            if (!html) {
-                html = '<p class="text-muted">No inventory configured yet</p>';
+            if (!inventoryHtml) {
+                inventoryHtml = '<p class="text-muted">No inventory configured yet</p>';
             }
 
-            configDiv.innerHTML = html;
+            configDiv.innerHTML = inventoryHtml;
         })
         .catch(error => {
             console.error('Error loading config:', error);
@@ -212,20 +211,20 @@ function updateSelectedDisplay() {
         return;
     }
 
-    let html = `<p><strong>${selectedAdUnits.size} ad units selected</strong></p>`;
-    html += '<ul class="list-unstyled">';
+    let selectedHtml = `<p><strong>${escapeHtml(selectedAdUnits.size)} ad units selected</strong></p>`;
+    selectedHtml += '<ul class="list-unstyled">';
 
     selectedAdUnits.forEach(unitId => {
         const cached = adUnitTree ? adUnitTree.getNodeData(unitId) : null;
         if (cached && cached.path) {
-            html += `<li>• ${cached.path.join(' > ')}</li>`;
+            selectedHtml += `<li>• ${escapeHtml(cached.path.join(' > '))}</li>`;
         } else {
-            html += `<li>• ${unitId}</li>`;
+            selectedHtml += `<li>• ${escapeHtml(unitId)}</li>`;
         }
     });
 
-    html += '</ul>';
-    display.innerHTML = html;
+    selectedHtml += '</ul>';
+    display.innerHTML = selectedHtml;
 }
 
 function refreshInventory() {
@@ -238,7 +237,7 @@ function getSuggestions() {
     const sizes = [];
     {% if product.implementation_config and product.implementation_config.creative_placeholders %}
         {% for placeholder in product.implementation_config.creative_placeholders %}
-        sizes.push('{{ placeholder.width }}x{{ placeholder.height }}');
+        sizes.push('' + {{ placeholder.width|tojson }} + 'x' + {{ placeholder.height|tojson }});
         {% endfor %}
     {% endif %}
 
@@ -261,28 +260,28 @@ function showSuggestions(suggestions) {
         return;
     }
 
-    let html = '<h5>Suggested Ad Units</h5>';
-    html += '<div style="max-height: 300px; overflow-y: auto;">';
+    let suggestionsHtml = '<h5>Suggested Ad Units</h5>';
+    suggestionsHtml += '<div style="max-height: 300px; overflow-y: auto;">';
 
     suggestions.forEach(suggestion => {
         const unit = suggestion.inventory;
-        html += `
+        suggestionsHtml += `
             <div class="suggestion-item">
-                <span class="suggestion-score">Score: ${suggestion.score}</span>
-                <strong>${unit.path}</strong><br>
-                <small class="text-muted">${suggestion.reasons.join(', ')}</small><br>
+                <span class="suggestion-score">Score: ${escapeHtml(suggestion.score)}</span>
+                <strong>${escapeHtml(unit.path)}</strong><br>
+                <small class="text-muted">${escapeHtml(suggestion.reasons.join(', '))}</small><br>
                 <button class="btn btn-sm btn-primary mt-2"
-                        onclick="addSuggestion('${unit.id}')">
+                        onclick="addSuggestion(${jsArg(unit.id)})">
                     Add to Selection
                 </button>
             </div>
         `;
     });
 
-    html += '</div>';
+    suggestionsHtml += '</div>';
 
     // Show in a modal or replace current tree temporarily
-    document.getElementById('inventoryTree').innerHTML = html;
+    document.getElementById('inventoryTree').innerHTML = suggestionsHtml;
 }
 
 function addSuggestion(unitId) {
@@ -317,7 +316,7 @@ function saveConfiguration() {
             alert('Configuration saved successfully!');
             window.location.href = scriptRoot + `/tenant/${tenantId}/products/${productId}/edit`;
         } else {
-            alert('Error saving configuration: ' + (result.error || 'Unknown error'));
+            alert('Error saving configuration: ' + adminErrorText(result));
         }
     })
     .catch(error => {

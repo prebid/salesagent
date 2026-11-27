@@ -87,6 +87,7 @@ from tests.unit._architecture_helpers import (
     assert_violations_match_allowlist,
     format_failure,
     parse_module,
+    rel,
     repo_root,
 )
 
@@ -143,7 +144,7 @@ _FIX_HINT = (
 def scope_paths() -> list[Path]:
     """Absolute paths of the modules this guard scans."""
     repo = repo_root()
-    return [repo / rel for rel in SCOPE]
+    return [repo / rel_path for rel_path in SCOPE]
 
 
 def public_symbols(tree: ast.Module) -> list[tuple[str, int]]:
@@ -233,7 +234,7 @@ def _production_modules() -> dict[str, set[str]]:
         for path in sorted((repo / root).rglob("*.py")):
             if path.name == "__init__.py" or "__pycache__" in path.parts:
                 continue
-            modules[str(path.relative_to(repo))] = module_references(parse_module(path))
+            modules[rel(path, repo)] = module_references(parse_module(path))
     return modules
 
 
@@ -251,11 +252,11 @@ def _scan() -> set[tuple[str, str]]:
     """Every ``(module, symbol)`` on the signing-credential surface that only tests reach."""
     production = _production_modules()
     scope_symbols = {
-        rel: {name for name, _ in public_symbols(parse_module(path))}
-        for rel, path in zip(SCOPE, scope_paths(), strict=True)
+        rel_path: {name for name, _ in public_symbols(parse_module(path))}
+        for rel_path, path in zip(SCOPE, scope_paths(), strict=True)
     }
-    scope_refs = {rel: production[rel] for rel in SCOPE}
-    outside_refs = {rel: refs for rel, refs in production.items() if rel not in scope_symbols}
+    scope_refs = {rel_path: production[rel_path] for rel_path in SCOPE}
+    outside_refs = {rel_path: refs for rel_path, refs in production.items() if rel_path not in scope_symbols}
 
     live = live_scope_modules(scope_symbols=scope_symbols, scope_refs=scope_refs, outside_refs=outside_refs)
     production_refs = frozenset(
@@ -264,10 +265,10 @@ def _scan() -> set[tuple[str, str]]:
     test_refs = _test_references()
 
     violations: set[tuple[str, str]] = set()
-    for rel, path in zip(SCOPE, scope_paths(), strict=True):
+    for rel_path, path in zip(SCOPE, scope_paths(), strict=True):
         tree = parse_module(path)
         flagged = set(find_dark_primitive_violations(tree, production_refs=production_refs, test_refs=test_refs))
-        violations |= {(rel, name) for name, lineno in public_symbols(tree) if lineno in flagged}
+        violations |= {(rel_path, name) for name, lineno in public_symbols(tree) if lineno in flagged}
     return violations
 
 
@@ -276,7 +277,7 @@ class TestNoDarkSigningPrimitives:
 
     def test_every_scoped_module_exists(self):
         """A renamed/moved module must not silently empty the guard's scan set."""
-        missing = [rel for rel, path in zip(SCOPE, scope_paths(), strict=True) if not path.exists()]
+        missing = [rel_path for rel_path, path in zip(SCOPE, scope_paths(), strict=True) if not path.exists()]
         assert not missing, format_failure(
             summary="Scoped modules are gone — update SCOPE, do not let the guard scan nothing:",
             violations=missing,

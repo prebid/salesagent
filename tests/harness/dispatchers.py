@@ -440,8 +440,6 @@ class RestE2EDispatcher:
         # way this leg reaches the verifier's refusal branch at all: security.mdx
         # :1269 makes an unsigned request carrying a valid bearer a correct 200.
         credential = kwargs.pop("credential", NO_IDENTITY_OVERRIDE)
-        # The env already owns this REST endpoint. Dispatch metadata is never a request field.
-        kwargs.pop("tool_name", None)
         body = env.build_rest_body(**kwargs)
         endpoint = env.REST_ENDPOINT  # type: ignore[attr-defined]
         method = _effective_rest_method(getattr(env, "REST_METHOD", "post"), has_params=bool(kwargs))
@@ -472,17 +470,7 @@ class McpE2EDispatcher:
     ``env.e2e_config.base_url`` and unwraps the response identically to the
     in-process ``McpDispatcher`` above (design doc §5).
 
-    Unlike the other dispatchers on this legacy ``env.call_via(transport,
-    **kwargs)`` path, per-env subclasses hardcode their MCP tool name as a
-    string literal inside their dispatch override (e.g. ``ProductEnv`` calls
-    ``self._run_mcp_client("get_products", ...)``) — there is no attribute to
-    introspect it from generically, and unlike ``RestE2EDispatcher`` (which
-    reads ``env.REST_ENDPOINT``/``env.REST_METHOD``) no env exposes an MCP
-    equivalent. This dispatcher was a ``NotImplementedError`` placeholder with
-    zero callers (no env ever dispatched ``Transport.E2E_MCP`` through
-    ``call_via``), so this is not a breaking-change surface: callers must pass
-    ``tool_name=`` explicitly in kwargs, the same tool identity
-    ``AdCPTestClient.call()``'s first positional argument already requires.
+    The tool name is an explicit override or the env's declared ``MCP_TOOL``.
 
     ``signed`` is consumed and REFUSED — see ``_refuse_signed_generic_client``:
     this leg's delivery does not pass through ``wire_request``, so honoring a
@@ -496,13 +484,11 @@ class McpE2EDispatcher:
         if signed:
             _refuse_signed_generic_client(signed, Transport.E2E_MCP)
 
-        tool_name = kwargs.pop("tool_name", None)
-        if tool_name is None:
+        tool_name = kwargs.pop("tool_name", None) or getattr(env, "MCP_TOOL", None)
+        if not tool_name:
             raise MissingToolNameError(
-                "McpE2EDispatcher.dispatch requires tool_name= in kwargs (e.g. "
-                'env.call_via(Transport.E2E_MCP, tool_name="get_products", req=...)) — '
-                "there is no per-env attribute to derive it from generically. "
-                "Prefer AdCPTestClient(env).call(tool_name, payload, Transport.E2E_MCP) directly."
+                "McpE2EDispatcher needs tool_name= or env.MCP_TOOL; "
+                "use AdCPTestClient(env).call(tool, payload, Transport.E2E_MCP) for explicit dispatch."
             )
 
         credential = kwargs.pop("credential", NO_IDENTITY_OVERRIDE)

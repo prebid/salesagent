@@ -91,7 +91,7 @@ def read_json_baseline(baseline_file: Path, keys: Sequence[str]) -> dict[str, in
     if not baseline_file.exists():
         return None
     try:
-        data = json.loads(baseline_file.read_text())
+        data = json.loads(baseline_file.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             raise ValueError(f"baseline must be a JSON object, got {type(data).__name__}")
         return {key: int(data.get(key, 0)) for key in keys}
@@ -103,7 +103,7 @@ def read_json_baseline(baseline_file: Path, keys: Sequence[str]) -> dict[str, in
 def write_json_baseline(baseline_file: Path, counts: Mapping[str, int], keys: Sequence[str]) -> None:
     """Write a JSON baseline with a stable key order."""
     payload = {key: int(counts[key]) for key in keys}
-    baseline_file.write_text(json.dumps(payload, indent=2) + "\n")
+    baseline_file.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
 def read_int_baseline(baseline_file: Path) -> int | None:
@@ -111,7 +111,7 @@ def read_int_baseline(baseline_file: Path) -> int | None:
     if not baseline_file.exists():
         return None
     try:
-        return int(baseline_file.read_text().strip())
+        return int(baseline_file.read_text(encoding="utf-8").strip())
     except (ValueError, OSError) as e:
         print(f"Warning: Could not read baseline from {baseline_file}: {e}", file=sys.stderr)
         return None
@@ -119,7 +119,7 @@ def read_int_baseline(baseline_file: Path) -> int | None:
 
 def write_int_baseline(baseline_file: Path, count: int) -> None:
     """Write a single-integer baseline file."""
-    baseline_file.write_text(f"{count}\n")
+    baseline_file.write_text(f"{count}\n", encoding="utf-8")
 
 
 def int_baseline_io(

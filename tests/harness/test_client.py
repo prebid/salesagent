@@ -23,6 +23,7 @@ from tests.harness.address_table import NoAddressForTransport, ToolAddress
 from tests.harness.client import AdCPTestClient, _wrap_rest, unwrap_rest_response
 from tests.harness.transport import Transport
 from tests.helpers.credentials import credential_headers
+from tests.helpers.mcp_http import mcp_handshake_response, mock_mcp_http
 
 
 class TestClientMcpDispatchNoDb:
@@ -361,10 +362,6 @@ class TestClientE2eMcpDelivery:
     e2e-with-a-real-server verification happens in ``tests/e2e/`` via
     ``./run_all_tests.sh`` (no Docker stack available in this worktree)."""
 
-    class _FakeToolResult:
-        def __init__(self, structured_content: dict) -> None:
-            self.structured_content = structured_content
-
     class _FakeMcpClient:
         """Records the transport it was built with and the tool_name/arguments
         of the last call_tool — enough to assert DELIVER built the real HTTP
@@ -383,7 +380,7 @@ class TestClientE2eMcpDelivery:
         async def __aexit__(self, *exc_info):
             return False
 
-        async def call_tool(self, name, arguments):
+        async def call_tool(self, name, arguments, *, raise_on_error=True):
             self.calls.append((name, arguments))
             # Empty products list — a full Product needs many required nested
             # fields (publisher_properties, pricing_options,
@@ -391,7 +388,10 @@ class TestClientE2eMcpDelivery:
             # verify (transport wiring / headers / delegation); an empty list
             # still round-trips through GetProductsResponse
             # (the spec_response_model parse-back).
-            return TestClientE2eMcpDelivery._FakeToolResult({"products": []})
+            from fastmcp.client.client import CallToolResult
+
+            assert raise_on_error is False
+            return CallToolResult(content=[], structured_content={"products": []}, meta=None)
 
     def test_e2e_mcp_dispatch_builds_real_http_transport_and_succeeds(self, monkeypatch):
         from tests.harness._base import BaseTestEnv
@@ -470,7 +470,7 @@ class TestClientE2eMcpDelivery:
         from tests.harness.transport import E2EConfig
 
         class _FailingMcpClient(self._FakeMcpClient):
-            async def call_tool(self, name, arguments):
+            async def call_tool(self, name, arguments, *, raise_on_error=True):
                 raise ToolError(
                     '{"errors": [{"code": "AUTH_REQUIRED", "message": "no auth", "recovery": "correctable"}], '
                     '"adcp_error": {"code": "AUTH_REQUIRED", "message": "no auth", "recovery": "correctable"}}'
@@ -525,7 +525,7 @@ class TestClientE2eMcpHttpRefusals:
         assert result.raw_response.status_code == 401
         assert result.wire_error_envelope is None
 
-    def test_legacy_tuple_in_an_mcp_error_frame_uses_the_shared_parser(self, monkeypatch):
+    def test_legacy_tuple_in_an_mcp_error_frame_has_no_invented_envelope(self, monkeypatch):
         result = self._dispatch(
             monkeypatch,
             {
@@ -535,10 +535,7 @@ class TestClientE2eMcpHttpRefusals:
             },
         )
         assert result.is_error is True
-        assert result.wire_error_envelope == {
-            "adcp_error": {"code": "AUTH_MISSING"},
-            "errors": [{"code": "AUTH_MISSING"}],
-        }
+        assert result.wire_error_envelope is None
         assert result.raw_response.status_code == 401
         assert result.raw_response.headers["www-authenticate"] == "Bearer"
 
@@ -555,31 +552,9 @@ class TestClientE2eMcpHttpRefusals:
             if request.method != "POST":
                 return httpx.Response(405)
             frame = json.loads(request.content)
-            if frame["method"] == "server/discover":
-                return httpx.Response(
-                    200,
-                    json={
-                        "jsonrpc": "2.0",
-                        "id": frame["id"],
-                        "error": {"code": -32601, "message": "Method not found"},
-                    },
-                )
-            if frame["method"] == "initialize":
-                return httpx.Response(
-                    200,
-                    json={
-                        "jsonrpc": "2.0",
-                        "id": frame["id"],
-                        "result": {
-                            "protocolVersion": frame["params"]["protocolVersion"],
-                            "capabilities": {},
-                            "serverInfo": {"name": "refusal-test", "version": "1"},
-                        },
-                    },
-                )
-            if frame["method"] == "notifications/initialized":
-                return httpx.Response(202)
-            assert frame["method"] == "tools/call"
+            handshake = mcp_handshake_response(frame)
+            if handshake is not None:
+                return handshake
             headers = {"content-type": "application/json", "www-authenticate": "Bearer"}
             if isinstance(refusal, bytes):
                 payload_bytes = refusal
@@ -591,12 +566,7 @@ class TestClientE2eMcpHttpRefusals:
 
             return httpx.Response(401, content=_body(payload_bytes), headers=headers)
 
-        real_client = httpx.AsyncClient
-
-        def client_factory(**kwargs):
-            return real_client(transport=httpx.MockTransport(respond), **kwargs)
-
-        monkeypatch.setattr("mcp.shared._httpx_utils.httpx2.AsyncClient", client_factory)
+        mock_mcp_http(monkeypatch, respond)
         env = BaseTestEnv(e2e_config=E2EConfig(base_url="http://refusal-test", postgres_url="postgresql://unused/db"))
         return AdCPTestClient(env).call("list_accounts", {}, Transport.E2E_MCP, credential={})
 

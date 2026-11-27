@@ -261,7 +261,7 @@ def storyboards(dist: Path) -> Iterator[Storyboard]:
     ``storyboards_missing_tools``.
     """
     for yaml_file in sorted(dist.rglob("*.yaml")):
-        rel = str(yaml_file.relative_to(dist))
+        rel = yaml_file.relative_to(dist).as_posix()
         if rel.startswith(_SKIP_PREFIXES):
             continue
         stem = storyboard_key(rel)
@@ -400,7 +400,7 @@ def requiring_indexes(dist: Path) -> dict[str, list[str]]:
     """
     required_by: dict[str, list[str]] = {}
     for index in sorted(dist.rglob("index.yaml")):
-        rel_index = str(index.relative_to(dist))
+        rel_index = index.relative_to(dist).as_posix()
         if rel_index.startswith("domains/"):
             continue
         block = _REQUIRES_SCENARIOS_RE.search(index.read_text(encoding="utf-8"))
@@ -890,7 +890,7 @@ def parse_ledger_lines(path: Path, *, grammar: Callable[[str], Any]) -> list[Any
     ledger.
     """
     parsed: list[Any] = []
-    for lineno, raw in enumerate(path.read_text().splitlines(), start=1):
+    for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         stripped = raw.strip()
         if not stripped or stripped.startswith("#"):
             continue

@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import pytest
 
+from tests.helpers.admin_session import admin_blueprint_app
+
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 TENANT_ID = "sync_api_gam_import"
@@ -56,38 +58,17 @@ def sync_api_client(seeded_tenant, monkeypatch):
     only the blueprint under test, so a failure here can only be this
     blueprint's own bug, not something else in the full admin app.
 
-    ``sync_api.db_session`` is ``src.services.gam_inventory_service``'s
-    module-level ``scoped_session``, bound to an ``engine`` created ONCE at
-    that module's first import -- whichever ``DATABASE_URL`` was live then,
-    not the per-test database ``integration_db`` provisions afterward. Left
-    alone, every DB read through this blueprint hits the wrong (often
-    nonexistent) database, independent of anything this test file is about.
-    Rebinding it here to a fresh engine on the CURRENT ``DATABASE_URL``
-    (already pointed at this test's isolated database by ``seeded_tenant``)
-    is test-side compensation for that pre-existing gap -- not a production
-    fix, out of salesagent-vwbj's scope (a bad import, not a session
-    lifecycle bug).
+    ``sync_api.db_session`` binds to the process's engine when it connects
+    (``gam_inventory_service._ProcessEngineSession``), so it reads the database
+    ``integration_db`` provisioned, as every other session does.
     """
-    import os
-
-    from flask import Flask
-    from sqlalchemy import create_engine
-    from sqlalchemy.orm import scoped_session, sessionmaker
-
-    from src.admin import sync_api as sync_api_module
     from src.admin.sync_api import sync_api
-
-    monkeypatch.setattr(
-        sync_api_module,
-        "db_session",
-        scoped_session(sessionmaker(bind=create_engine(os.environ["DATABASE_URL"]))),
-    )
+    from src.core.config import load_settings
 
     monkeypatch.setenv("SYNC_API_KEY", API_KEY)
-    app = Flask(__name__)
-    app.config["TESTING"] = True
-    app.register_blueprint(sync_api, url_prefix="/api/sync")
-    return app.test_client()
+    # seeded_tenant has already read (and cached) the settings, so read them again.
+    load_settings()
+    return admin_blueprint_app(sync_api, url_prefix="/api/sync").test_client()
 
 
 def _get(client, path: str):

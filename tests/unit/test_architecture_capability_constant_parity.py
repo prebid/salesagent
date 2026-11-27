@@ -77,7 +77,7 @@ def test_capability_values_are_derived_not_literal():
     offenders: list[str] = []
     for path in Path("src").rglob("*.py"):
         try:
-            for site in _literal_capability_sites_in(path.read_text()):
+            for site in _literal_capability_sites_in(path.read_text(encoding="utf-8")):
                 offenders.append(f"{path}:{site.split('@')[1]} ({site.split('@')[0]})")
         except SyntaxError:
             continue
@@ -125,7 +125,7 @@ def test_derivation_only_builders_do_not_read_the_declaration_store():
     offenders: list[str] = []
     for path in Path("src").rglob("*.py"):
         try:
-            for site in _declaration_reads_in_builders(path.read_text()):
+            for site in _declaration_reads_in_builders(path.read_text(encoding="utf-8")):
                 builder, line = site.split("@")
                 offenders.append(f"{path}:{line} ({builder})")
         except SyntaxError:
@@ -255,7 +255,9 @@ def test_declaration_driven_fields_are_not_literal():
     offenders: list[str] = []
     for path in Path("src").rglob("*.py"):
         try:
-            offenders.extend(f"{path} ({field})" for field in _fields_never_declaration_driven(path.read_text()))
+            offenders.extend(
+                f"{path} ({field})" for field in _fields_never_declaration_driven(path.read_text(encoding="utf-8"))
+            )
         except SyntaxError:
             continue
     assert not offenders, (
@@ -364,7 +366,7 @@ def test_account_posture_derives_from_the_policy_module():
     """
     # _build_account_block moved with the rest of the derivation when the agent card
     # became a second consumer of it. The guard follows the function, not its old file.
-    source = (REPO_ROOT / "src/services/seller_capabilities.py").read_text()
+    source = (REPO_ROOT / "src/services/seller_capabilities.py").read_text(encoding="utf-8")
     inline = _inline_policy_reads_in_account_block(source)
     assert not inline, (
         f"_build_account_block reads policy-owned tenant key(s) inline: {inline}. "

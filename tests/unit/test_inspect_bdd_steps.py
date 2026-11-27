@@ -45,7 +45,7 @@ class TestBddStepExtraction:
             def then_operation_fails(ctx: dict) -> None:
                 assert "error" in ctx
         """)
-        (tmp_path / "steps.py").write_text(source)
+        (tmp_path / "steps.py").write_text(source, encoding="utf-8")
 
         from inspect_bdd_steps import extract_bdd_steps
 
@@ -64,7 +64,7 @@ class TestBddStepExtraction:
             def then_error_code(ctx: dict, code: str) -> None:
                 assert ctx.get("error_code") == code
         """)
-        (tmp_path / "steps.py").write_text(source)
+        (tmp_path / "steps.py").write_text(source, encoding="utf-8")
 
         from inspect_bdd_steps import extract_bdd_steps
 
@@ -85,7 +85,7 @@ class TestBddStepExtraction:
             def when_request(ctx: dict) -> None:
                 pass
         """)
-        (tmp_path / "steps.py").write_text(source)
+        (tmp_path / "steps.py").write_text(source, encoding="utf-8")
 
         from inspect_bdd_steps import extract_bdd_steps
 
@@ -103,7 +103,7 @@ class TestBddStepExtraction:
                 """Assert no error."""
                 assert "error" not in ctx
         ''')
-        (tmp_path / "steps.py").write_text(source)
+        (tmp_path / "steps.py").write_text(source, encoding="utf-8")
 
         from inspect_bdd_steps import extract_bdd_steps
 
@@ -133,14 +133,16 @@ class TestBddStepExtraction:
             from pytest_bdd import then
             @then("step A")
             def step_a(ctx): pass
-        """)
+        """),
+            encoding="utf-8",
         )
         (tmp_path / "sub" / "b.py").write_text(
             textwrap.dedent("""
             from pytest_bdd import given
             @given("step B")
             def step_b(ctx): pass
-        """)
+        """),
+            encoding="utf-8",
         )
 
         from inspect_bdd_steps import extract_bdd_steps
@@ -161,7 +163,7 @@ class TestBddStepExtraction:
             def then_check(ctx):
                 assert _helper(ctx) is not None
         """)
-        (tmp_path / "steps.py").write_text(source)
+        (tmp_path / "steps.py").write_text(source, encoding="utf-8")
 
         from inspect_bdd_steps import extract_bdd_steps
 
@@ -180,7 +182,7 @@ class TestBddStepExtraction:
             @then("second step")
             def second(ctx): pass
         """)
-        (tmp_path / "steps.py").write_text(source)
+        (tmp_path / "steps.py").write_text(source, encoding="utf-8")
 
         from inspect_bdd_steps import extract_bdd_steps
 

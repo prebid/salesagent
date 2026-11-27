@@ -1,3 +1,6 @@
+<!-- FIXME(#2613): this page still names code by line number. Name the function, class, test,
+constant, or section instead, and lower its count in BASELINE in
+tests/unit/test_architecture_docs_no_line_numbers.py in the same change. -->
 # Error architecture
 
 Every buyer-facing error resolves through one mechanism. This page describes it: the one

@@ -401,7 +401,7 @@ def _load_traceability(path: Path) -> dict:
             "source": {"repository": "adcp-req", "commit": None, "compiled_at": None},
             "mappings": {},
         }
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     data = yaml.safe_load(text)
     if data is None:
         return {
@@ -476,7 +476,7 @@ def _save_traceability(path: Path, data: dict) -> None:
                 output += f"      business_rules: {_yaml_list(rules)}\n"
                 output += f"      status: {s['status']}\n"
 
-    path.write_text(output)
+    path.write_text(output, encoding="utf-8")
 
 
 def _yaml_str(val: str | None) -> str:
@@ -875,7 +875,7 @@ def compile_feature(
 
     Returns (uc_key, output_text, new_mappings, all_scenario_ids).
     """
-    text = source_path.read_text()
+    text = source_path.read_text(encoding="utf-8")
     feature = parse_feature_file(text)
     feature_filename = source_path.name
     uc_key = _extract_uc_key(feature_filename)
@@ -887,8 +887,8 @@ def compile_feature(
     if not dry_run:
         output_path = OUTPUT_DIR / feature_filename
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(output_text)
-        print(f"  Compiled: {feature_filename} -> {output_path.relative_to(PROJECT_ROOT)}")
+        output_path.write_text(output_text, encoding="utf-8")
+        print(f"  Compiled: {feature_filename} -> {output_path.relative_to(PROJECT_ROOT).as_posix()}")
     else:
         print(f"  [DRY RUN] Would compile: {feature_filename}")
         print(f"    Scenarios: {len(feature.scenarios)}")
@@ -977,7 +977,7 @@ def compile_features(
 
     if not dry_run:
         _save_traceability(TRACEABILITY_PATH, traceability)
-        print(f"\n  Updated: {TRACEABILITY_PATH.relative_to(PROJECT_ROOT)}")
+        print(f"\n  Updated: {TRACEABILITY_PATH.relative_to(PROJECT_ROOT).as_posix()}")
         if pruned_count:
             print(f"  Pruned: {pruned_count} stale traceability entry/entries (no longer produced by adcp-req)")
     else:
@@ -1228,7 +1228,7 @@ def collected_feature_files(bdd_tests_dir: Path | None = None) -> frozenset[str]
     root = BDD_TESTS_DIR if bdd_tests_dir is None else bdd_tests_dir
     names: set[str] = set()
     for module in sorted(root.glob("test_*.py")):
-        names.update(m.group("name") for m in _SCENARIOS_CALL_RE.finditer(module.read_text()))
+        names.update(m.group("name") for m in _SCENARIOS_CALL_RE.finditer(module.read_text(encoding="utf-8")))
     if not names:
         raise CollectedFeaturesUnavailable(
             f"no scenarios(...) call naming a .feature file found under {root} — refusing to merge. "
@@ -1269,7 +1269,7 @@ def load_bound_scenarios(baseline_bdd_json_path: Path) -> set[str]:
     t_id = re.compile(r"^T-UC-[\w\-.]+$")
     by_sid: dict[str, set[str]] = {}
     try:
-        data = json.loads(baseline_bdd_json_path.read_text())
+        data = json.loads(baseline_bdd_json_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         print(f"[load_bound_scenarios] cannot read {baseline_bdd_json_path}: {exc!r}", file=sys.stderr)
         return set()
@@ -1306,7 +1306,7 @@ def merge_feature(
     since there's no binding to preserve.
     """
     collected = collected_ucs()
-    target_feature = parse_feature_file(target_source_path.read_text())
+    target_feature = parse_feature_file(target_source_path.read_text(encoding="utf-8"))
     feature_filename = target_source_path.name
     uc_key = _extract_uc_key(feature_filename)
 
@@ -1321,7 +1321,7 @@ def merge_feature(
     legacy_feature: Feature | None = None
     legacy_by_id: dict[str, Scenario] = {}
     if legacy_compiled_path is not None and legacy_compiled_path.exists():
-        legacy_feature = parse_feature_file(legacy_compiled_path.read_text())
+        legacy_feature = parse_feature_file(legacy_compiled_path.read_text(encoding="utf-8"))
         for scen in legacy_feature.scenarios:
             sid = _scenario_id(scen)
             if sid is not None:
@@ -1641,7 +1641,7 @@ def merge_features(
         if not dry_run:
             output_path = OUTPUT_DIR / source_path.name
             OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-            output_path.write_text(output_text)
+            output_path.write_text(output_text, encoding="utf-8")
         summary = " ".join(f"{k}={v}" for k, v in sorted(bucket_counts.items()))
         verb = "[DRY] would merge" if dry_run else "Merged"
         print(f"  {verb}: {source_path.name}  [{summary}]")
@@ -1676,7 +1676,7 @@ def merge_features(
 
     if not dry_run:
         _save_traceability(TRACEABILITY_PATH, traceability)
-        print(f"\n  Updated: {TRACEABILITY_PATH.relative_to(PROJECT_ROOT)}")
+        print(f"\n  Updated: {TRACEABILITY_PATH.relative_to(PROJECT_ROOT).as_posix()}")
         if pruned_count:
             print(f"  Pruned: {pruned_count} stale traceability entry/entries")
 
@@ -1687,7 +1687,7 @@ def merge_features(
         import json
 
         manifest["dropped_prose_assertions"] = sorted(set(_DROPPED_PROSE))
-        manifest_path.write_text(json.dumps(manifest, indent=2))
+        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         total_nsm = sum(len(uc["needs_semantic_merge"]) for uc in manifest["per_uc"].values())
         try:
             display = manifest_path.relative_to(PROJECT_ROOT)
@@ -1753,11 +1753,11 @@ def verify_features(adcp_req_path: Path) -> bool:
             continue
 
         # Re-compile in memory and compare
-        text = source_path.read_text()
+        text = source_path.read_text(encoding="utf-8")
         feature = parse_feature_file(text)
         uc_key = _extract_uc_key(source_path.name)
         expected, _manifest, _ids = _render_feature(feature, traceability, uc_key, source_path.name, commit_sha)
-        actual = output_path.read_text()
+        actual = output_path.read_text(encoding="utf-8")
         # Compare ignoring timestamp differences in the generation stamp
         # (first two lines contain the timestamp)
         expected_body = "\n".join(expected.splitlines()[2:])

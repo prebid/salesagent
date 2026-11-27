@@ -71,7 +71,7 @@ def test_signing_wire_types_are_constructed_only_in_the_posture_module():
         if path == _OWNER:
             continue
         try:
-            source = path.read_text()
+            source = path.read_text(encoding="utf-8")
         except OSError:  # pragma: no cover - unreadable file is not this guard's concern
             continue
         try:
@@ -162,7 +162,7 @@ def test_no_module_level_posture_constant_outside_the_posture_module():
         if path == _OWNER:
             continue
         try:
-            source = path.read_text()
+            source = path.read_text(encoding="utf-8")
         except OSError:  # pragma: no cover - unreadable file is not this guard's concern
             continue
         try:

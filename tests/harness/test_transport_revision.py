@@ -25,25 +25,115 @@ def test_mcp_protocol_refusal_preserves_response_and_message(frame, sse):
     assert ("unauthorized" if isinstance(frame["error"], str) else "bad method") in str(caught.value)
 
 
-@pytest.mark.parametrize(
-    "text", [json.dumps({"errors": [{"code": "AUTH_MISSING"}]}), "('AUTH_MISSING', 'missing token')"]
-)
-@pytest.mark.parametrize("frame_kind", ["error", "result"])
-def test_mcp_http_and_tool_error_text_have_the_same_envelope(text, frame_kind):
-    from fastmcp.exceptions import ToolError
+def _frame_response(frame):
+    return httpx.Response(200, json=frame)
 
-    expected = _base._mcp_wire_envelope(ToolError(text))
-    payload = {"isError": True, "content": [{"type": "text", "text": text}]}
-    frame = {frame_kind: payload}
-    response = httpx.Response(200, json=frame)
+
+@pytest.mark.parametrize("path", ["structured", "data", "text", "payload"])
+def test_mcp_keeps_each_spec_error_envelope_verbatim(path):
+    envelope = {"adcp_error": {"code": "AUTH_MISSING", "recovery": "correctable"}}
+    if path == "structured":
+        frame = {"result": {"isError": True, "structuredContent": envelope}}
+    elif path == "data":
+        frame = {"error": {"code": -32028, "data": envelope}}
+    elif path == "text":
+        frame = {"result": {"isError": True, "content": [{"type": "text", "text": json.dumps(envelope)}]}}
+    else:
+        envelope = {"errors": [{"code": "AUTH_MISSING"}]}
+        frame = {"result": {"isError": True, "structuredContent": envelope}}
+    response = _frame_response(frame)
     with pytest.raises(_base.WireError) as caught:
         _base._mcp_jsonrpc_result(response)
-    assert caught.value.envelope == expected
+    assert caught.value.envelope == envelope
     assert caught.value.response is response
 
 
-def test_mcp_jsonrpc_message_is_retained():
-    assert _base._mcp_error_text({"message": "unknown tool"}) == "unknown tool"
+def test_mcp_prefers_structured_error_to_conflicting_text():
+    structured = {"adcp_error": {"code": "AUTH_MISSING"}}
+    response = _frame_response(
+        {
+            "result": {
+                "isError": True,
+                "structuredContent": structured,
+                "content": [{"type": "text", "text": json.dumps({"adcp_error": {"code": "AUTH_INVALID"}})}],
+            }
+        }
+    )
+    with pytest.raises(_base.WireError) as caught:
+        _base._mcp_jsonrpc_result(response)
+    assert caught.value.envelope == structured
+
+
+@pytest.mark.parametrize("text", ["('AUTH_MISSING', 'missing token')", "plain refusal"])
+def test_mcp_does_not_reconstruct_an_envelope_from_legacy_text(text):
+    from fastmcp.exceptions import ToolError
+
+    assert _base._mcp_wire_error(ToolError(text)).__class__ is ToolError
+    with pytest.raises(_base.WireRefusal):
+        _base._mcp_jsonrpc_result(
+            _frame_response(
+                {
+                    "result": {
+                        "isError": True,
+                        "content": [{"type": "text", "text": text}],
+                    }
+                }
+            )
+        )
+
+
+def test_mcp_does_not_read_jsonrpc_message_as_an_error_envelope():
+    envelope = {"adcp_error": {"code": "AUTH_MISSING"}, "errors": [{"code": "AUTH_MISSING"}]}
+    with pytest.raises(_base.WireRefusal):
+        _base._mcp_jsonrpc_result(_frame_response({"error": {"message": json.dumps(envelope)}}))
+
+
+def test_mcp_success_text_is_not_an_error():
+    result = {"content": [{"type": "text", "text": json.dumps({"adcp_error": {"code": "AUTH_MISSING"}})}]}
+    assert _base._mcp_jsonrpc_result(_frame_response({"result": result})) == result
+
+
+@pytest.mark.parametrize("code", [None, 3, "", "a" * 65])
+def test_mcp_rejects_malformed_error_codes(code):
+    with pytest.raises(_base.WireRefusal):
+        _base._mcp_jsonrpc_result(
+            _frame_response(
+                {
+                    "result": {
+                        "isError": True,
+                        "structuredContent": {"adcp_error": {"code": code}},
+                    }
+                }
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    "message,accepted", [("界" * 1000, True), ("a" * 5000, False)], ids=["compact-utf8", "oversized"]
+)
+def test_mcp_error_limit_counts_compact_utf8_bytes(message, accepted):
+    envelope = {"adcp_error": {"code": "AUTH_MISSING", "message": message}}
+    response = _frame_response({"result": {"isError": True, "structuredContent": envelope}})
+    expected = _base.WireError if accepted else _base.WireRefusal
+    with pytest.raises(expected) as caught:
+        _base._mcp_jsonrpc_result(response)
+    if accepted:
+        assert caught.value.envelope == envelope
+
+
+@pytest.mark.parametrize("first", [None, {"code": ""}])
+def test_mcp_payload_fallback_grades_the_first_error_only(first):
+    envelope = {"errors": [first, {"code": "AUTH_MISSING"}]}
+    response = _frame_response({"result": {"isError": True, "structuredContent": envelope}})
+    with pytest.raises(_base.WireRefusal):
+        _base._mcp_jsonrpc_result(response)
+
+
+def _refuse_probe(monkeypatch, failure):
+    def refuse(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(httpx, "get", refuse)
 
 
 @pytest.fixture
@@ -75,16 +165,13 @@ def test_configured_unreachable_stack_fails(no_stack, monkeypatch, failure):
     monkeypatch.setenv("E2E_BASE_URL", "http://configured.test")
     monkeypatch.setenv("E2E_POSTGRES_URL", "postgresql://test/adcp")
 
-    def refuse(*args, **kwargs):
-        raise failure
-
-    monkeypatch.setattr(httpx, "get", refuse)
+    _refuse_probe(monkeypatch, failure)
     with pytest.raises(RuntimeError, match="configured.*unreachable"):
         E2EConfig.from_environment()
 
 
 @pytest.mark.parametrize(
-    "worker,base_url,postgres_url,tls_base_url,server_host",
+    "worker,expected_base_url,postgres_url,tls_base_url,server_host",
     [
         ("", "http://shared.test", "postgresql://db/adcp?sslmode=disable", "https://tls.test", "shared-server"),
         (
@@ -96,8 +183,9 @@ def test_configured_unreachable_stack_fails(no_stack, monkeypatch, failure):
         ),
     ],
 )
+@pytest.mark.parametrize("per_worker", [False, True])
 def test_stack_keeps_tls_database_and_seller_host(
-    no_stack, monkeypatch, worker, base_url, postgres_url, tls_base_url, server_host
+    no_stack, monkeypatch, worker, expected_base_url, postgres_url, tls_base_url, server_host, per_worker
 ):
     for key, value in {
         "E2E_BASE_URL": "http://shared.test",
@@ -117,9 +205,14 @@ def test_stack_keeps_tls_database_and_seller_host(
         return httpx.Response(200, request=httpx.Request("GET", url))
 
     monkeypatch.setattr(httpx, "get", healthy)
-    config = E2EConfig.from_environment()
-    assert seen == [f"{base_url}/health"]
-    assert config.base_url == base_url
+    if not per_worker:
+        expected_base_url = "http://shared.test"
+        postgres_url = "postgresql://db/adcp?sslmode=disable"
+        tls_base_url = "https://tls.test"
+        server_host = "shared-server"
+    config = E2EConfig.from_environment(per_worker=per_worker)
+    assert seen == [f"{expected_base_url}/health"]
+    assert config.base_url == expected_base_url
     assert config.postgres_url == postgres_url
     assert config.tls_base_url == tls_base_url
     assert config.ca_bundle == "/tmp/test-ca.pem"
@@ -178,10 +271,7 @@ def test_tls_failure_keeps_the_url_ca_and_underlying_error(configured_stack, mon
     if wrapped:
         failure.__cause__ = cause
 
-    def refuse(*args, **kwargs):
-        raise failure
-
-    monkeypatch.setattr(httpx, "get", refuse)
+    _refuse_probe(monkeypatch, failure)
     with pytest.raises(RuntimeError) as caught:
         E2EConfig.from_environment()
     assert configured_stack in str(caught.value)
@@ -192,9 +282,104 @@ def test_tls_failure_keeps_the_url_ca_and_underlying_error(configured_stack, mon
 
 
 def test_unrecognized_stack_probe_error_propagates(configured_stack, monkeypatch):
-    def refuse(*args, **kwargs):
-        raise ValueError("probe bug")
-
-    monkeypatch.setattr(httpx, "get", refuse)
+    _refuse_probe(monkeypatch, ValueError("probe bug"))
     with pytest.raises(ValueError, match="probe bug"):
         E2EConfig.from_environment()
+
+
+def test_mcp_ignores_failed_optional_discovery_when_call_succeeds(monkeypatch):
+    import httpx2
+
+    from tests.harness._base import BaseTestEnv
+    from tests.harness.address_table import ADDRESS_TABLE
+    from tests.harness.client import _deliver_e2e_mcp
+    from tests.harness.transport import Transport
+    from tests.helpers.mcp_http import mcp_handshake_response, mock_mcp_http
+
+    def respond(request):
+        if request.method != "POST":
+            return httpx2.Response(405)
+        frame = json.loads(request.content)
+        handshake = mcp_handshake_response(frame, discover_status=404)
+        if handshake is not None:
+            return handshake
+        return httpx2.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": frame["id"],
+                "result": {
+                    "content": [{"type": "text", "text": "{}"}],
+                    "structuredContent": {"products": []},
+                },
+            },
+        )
+
+    mock_mcp_http(monkeypatch, respond)
+    env = BaseTestEnv(e2e_config=E2EConfig(base_url="http://transport-test", postgres_url="postgresql://unused/db"))
+    result = _deliver_e2e_mcp(env, ADDRESS_TABLE.resolve("get_products", Transport.E2E_MCP), {}, {})
+    assert result.wire_response == {"products": []}
+
+
+def test_mcp_payload_fallback_does_not_preempt_transport_error_text():
+    payload = {"errors": [{"code": "AUTH_INVALID"}]}
+    transport = {"adcp_error": {"code": "AUTH_MISSING"}}
+    response = _frame_response(
+        {
+            "result": {
+                "isError": True,
+                "structuredContent": payload,
+                "content": [
+                    {"type": "text", "text": json.dumps(payload)},
+                    {"type": "text", "text": json.dumps(transport)},
+                ],
+            }
+        }
+    )
+    with pytest.raises(_base.WireError) as caught:
+        _base._mcp_jsonrpc_result(response)
+    assert caught.value.envelope == transport
+
+
+@pytest.mark.parametrize(
+    "text", ["plain refusal", '{"adcp_error":{"code":"AUTH_INVALID"},"errors":[{"code":"AUTH_INVALID"}]}']
+)
+@pytest.mark.parametrize("placement", ["structured", "jsonrpc"])
+@pytest.mark.parametrize("status", [200, 401])
+def test_sdk_error_preserves_received_envelope_before_text(monkeypatch, text, placement, status):
+    import httpx2
+
+    from tests.harness._base import BaseTestEnv
+    from tests.harness.address_table import ADDRESS_TABLE
+    from tests.harness.client import _deliver_e2e_mcp
+    from tests.harness.transport import Transport
+    from tests.helpers.mcp_http import mcp_handshake_response, mock_mcp_http
+
+    entry = {"code": "RATE_LIMITED", "message": "Rate limited", "recovery": "transient", "retry_after": 5}
+    structured = {"adcp_error": entry, "errors": [entry], "marker": "received structured body"}
+
+    def respond(request):
+        if request.method != "POST":
+            return httpx2.Response(405)
+        frame = json.loads(request.content)
+        handshake = mcp_handshake_response(frame)
+        if handshake is not None:
+            return handshake
+        body = (
+            {
+                "result": {
+                    "isError": True,
+                    "structuredContent": structured,
+                    "content": [{"type": "text", "text": text}],
+                }
+            }
+            if placement == "structured"
+            else {"error": {"code": -32028, "message": text, "data": structured}}
+        )
+        return httpx2.Response(status, json={"jsonrpc": "2.0", "id": frame["id"], **body})
+
+    mock_mcp_http(monkeypatch, respond)
+    env = BaseTestEnv(e2e_config=E2EConfig(base_url="http://transport-test", postgres_url="postgresql://unused/db"))
+    with pytest.raises(_base.WireError) as caught:
+        _deliver_e2e_mcp(env, ADDRESS_TABLE.resolve("get_products", Transport.E2E_MCP), {}, {})
+    assert caught.value.envelope == structured

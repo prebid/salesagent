@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit._architecture_helpers import rel
+
 _BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 
 # Threshold: flag when N or more functions share the same body.
@@ -188,8 +190,8 @@ def _iter_step_functions() -> Iterator[tuple[ast.FunctionDef | ast.AsyncFunction
     for py_file in sorted(_BDD_STEPS_DIR.rglob("*.py")):
         if py_file.name.startswith("_"):
             continue
-        tree = ast.parse(py_file.read_text(), filename=str(py_file))
-        relative = str(py_file.relative_to(_BDD_STEPS_DIR.parent.parent))
+        tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+        relative = rel(py_file, _BDD_STEPS_DIR.parent.parent)
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and _is_step_decorated(node):
                 yield node, relative, node.lineno

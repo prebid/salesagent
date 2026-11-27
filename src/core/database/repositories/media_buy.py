@@ -26,6 +26,7 @@ from src.core.database.models import (
     MediaPackage,
     PersistedMediaBuyStatus,
 )
+from src.core.database.repositories.effects import SessionEffectsMixin
 from src.core.errors.details import EntityRefDetails
 from src.core.idempotency_canonical import canonical_request_hash
 
@@ -65,7 +66,7 @@ def stored_line_item_id(package: MediaPackage) -> str | None:
     return (package.package_config or {}).get("platform_line_item_id")
 
 
-class MediaBuyRepository:
+class MediaBuyRepository(SessionEffectsMixin):
     """Tenant-scoped data access for MediaBuy and MediaPackage.
 
     All queries filter by tenant_id automatically. Callers cannot bypass
@@ -275,8 +276,8 @@ class MediaBuyRepository:
             )
         ).first()
 
-    def get_package_or_raise(self, media_buy_id: str, package_id: str) -> MediaPackage:
-        """Get a package or raise ``AdCPPackageNotFoundError``.
+    def get_package_or_raise(self, media_buy_id: str, package_id: str, *, field: str | None = None) -> MediaPackage:
+        """Get a package or raise ``AdCPPackageNotFoundError``, naming *field* when given.
 
         Collapses the package fetch-and-raise guard duplicated across the update
         tool. Coexists with ``get_package`` for callers that tolerate ``None``.
@@ -287,6 +288,7 @@ class MediaBuyRepository:
 
             raise AdCPPackageNotFoundError(
                 details=EntityRefDetails(package_id=package_id, media_buy_id=media_buy_id),
+                field=field,
             )
         return package
 
@@ -882,5 +884,11 @@ class MediaBuyRepository:
         two drifted apart in silence — adding a member to one left the other behind.
         ``PersistedMediaBuyStatus`` is a ``StrEnum``, so members bind against the
         ``String`` column exactly as the bare strings did.
+
+        Rows come back in ``media_buy_id`` order. A dropped connection stops the
+        sweep at a known buy, and the buys before it in that order are the ones
+        whose flips the summary reports as lost.
         """
-        return list(session.scalars(select(MediaBuy).where(MediaBuy.status.in_(statuses))).all())
+        return list(
+            session.scalars(select(MediaBuy).where(MediaBuy.status.in_(statuses)).order_by(MediaBuy.media_buy_id)).all()
+        )

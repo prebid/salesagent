@@ -10,7 +10,7 @@ Verifies upgrade, data transformation, downgrade, and roundtrip on a real DB.
 import pytest
 from sqlalchemy import text
 
-from tests.integration.migration_helpers import run_alembic_downgrade, run_alembic_upgrade
+from tests.integration.migration_helpers import run_alembic_downgrade, run_alembic_upgrade, seed_product, stored_column
 
 # Migration revisions under test
 BACKFILL_REV = "6aee724a2d1d"
@@ -52,52 +52,29 @@ def _seed_test_data(engine):
             {"tid": "tenant_mock", "atype": "mock"},
         )
 
-        # Products with NULL delivery_measurement
-        for pid, tid in [
-            ("prod_gam", "tenant_gam"),
-            ("prod_mock", "tenant_mock"),
-            ("prod_none", "tenant_none"),
-        ]:
-            conn.execute(
-                text(
-                    "INSERT INTO products (tenant_id, product_id, name, description, "
-                    "delivery_type, format_ids, targeting_template, property_tags) "
-                    "VALUES (:tid, :pid, :name, 'test', 'guaranteed', "
-                    "'[]'::jsonb, '{}'::jsonb, '[\"all_inventory\"]'::jsonb)"
-                ),
-                {"tid": tid, "pid": pid, "name": f"Product {pid}"},
-            )
-
-        # Product with CUSTOM delivery_measurement (must survive migration)
-        conn.execute(
-            text(
-                "INSERT INTO products (tenant_id, product_id, name, description, "
-                "delivery_type, format_ids, targeting_template, property_tags, "
-                "delivery_measurement) "
-                "VALUES (:tid, :pid, :name, 'test', 'guaranteed', "
-                "'[]'::jsonb, '{}'::jsonb, '[\"all_inventory\"]'::jsonb, "
-                "CAST(:dm AS jsonb))"
-            ),
-            {
-                "tid": "tenant_gam",
-                "pid": "prod_custom",
-                "name": "Custom Measurement Product",
-                "dm": '{"provider": "moat", "notes": "Third-party verification"}',
-            },
-        )
-
         conn.commit()
+
+    # Products with NULL delivery_measurement
+    for pid, tid in [
+        ("prod_gam", "tenant_gam"),
+        ("prod_mock", "tenant_mock"),
+        ("prod_none", "tenant_none"),
+    ]:
+        seed_product(engine, tenant_id=tid, product_id=pid, property_tags=["all_inventory"])
+
+    # Product with CUSTOM delivery_measurement (must survive migration)
+    seed_product(
+        engine,
+        tenant_id="tenant_gam",
+        product_id="prod_custom",
+        property_tags=["all_inventory"],
+        delivery_measurement={"provider": "moat", "notes": "Third-party verification"},
+    )
 
 
 def _get_delivery_measurement(engine, product_id):
     """Read delivery_measurement for a product."""
-    with engine.connect() as conn:
-        result = conn.execute(
-            text("SELECT delivery_measurement FROM products WHERE product_id = :pid"),
-            {"pid": product_id},
-        )
-        row = result.fetchone()
-        return row[0] if row else None
+    return stored_column(engine, "products", "delivery_measurement", product_id=product_id)
 
 
 def _get_column_info(engine):
@@ -206,17 +183,7 @@ class TestDeliveryMeasurementNotNullMigration:
     def test_insert_without_delivery_measurement_uses_default(self, migration_db):
         """INSERT omitting delivery_measurement gets the server_default."""
         engine, _ = migration_db
-        with engine.connect() as conn:
-            conn.execute(
-                text(
-                    "INSERT INTO products (tenant_id, product_id, name, description, "
-                    "delivery_type, format_ids, targeting_template, property_tags) "
-                    "VALUES (:tid, :pid, 'Default DM Test', 'test', 'guaranteed', "
-                    "'[]'::jsonb, '{}'::jsonb, '[\"all_inventory\"]'::jsonb)"
-                ),
-                {"tid": "tenant_gam", "pid": "prod_default_dm"},
-            )
-            conn.commit()
+        seed_product(engine, tenant_id="tenant_gam", product_id="prod_default_dm", property_tags=["all_inventory"])
 
         dm = _get_delivery_measurement(engine, "prod_default_dm")
         assert dm == {"provider": "publisher"}
