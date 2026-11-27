@@ -51,3 +51,13 @@ class AuditLogRepository:
     def find_by_operation(self, operation_substring: str) -> list[AuditLog]:
         """Return audit logs whose operation contains the substring."""
         return [log for log in self.list_by_tenant() if operation_substring in (log.operation or "")]
+
+    def list_recent(self, operation: str, limit: int) -> list[AuditLog]:
+        """The tenant's *limit* most recent audit logs of exactly *operation*, newest first."""
+        stmt = (
+            select(AuditLog)
+            .filter_by(tenant_id=self.tenant_id, operation=operation)
+            .order_by(AuditLog.timestamp.desc())
+            .limit(limit)
+        )
+        return list(self.session.scalars(stmt).all())

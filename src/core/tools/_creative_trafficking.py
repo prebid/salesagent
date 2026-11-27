@@ -46,6 +46,7 @@ if TYPE_CHECKING:
     from src.core.database.models import CreativeAssignment
     from src.core.database.models import MediaPackage as DBMediaPackage
     from src.core.database.repositories.product import ProductRepository
+    from src.core.format_resolver import FormatContract
 
 logger = logging.getLogger(__name__)
 
@@ -114,16 +115,26 @@ def _package_creatives(
     products: "ProductRepository",
     packages: "Sequence[MediaPackage] | Sequence[_AssignedPackage]",
     creatives_list: "Sequence[Any]",
-) -> list[tuple[int, Any, list[Any]]]:
-    """``(package index, product row, creative rows)`` for every package naming creatives and a stored product.
+    stored: "Mapping[str, Mapping[str, Any]] | None",
+) -> list[tuple[int, Any, "FormatContract", list[Any]]]:
+    """``(package index, product row, contract, creative rows)`` for every package naming creatives and a stored product.
 
     The pairing both creative questions on the create path are asked over: whether each
-    creative satisfies its package's product (:func:`_pairing_verdicts`), and whether the
+    creative satisfies its package's contract (:func:`_pairing_verdicts`), and whether the
     package's creatives together cover every included placement of that product
     (``format_satisfaction.require_covered``). Read once, so the two cannot pair a creative
     with different products. A requested id with no row is left out; the existence gate
     refuses it before either question is asked.
+
+    The contract is the one each package was booked on. For a buy already stored (the
+    approval and the retroactive push), *stored* holds each package's ``package_config`` by
+    package id, and the contract is read off it (``format_resolver.booked_format_contract``),
+    only for a package whose product still exists, as only those are paired. *stored* is None
+    only on create, where the buy is being booked now, so the product's contract now IS the
+    booking-time one.
     """
+    from src.core.format_resolver import booked_format_contract
+
     product_ids_needed = {
         package.product_id for package in packages if _get_creative_ids(package) and package.product_id
     }
@@ -133,7 +144,7 @@ def _package_creatives(
     products_by_id = {product.product_id: product for product in products.list_by_ids(list(product_ids_needed))}
     creatives_by_id = {creative.creative_id: creative for creative in creatives_list}
 
-    pairings: list[tuple[int, Any, list[Any]]] = []
+    pairings: list[tuple[int, Any, FormatContract, list[Any]]] = []
     # Indexed rather than ``enumerate``d: enumerate over a union of two sequence types joins
     # their element types to a base that has no ``product_id``.
     for index in range(len(packages)):
@@ -142,23 +153,32 @@ def _package_creatives(
         product = products_by_id.get(package.product_id) if package.product_id else None
         if not pkg_creative_ids or product is None:
             continue
-        pairings.append((index, product, [creatives_by_id[cid] for cid in pkg_creative_ids if cid in creatives_by_id]))
+        contract = (
+            product.format_contract
+            if stored is None
+            else booked_format_contract(stored[package.package_id], package_id=package.package_id)
+        )
+        pairings.append(
+            (index, product, contract, [creatives_by_id[cid] for cid in pkg_creative_ids if cid in creatives_by_id])
+        )
     return pairings
 
 
-def _pairing_verdicts(pairings: "Sequence[tuple[int, Any, list[Any]]]") -> list[tuple[int, Any, Any, Any]]:
+def _pairing_verdicts(
+    pairings: "Sequence[tuple[int, Any, FormatContract, list[Any]]]",
+) -> list[tuple[int, Any, Any, Any]]:
     """``(package index, product row, creative row, verdict)`` for every creative of every pairing, in order.
 
-    Each verdict is a ``FormatSatisfaction``: whether the product accepts the creative, and the
-    declaration the route resolved to, which names the creative's asset ids and states its
-    sizes. One verdict per pairing, because a creative on several packages may meet a different
-    product on each.
+    Each verdict is a ``FormatSatisfaction``: whether the package's contract accepts the
+    creative, and the declaration the route resolved to, which names the creative's asset ids
+    and states its sizes. One verdict per pairing, because a creative on several packages may
+    meet a different contract on each.
     """
     from src.core.format_satisfaction import creative_satisfies
 
     return [
-        (index, product, creative, creative_satisfies(creative, product.format_contract))
-        for index, product, creatives in pairings
+        (index, product, creative, creative_satisfies(creative, contract))
+        for index, product, contract, creatives in pairings
         for creative in creatives
     ]
 
@@ -181,6 +201,8 @@ def _validate_creatives_before_adapter_call(
     tenant_id: str,
     principal_id: str,
     session: "Session",
+    *,
+    stored: "Mapping[str, Mapping[str, Any]] | None",
 ) -> dict[CarrierKey, CreativeToTraffic]:
     """Validate all creatives have required fields BEFORE calling adapter.
 
@@ -198,6 +220,8 @@ def _validate_creatives_before_adapter_call(
             "not found" (uniform, no field leak) instead of passing the gate
             on their row and violating the composite FK on assignment insert.
         session: SQLAlchemy session (from UoW).
+        stored: each stored package's ``package_config`` by package id, or None on create
+            (:func:`_package_creatives`).
 
     Returns:
         Each creative as :func:`_read_for_packages` read it for each package naming it, keyed
@@ -250,7 +274,7 @@ def _validate_creatives_before_adapter_call(
     # moved up with the computation. One computation, consumed twice.
     from src.core.database.repositories.product import ProductRepository
 
-    package_creatives = _package_creatives(ProductRepository(session, tenant_id), packages, creatives_list)
+    package_creatives = _package_creatives(ProductRepository(session, tenant_id), packages, creatives_list, stored)
     pairing_verdicts = _pairing_verdicts(package_creatives)
     verdict_at = _verdict_at(pairing_verdicts)
 
@@ -368,10 +392,11 @@ def _validate_creatives_before_adapter_call(
     # no placement_ids, so each is "eligible for all placements" (sync-creatives-request.json).
     from src.core.format_satisfaction import require_covered
 
-    for index, product, creatives in package_creatives:
+    for index, product, contract, creatives in package_creatives:
         require_covered(
             [(creative, None) for creative in creatives],
             product,
+            contract=contract,
             field=PACKAGES_FIELD,
             product_id=product.product_id,
             package_index=index,
@@ -573,8 +598,9 @@ def _pre_validate_package_creatives(
         with MediaBuyUoW(tenant_id) as pre_validate_uow:
             # FIXME(#1119): creative validation should use a repository
             assert pre_validate_uow.session is not None
+            # On create the buy is being booked now: its products' contracts are the booked ones.
             return _validate_creatives_before_adapter_call(
-                packages, tenant_id, principal_id, session=pre_validate_uow.session
+                packages, tenant_id, principal_id, session=pre_validate_uow.session, stored=None
             )
     except AdCPSalesAgentError:
         # Validation failed - creative validation errors already logged
@@ -585,18 +611,27 @@ def _pre_validate_package_creatives(
 
 
 def _read_for_push(
-    products: "ProductRepository", creative: Any, assigned: Sequence[_AssignedPackage]
+    products: "ProductRepository",
+    creative: Any,
+    packages: Sequence["DBMediaPackage"],
+    assignments: Sequence["CreativeAssignment"],
 ) -> dict[CarrierKey, CreativeToTraffic]:
-    """*creative* read for each package it is pushed to, by the rules the pre-adapter gate applies.
+    """*creative* read for each package its *assignments* push it to, by the rules the pre-adapter gate applies.
+
+    Each package is held to the contract it was booked on, read off its row
+    (``format_resolver.booked_format_contract``), never to its product as it is now.
 
     Raises:
-        The creative refusal (``creative_refusal``) when a package's product refuses it.
+        The creative refusal (``creative_refusal``) when a package's contract refuses it.
         AdCPValidationError when it cannot be read for a package (:func:`_read_for_packages`),
             the code the gate answers the same problem with.
+        AdCPPersistedStateError when a package it is pushed to recorded no contract.
     """
     from src.core.format_satisfaction import creative_refusal
 
-    pairing_verdicts = _pairing_verdicts(_package_creatives(products, assigned, [creative]))
+    assigned = _assigned_packages(packages, assignments)
+    stored = {package.package_id: package.package_config or {} for package in packages}
+    pairing_verdicts = _pairing_verdicts(_package_creatives(products, assigned, [creative], stored))
     for _index, product, _creative, verdict in pairing_verdicts:
         if not verdict:
             raise creative_refusal(verdict, creative_id=creative.creative_id, product_id=product.product_id)

@@ -60,6 +60,10 @@ class PendingApproval(NamedTuple):
     step_id: str
 
 
+def _product_edit_path(tenant_id: str, product_id: str) -> str:
+    return f"/tenant/{tenant_id}/products/{product_id}/edit"
+
+
 class AdminAccountEnv:
     """Test environment for admin account management BDD scenarios.
 
@@ -305,8 +309,14 @@ class AdminAccountEnv:
 
     def submit_product_edit(self, tenant_id: str, product_id: str, form_data: dict[str, Any]) -> AdminResponse:
         """POST *tenant_id*'s product *product_id* edit form as a browser does from its page."""
-        path = f"/tenant/{tenant_id}/products/{product_id}/edit"
+        path = _product_edit_path(tenant_id, product_id)
         return self.client.submit(path, form_data, from_page=path)
+
+    def post_product_edit_as_script(self, tenant_id: str, product_id: str, form_data: dict[str, Any]) -> AdminResponse:
+        """POST *tenant_id*'s product *product_id* edit form as a script does: a form body, ``Accept: application/json``."""
+        return self.client.request(
+            "post", _product_edit_path(tenant_id, product_id), data=form_data, headers={"Accept": "application/json"}
+        )
 
     def submit_inventory_profile_add(self, form_data: dict[str, Any]) -> AdminResponse:
         """POST the add-profile form as a browser does from the inventory page, and follow the answer."""
@@ -559,12 +569,15 @@ class AdminAccountEnv:
         with self._seeding() as (_, tenant):
             ProductFactory(tenant=tenant, product_id=product_id, inventory_profile_id=row_id)
 
-    def seed_product(self, product_id: str, *, tenant_id: str) -> None:
-        """Store a product *product_id* of *tenant_id* with one fixed CPM pricing option, as its edit form shows it."""
+    def seed_product(self, product_id: str, *, tenant_id: str, **columns: Any) -> None:
+        """Store a product *product_id* of *tenant_id* with one fixed CPM pricing option, as its edit form shows it.
+
+        *columns* are further ``ProductFactory`` fields.
+        """
         from tests.factories import PricingOptionFactory, ProductFactory
 
         with self._seeding(tenant_id) as (_, tenant):
-            product = ProductFactory(tenant=tenant, product_id=product_id)
+            product = ProductFactory(tenant=tenant, product_id=product_id, **columns)
             PricingOptionFactory(product=product, pricing_model="cpm", currency="USD", is_fixed=True)
 
     def seed_media_buy_package(
@@ -592,6 +605,13 @@ class AdminAccountEnv:
     def get_media_buy_page(self, media_buy_id: str) -> AdminResponse:
         """GET the operator's page for the buy *media_buy_id*."""
         return self.client.request("get", f"/tenant/{self._tenant_id}/media-buy/{media_buy_id}")
+
+    def catalog_first_publisher_leaderboard(self, tenant_id: str) -> None:
+        """Both publishers of ``TWO_PUBLISHER_PROPERTIES`` authorize *tenant_id*, and the first catalogs a leaderboard."""
+        from tests.factories.product import catalog_first_publisher_leaderboard
+
+        with self._seeding(tenant_id) as (_, tenant):
+            catalog_first_publisher_leaderboard(tenant)
 
     def onboard_gam(self, *, tenant_id: str | None = None, service_account_email: str | None = None) -> None:
         """Leave *tenant_id* (this env's tenant by default) with the rows GAM onboarding writes.

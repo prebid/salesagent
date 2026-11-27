@@ -49,7 +49,6 @@ async def test_public_policy_allows_no_brand_manifest():
     mock_tenant = {
         "tenant_id": "test_tenant",
         "brand_manifest_policy": "public",
-        "advertising_policy": {},
     }
 
     identity = _make_identity(principal_id=None, tenant=mock_tenant)
@@ -96,7 +95,6 @@ async def test_require_brand_policy_rejects_no_brand_manifest():
     mock_tenant = {
         "tenant_id": "test_tenant",
         "brand_manifest_policy": "require_brand",
-        "advertising_policy": {},
     }
 
     identity = _make_identity(principal_id="principal_123", tenant=mock_tenant)
@@ -121,7 +119,6 @@ async def test_require_brand_policy_accepts_with_brand_manifest():
     mock_tenant = {
         "tenant_id": "test_tenant",
         "brand_manifest_policy": "require_brand",
-        "advertising_policy": {},
     }
 
     identity = _make_identity(principal_id="principal_123", tenant=mock_tenant)
@@ -180,7 +177,6 @@ async def test_require_auth_policy_accepts_with_auth():
     mock_tenant = {
         "tenant_id": "test_tenant",
         "brand_manifest_policy": "require_auth",
-        "advertising_policy": {},
     }
 
     identity = _make_identity(principal_id="principal_123", tenant=mock_tenant)

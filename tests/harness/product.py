@@ -143,6 +143,17 @@ class ProductEnv(PublisherAdagentsMixin, AdminOperatorMixin, DatabaseFaultMixin,
             self._dispatched_brief = kwargs["brief"]
         return super().call_via(transport, **kwargs)
 
+    def save_policy_page(self, form: Mapping[str, str]) -> None:
+        """The operator saves the admin Policy page with *form*, as a browser posts it, on this env's transport.
+
+        In-process the admin app runs in this process; over e2e the form is posted to the
+        live server. Either way the save is the only writer of the tenant's policy here.
+        """
+        response = self.admin_request(self.tenant_id, "post", "policy/update", data=dict(form))
+        assert response.status_code == 302, (
+            f"the Policy page's save answered {response.status_code}: {response.data[:300]!r}"
+        )
+
     def _write_ranking_prompt(self, ranking_prompt: str) -> None:
         """Write ``tenant.product_ranking_prompt``, tagged with this env's nonce, and remember it.
 

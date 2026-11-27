@@ -1714,6 +1714,14 @@ def given_canonical_creative_with_manifest(ctx: dict, kind: str, manifest: str) 
     store_package_creative(ctx, None, _manifest(manifest), kind=kind)
 
 
+@given(
+    parsers.parse('the buyer assigns canonical "{kind}" creative "{creative_id}" carrying the "{manifest}" manifest')
+)
+def given_named_canonical_creative_with_manifest(ctx: dict, kind: str, creative_id: str, manifest: str) -> None:
+    """The stored canonical creative above under *creative_id*, so a Then can name what the ad server was handed."""
+    store_package_creative(ctx, creative_id, _manifest(manifest), kind=kind)
+
+
 @given(parsers.parse('the buyer assigns canonical "{kind}" creatives carrying the "{manifests}" manifests'))
 def given_canonical_creatives_with_manifests(ctx: dict, kind: str, manifests: str) -> None:
     """Several stored canonical creatives, one per comma-separated manifest, all on the package.

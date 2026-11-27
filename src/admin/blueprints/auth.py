@@ -14,7 +14,6 @@ import json
 import logging
 import os
 import secrets
-from urllib.parse import unquote, urlsplit
 
 from authlib.integrations.flask_client import OAuth
 from flask import Blueprint, abort, current_app, flash, redirect, render_template, request, session, url_for
@@ -25,7 +24,7 @@ from src.admin.auth_utils import OAUTH_CALLBACK_ERRORS, extract_user_info
 from src.admin.blueprints.core import get_tenant_from_hostname
 from src.admin.gam_utils import GAMOAuthNotConfigured
 from src.admin.utils import is_super_admin, require_tenant_access
-from src.admin.utils.helpers import clear_session_identity
+from src.admin.utils.helpers import clear_session_identity, local_path
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant, UserRole
@@ -46,28 +45,14 @@ auth_bp = Blueprint("auth", __name__)
 
 
 def _safe_redirect(url: str | None, fallback: str) -> str:
-    """Return *url* only if it is a safe local path, otherwise *fallback*.
-
-    Rejects anything with a scheme, a netloc, a leading // or \\,
-    a backslash anywhere, or anything that does not start with /.
-    Also rejects after URL-decoding to defeat encoded bypass attempts.
-    """
+    """*url* when it is a path on this site (:func:`~src.admin.utils.helpers.local_path`), else *fallback*."""
     if not url:
         return fallback
-
-    decoded = unquote(url).strip()
-    parts = urlsplit(decoded)
-    if (
-        parts.scheme
-        or parts.netloc
-        or decoded.startswith(("//", "\\\\"))
-        or "\\" in decoded
-        or not decoded.startswith("/")
-    ):
+    path = local_path(url)
+    if path is None:
         logger.warning("[SECURITY] Rejected unsafe redirect URL: %r", url)
         return fallback
-
-    return decoded
+    return path
 
 
 # Well-known OIDC discovery URLs for common providers

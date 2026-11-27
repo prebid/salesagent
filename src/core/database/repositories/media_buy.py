@@ -52,6 +52,10 @@ class RequestedPackage:
     requires a package to "retain and return this checklist" and says "the live Product is never
     substituted for the package snapshot", so a later read answers from the row. ``minItems: 1``
     on ``formats_to_provide`` means an empty selection records None.
+
+    ``booked_format_contract`` is the product's contract at create, kept for a package that
+    selected nothing (``format_resolver.booked_format_contract`` reads it). It stays on the
+    row and never reaches the wire.
     """
 
     package_id: str
@@ -60,6 +64,7 @@ class RequestedPackage:
     paused: bool = False
     formats_to_provide: list[LibraryPackageFormatSnapshot] | None = None
     format_ids_to_provide: list[LibraryFormatId] | None = None
+    booked_format_contract: dict[str, list[Any]] | None = None
 
 
 def stored_line_item_id(package: MediaPackage) -> str | None:
@@ -547,6 +552,8 @@ class MediaBuyRepository(SessionEffectsMixin):
         ``media-buy/package-update.json``: "Omit to leave catalogs unchanged"). Models go in, not
         dicts: the JSONType column serializes them through the engine's serializer.
         """
+        from src.core.format_resolver import BOOKED_FORMAT_CONTRACT
+
         request = requested.request
         pricing_info = requested.pricing_info
         budget: dict[str, Any] | None = None
@@ -565,6 +572,7 @@ class MediaBuyRepository(SessionEffectsMixin):
             "catalogs": request.catalogs,
             "formats_to_provide": requested.formats_to_provide,
             "format_ids_to_provide": requested.format_ids_to_provide,
+            BOOKED_FORMAT_CONTRACT: requested.booked_format_contract,
             "pricing_info": pricing_info,
             "impressions": request.impressions,
         }

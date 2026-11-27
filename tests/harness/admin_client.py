@@ -224,14 +224,14 @@ class AdminClient:
         """POST the form *data* to *path* as a browser does, and GET the page its redirect names, flash included.
 
         *from_page* is the page the form is on, sent as the browser's ``Referer``: the page an
-        answer goes back to. A path is a page on this server; a URL with a scheme is another
-        site's page. Without it the request names no page to go back to. A form that answers
+        answer goes back to. A value that starts with ``/`` is a path on this server; anything
+        else is sent as given. Without it the request names no page to go back to. A form that answers
         without a redirect (it re-rendered with an error) is returned as is. *browser_headers*
         say how the browser asks for a page, :data:`BROWSER_PAGE_HEADERS` by default.
         """
         headers: dict[str, str | None] = dict(BROWSER_PAGE_HEADERS if browser_headers is None else browser_headers)
         if from_page is not None:
-            headers["Referer"] = from_page if urlsplit(from_page).scheme else f"{self.origin}{from_page}"
+            headers["Referer"] = f"{self.origin}{from_page}" if from_page.startswith("/") else from_page
         response = self.request("post", path, data=data, headers=headers)
         location = response.headers.get("location")
         if not location:

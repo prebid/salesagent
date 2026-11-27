@@ -74,6 +74,29 @@
         </div>
     </div>
 
+    {% if not policy_saved %}
+    <div class="row mt-3">
+        <div class="col-md-12">
+            <div class="alert alert-warning mb-0" id="no-policy-saved">
+                <strong>No policy saved.</strong> This tenant has not saved an advertising policy yet.
+                The form below starts from the baseline categories and tactics; nothing is stored until you save it.
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if not seller_ai_enabled %}
+    <div class="row mt-3">
+        <div class="col-md-12">
+            <div class="alert alert-warning mb-0">
+                <strong>AI Configuration Required.</strong> Policy checks run on your own AI provider and API key.
+                Without one, briefs are not checked. Configure one in
+                <a href="{{ request.script_root }}/tenant/{{ tenant_id }}/settings/integrations">Settings → Integrations → AI Services</a>.
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
     <div id="policy-container" class="view-mode">
         <form action="{{ request.script_root }}/tenant/{{ tenant_id }}/policy/update" method="POST" id="policy-form">
         <div class="row mt-4">
@@ -86,7 +109,7 @@
                     <div class="card-body">
                         <div class="form-check mb-3">
                             <input class="form-check-input" type="checkbox" id="enabled" name="enabled"
-                                   {% if policy_settings.enabled %}checked{% endif %}>
+                                   {% if policy.enabled %}checked{% endif %}>
                             <label class="form-check-label" for="enabled">
                                 Enable Policy Checks
                             </label>
@@ -97,7 +120,7 @@
 
                         <div class="form-check mb-3">
                             <input class="form-check-input" type="checkbox" id="require_manual_review" name="require_manual_review"
-                                   {% if policy_settings.require_manual_review %}checked{% endif %}>
+                                   {% if policy.require_manual_review %}checked{% endif %}>
                             <label class="form-check-label" for="require_manual_review">
                                 Require Manual Review
                             </label>
@@ -147,23 +170,27 @@
                     </div>
                     <div class="card-body">
                         <div class="form-group">
-                            <label>Default Prohibited Categories</label>
-                            <div class="border rounded p-2 mb-3" style="background-color: #f8f9fa;">
-                                <small class="text-muted">These are enforced by default:</small>
+                            <label for="default_prohibited_categories">Baseline Prohibited Categories <span class="policy-count view-only">({{ policy.default_prohibited_categories|length }})</span></label>
+                            <div class="view-only border rounded p-2 mb-3" style="background-color: #f8f9fa;">
+                                <small class="text-muted">Checked in every brief while policy checks are on:</small>
                                 <ul class="mb-0 small">
-                                {% for category in policy_settings.default_prohibited_categories %}
+                                {% for category in policy.default_prohibited_categories %}
                                     <li>{{ category.replace('_', ' ').title() }}</li>
                                 {% endfor %}
                                 </ul>
                             </div>
+                            <div class="edit-only mb-3">
+                                <textarea class="form-control" id="default_prohibited_categories" name="default_prohibited_categories"
+                                          rows="6" placeholder="Enter one category per line">{{ '\n'.join(policy.default_prohibited_categories) }}</textarea>
+                            </div>
 
-                            <label for="prohibited_categories">Additional Prohibited Categories <span class="policy-count view-only">({{ policy_settings.prohibited_categories|length }})</span></label>
+                            <label for="prohibited_categories">Additional Prohibited Categories <span class="policy-count view-only">({{ policy.prohibited_categories|length }})</span></label>
 
                             <!-- View mode display -->
                             <div class="view-only">
-                                {% if policy_settings.prohibited_categories %}
+                                {% if policy.prohibited_categories %}
                                     <div class="policy-list">
-                                        {% for category in policy_settings.prohibited_categories %}
+                                        {% for category in policy.prohibited_categories %}
                                             <div class="policy-list-item">{{ category }}</div>
                                         {% endfor %}
                                     </div>
@@ -175,7 +202,7 @@
                             <!-- Edit mode input -->
                             <div class="edit-only">
                                 <textarea class="form-control" id="prohibited_categories" name="prohibited_categories"
-                                          rows="10" placeholder="Enter one category per line">{{ '\n'.join(policy_settings.prohibited_categories) }}</textarea>
+                                          rows="10" placeholder="Enter one category per line">{{ '\n'.join(policy.prohibited_categories) }}</textarea>
                                 <small class="form-text text-muted">
                                     Add custom categories specific to your publication
                                 </small>
@@ -193,23 +220,27 @@
                     </div>
                     <div class="card-body">
                         <div class="form-group">
-                            <label>Default Prohibited Tactics</label>
-                            <div class="border rounded p-2 mb-3" style="background-color: #f8f9fa;">
-                                <small class="text-muted">These are enforced by default:</small>
+                            <label for="default_prohibited_tactics">Baseline Prohibited Tactics <span class="policy-count view-only">({{ policy.default_prohibited_tactics|length }})</span></label>
+                            <div class="view-only border rounded p-2 mb-3" style="background-color: #f8f9fa;">
+                                <small class="text-muted">Checked in every brief while policy checks are on:</small>
                                 <ul class="mb-0 small">
-                                {% for tactic in policy_settings.default_prohibited_tactics %}
+                                {% for tactic in policy.default_prohibited_tactics %}
                                     <li>{{ tactic.replace('_', ' ').title() }}</li>
                                 {% endfor %}
                                 </ul>
                             </div>
+                            <div class="edit-only mb-3">
+                                <textarea class="form-control" id="default_prohibited_tactics" name="default_prohibited_tactics"
+                                          rows="5" placeholder="Enter one tactic per line">{{ '\n'.join(policy.default_prohibited_tactics) }}</textarea>
+                            </div>
 
-                            <label for="prohibited_tactics">Additional Prohibited Tactics <span class="policy-count view-only">({{ policy_settings.prohibited_tactics|length }})</span></label>
+                            <label for="prohibited_tactics">Additional Prohibited Tactics <span class="policy-count view-only">({{ policy.prohibited_tactics|length }})</span></label>
 
                             <!-- View mode display -->
                             <div class="view-only">
-                                {% if policy_settings.prohibited_tactics %}
+                                {% if policy.prohibited_tactics %}
                                     <div class="policy-list">
-                                        {% for tactic in policy_settings.prohibited_tactics %}
+                                        {% for tactic in policy.prohibited_tactics %}
                                             <div class="policy-list-item">{{ tactic }}</div>
                                         {% endfor %}
                                     </div>
@@ -221,7 +252,7 @@
                             <!-- Edit mode input -->
                             <div class="edit-only">
                                 <textarea class="form-control" id="prohibited_tactics" name="prohibited_tactics"
-                                          rows="6" placeholder="Enter one tactic per line">{{ '\n'.join(policy_settings.prohibited_tactics) }}</textarea>
+                                          rows="6" placeholder="Enter one tactic per line">{{ '\n'.join(policy.prohibited_tactics) }}</textarea>
                                 <small class="form-text text-muted">
                                     Add tactics that violate your advertising standards
                                 </small>
@@ -236,13 +267,13 @@
                     </div>
                     <div class="card-body">
                         <div class="form-group">
-                            <label for="prohibited_advertisers">Blocked Domains/Companies <span class="policy-count view-only">({{ policy_settings.prohibited_advertisers|length }})</span></label>
+                            <label for="prohibited_advertisers">Blocked Domains/Companies <span class="policy-count view-only">({{ policy.prohibited_advertisers|length }})</span></label>
 
                             <!-- View mode display -->
                             <div class="view-only">
-                                {% if policy_settings.prohibited_advertisers %}
+                                {% if policy.prohibited_advertisers %}
                                     <div class="policy-list">
-                                        {% for advertiser in policy_settings.prohibited_advertisers %}
+                                        {% for advertiser in policy.prohibited_advertisers %}
                                             <div class="policy-list-item">{{ advertiser }}</div>
                                         {% endfor %}
                                     </div>
@@ -257,7 +288,7 @@
                                           rows="6" placeholder="Enter one advertiser/domain per line
 Example:
 spam-site.com
-competitor.com">{{ '\n'.join(policy_settings.prohibited_advertisers) }}</textarea>
+competitor.com">{{ '\n'.join(policy.prohibited_advertisers) }}</textarea>
                                 <small class="form-text text-muted">
                                     These advertisers will be blocked from advertising
                                 </small>
@@ -333,7 +364,7 @@ competitor.com">{{ '\n'.join(policy_settings.prohibited_advertisers) }}</textare
                 <h5>How Policy Checks Work</h5>
                 <ul class="mb-0">
                     <li><strong>AI-Powered Analysis:</strong> All advertising briefs are analyzed using AI to detect policy violations.</li>
-                    <li><strong>Default Policies:</strong> Standard prohibited categories and tactics are enforced automatically.</li>
+                    <li><strong>Baseline Policies:</strong> The baseline categories and tactics you save are part of every check.</li>
                     <li><strong>Custom Policies:</strong> Add your own prohibited categories, tactics, and advertisers specific to your publication.</li>
                     <li><strong>Manual Review:</strong> Enable to review violations before rejection, or disable for automatic blocking.</li>
                 </ul>

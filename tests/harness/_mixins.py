@@ -13,7 +13,7 @@ from __future__ import annotations
 import itertools
 import json
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
@@ -1897,23 +1897,29 @@ def _e2e_set_policy_blocked(env: Any, reason: str = "Policy violation") -> None:
     _e2e_script_policy(env, {"output": {"status": "blocked", "reason": reason}})
 
 
-def _e2e_script_policy(env: Any, entry: dict[str, Any]) -> None:
+def _e2e_script_policy(env: Any, entry: dict[str, Any], require_text: Sequence[str] = ()) -> None:
     """Script the policy verdict for the seller's key, and for the platform's if the env declared one.
 
     The platform's key answers the same verdict, so a check that ran on it instead of the
     seller's credential shows on the wire (a BLOCKED brief is refused). Every entry answers
     only a prompt carrying this env's nonce, which the brief carries (``scripted_brief``),
-    so a verdict another scenario scripted for the shared platform key never answers this one.
+    so a verdict another scenario scripted for the shared platform key never answers this
+    one, and every text of ``require_text`` besides.
     """
     from tests.e2e._scripted_llm import install_script
 
     for api_key in env.scripted_api_keys():
-        install_script(api_key, policy={**entry, "require_text": env.scripted_nonce})
+        install_script(api_key, policy={**entry, "require_text": [env.scripted_nonce, *require_text]})
 
 
 def _e2e_set_policy_approved(env: Any) -> None:
     """E2E realization of :meth:`ProductMixin.set_policy_approved`: an ALLOWED verdict, scripted."""
     _e2e_script_policy(env, {"output": {"status": "allowed"}})
+
+
+def _e2e_set_policy_blocked_if_prompt_names(env: Any, texts: Sequence[str], reason: str = "Policy violation") -> None:
+    """E2E realization of :meth:`ProductMixin.set_policy_blocked_if_prompt_names`: the origin grades the prompt."""
+    _e2e_script_policy(env, {"output": {"status": "blocked", "reason": reason}}, require_text=texts)
 
 
 def _e2e_set_policy_unavailable(env: Any) -> None:
@@ -1989,6 +1995,24 @@ class ProductMixin:
         # The real service on a model that fails: production's run_agent classifies the
         # failure and get_products fails open on it, the path the e2e leg takes too.
         self.mock["policy_service"].return_value = PolicyCheckService(model=MODEL_UNAVAILABLE.model())  # type: ignore[attr-defined]
+
+    @realize_e2e(_e2e_set_policy_blocked_if_prompt_names)
+    def set_policy_blocked_if_prompt_names(self, texts: Sequence[str], reason: str = "Policy violation") -> None:
+        """The policy model blocks the brief only when the prompt it receives names every text.
+
+        Graded INSIDE the model, because the prompt has no wire surface: production's real
+        ``PolicyCheckService`` builds the prompt and calls the scripted model, which answers
+        BLOCKED when every text is in it and otherwise fails with the 400 the e2e origin
+        answers a call no entry matches. ``get_products`` fails open on that failure, so a
+        text that never reached the model shows on the wire as products instead of
+        ``POLICY_VIOLATION``. Over e2e the origin grades the same texts on the prompt the
+        live server sends (``_e2e_set_policy_blocked_if_prompt_names``).
+        """
+        from src.services.policy_check_service import PolicyCheckService
+        from tests.e2e._scripted_llm import scripted_answer_model
+
+        model = scripted_answer_model({"status": "blocked", "reason": reason}, list(texts))
+        self.mock["policy_service"].return_value = PolicyCheckService(model=model)  # type: ignore[attr-defined]
 
     #: The platform's own AI key, once a scenario declares one (``ProductEnv.set_platform_ai_credential``).
     _platform_ai_key: str | None = None

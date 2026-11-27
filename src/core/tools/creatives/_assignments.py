@@ -111,6 +111,7 @@ def require_package_covered(
     require_covered(
         assignment_repo.package_creative_set(media_buy_id, package_id),
         product,
+        contract=product.format_contract,
         field=field,
         package_id=package_id,
         product_id=product.product_id,
