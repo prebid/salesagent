@@ -155,7 +155,7 @@ from tests.factories.account import seed_default_account
 from tests.factories.principal import plaintext_token_for
 from tests.harness._base import BareIntegrationEnv
 from tests.helpers.app_state import preserved_global_app_state
-from tests.helpers.asgi_wire import WireResponse, build_scope, send_wire_request
+from tests.helpers.asgi_wire import WireResponse, build_scope, send_asgi_messages, send_wire_request, whole_body
 from tests.helpers.metrics import assert_counter_delta
 from tests.helpers.signing import (
     COUNTERPARTY_AGENT_URL,
@@ -223,21 +223,19 @@ def _wire_host(vector_id: str) -> str:
 #: The host the seller is served at when the vector's own host cannot be a tenant's.
 _SELLER_HOST = "seller.example.com"
 
-#: The rows whose ``Host`` is an IPv6 literal, so the request names no seller. A signed
-#: request names its tenant by the ``Host`` alone, and no tenant can be served at a dotless
-#: host with a signing posture: ``canonical_agent_url`` derives ``http`` for it, and every
-#: one of these vectors declares a non-empty ``required_for``, which obliges an ``https``
-#: ``identity.brand_json_url``. The request is therefore refused ``TENANT_UNDEFINED`` before
-#: the checklist runs. NOT dropped: :func:`test_routing_refuses_a_host_that_names_no_seller`
-#: drives each and asserts the refusal and the non-arrival. The verifier rules they grade
-#: stay graded below the router: 031's unbracketed ``Host`` by
-#: ``tests/unit/test_signing_raw_wire_gaps.py::test_malformed_host_authority_is_a_target_uri_refusal_not_a_header_one``
-#: (``unbracketed-ipv6 (negative/031)``), and the IPv6 authorities the positives canonicalize
-#: by the ``canonicalization.json`` cases ``ipv6-host-hex-lowercased`` and
-#: ``ipv6-host-with-port`` (``tests/unit/test_url_canonicalization_vectors.py``). The
+#: The rows whose ``Host`` is an IPv6 literal, GRADED AT THE VERIFIER SEAM rather than
+#: through the router. A signed request names its tenant by the ``Host`` alone, and this
+#: seller cannot declare a signing posture at an IPv6 literal: ``canonical_agent_url``
+#: derives ``http`` for a dotless host, and every one of these vectors declares a non-empty
+#: ``required_for``, which obliges an ``https`` ``identity.brand_json_url``. Through the
+#: router the request would name no seller and never reach the checklist. So
+#: :func:`test_ipv6_authority_vector_meets_its_expected_outcome_at_the_verifier` captures the
+#: vector's wire request with the production capture and hands it to
+#: ``verify_inbound_signature`` with the conformance tenant (served at :data:`_SELLER_HOST`)
+#: and its bearer principal: real crypto, the vector's own ``expected_outcome``. The
 #: storyboard runner skips all four over HTTP (031 ``transport_ungradable``, the positives
 #: ``mcp_mode_flattens_url_edges``).
-_HOST_NAMES_NO_SELLER = sorted(vid for vid in TRANSPLANT if "." not in hostname_of(_wire_host(vid)))
+_VERIFIER_SEAM_ROWS = sorted(vid for vid in TRANSPLANT if "." not in hostname_of(_wire_host(vid)))
 
 #: The rows whose wire URL names no ``TOOLS[...].rest`` binding, so the router 404s them
 #: and ``_resolve_identity`` — and therefore the verifier — never runs. NOT dropped:
@@ -246,8 +244,8 @@ _HOST_NAMES_NO_SELLER = sorted(vid for vid in TRANSPLANT if "." not in hostname_
 #: the live route table by :func:`test_every_row_names_the_route_the_plan_claims`. See
 #: the module docstring for where each one's obligation is graded instead.
 _UNROUTED = sorted(vid for vid, plan in TRANSPLANT.items() if not plan.route_named)
-_DRIVEN_POSITIVES = [vid for vid in _POSITIVES if TRANSPLANT[vid].route_named and vid not in _HOST_NAMES_NO_SELLER]
-_DRIVEN_NEGATIVES = [vid for vid in _NEGATIVES if TRANSPLANT[vid].route_named and vid not in _HOST_NAMES_NO_SELLER]
+_DRIVEN_POSITIVES = [vid for vid in _POSITIVES if TRANSPLANT[vid].route_named and vid not in _VERIFIER_SEAM_ROWS]
+_DRIVEN_NEGATIVES = [vid for vid in _NEGATIVES if TRANSPLANT[vid].route_named and vid not in _VERIFIER_SEAM_ROWS]
 #: The vector whose SUBJECT is a posture a 3.2 verifier cannot hold, so it describes an
 #: agent this seller is not.
 #:
@@ -515,13 +513,13 @@ def _seed_tenant(vector_id: str) -> Any:
 
     Served at the host the vector dials (:func:`_wire_host`, port aside), because a signed
     request names its tenant by the ``Host`` alone; at :data:`_SELLER_HOST` for the rows
-    whose host no tenant can hold (:data:`_HOST_NAMES_NO_SELLER`). The host is DOTTED, so
+    whose host no tenant can hold (:data:`_VERIFIER_SEAM_ROWS`). The host is DOTTED, so
     ``canonical_agent_url`` derives ``https://``: a non-empty bucket obliges an
     ``identity.brand_json_url`` that the pin fixes to ``^https://``, so on a single-label
     host the declaration would be refused and the vector would grade the refusal path
     instead of the checklist.
     """
-    host = _SELLER_HOST if vector_id in _HOST_NAMES_NO_SELLER else hostname_of(_wire_host(vector_id))
+    host = _SELLER_HOST if vector_id in _VERIFIER_SEAM_ROWS else hostname_of(_wire_host(vector_id))
     return TenantFactory(tenant_id=_TENANT_ID, subdomain="seller", virtual_host=host)
 
 
@@ -959,7 +957,7 @@ def test_every_vector_is_accounted_for() -> None:
     :func:`test_negative_vector_is_rejected_with_the_spec_code` (plus
     :func:`test_replayed_nonce_vector` for ``016``),
     :func:`test_unrouted_rows_never_reach_the_verifier`, and
-    :func:`test_routing_refuses_a_host_that_names_no_seller`. The counts are LITERAL so that
+    :func:`test_ipv6_authority_vector_meets_its_expected_outcome_at_the_verifier`. The counts are LITERAL so that
     a row moving between groups has to be moved here too, with a reason.
     """
     assert len(_POSITIVES) == 15, _POSITIVES
@@ -974,16 +972,16 @@ def test_every_vector_is_accounted_for() -> None:
         "positive/010-percent-encoded-slash-preserved",
     ], f"the set of rows that cannot reach the resolver changed: {_UNROUTED}"
 
-    assert _HOST_NAMES_NO_SELLER == [
+    assert _VERIFIER_SEAM_ROWS == [
         "negative/031-malformed-host-authority",
         "positive/011-ipv6-authority",
         "positive/012-ipv6-authority-default-port-stripped",
         "positive/015-bracketed-ipv6-host-with-port",
-    ], f"the set of rows whose Host no tenant can hold changed: {_HOST_NAMES_NO_SELLER}"
+    ], f"the set of rows graded at the verifier seam changed: {_VERIFIER_SEAM_ROWS}"
 
     assert len(_DRIVEN_POSITIVES) == 8, _DRIVEN_POSITIVES
     assert len(_SINGLE_SHOT_NEGATIVES) == 28, (
-        "016 runs its own two-submission test; 018 is profile-inapplicable; 031 names no seller"
+        "016 runs its own two-submission test; 018 is profile-inapplicable; 031 is graded at the verifier seam"
     )
     assert _PROFILE_INAPPLICABLE == ["negative/018-digest-covered-when-forbidden"], (
         f"the set of vectors whose posture a 3.2 verifier cannot hold changed: {_PROFILE_INAPPLICABLE}"
@@ -994,7 +992,7 @@ def test_every_vector_is_accounted_for() -> None:
         | {_REPLAY_PAIR_VECTOR}
         | set(_UNROUTED)
         | set(_PROFILE_INAPPLICABLE)
-        | set(_HOST_NAMES_NO_SELLER)
+        | set(_VERIFIER_SEAM_ROWS)
     )
     assert driven == set(_VECTORS), f"vectors driven by no test at all: {sorted(set(_VECTORS) - driven)}"
 
@@ -1068,43 +1066,89 @@ def test_unrouted_rows_never_reach_the_verifier(vector_id, integration_db, confo
         )
 
 
-@pytest.mark.parametrize("vector_id", _HOST_NAMES_NO_SELLER)
-def test_routing_refuses_a_host_that_names_no_seller(vector_id, integration_db, conformance_app) -> None:
-    """An IPv6-literal ``Host`` names no seller: 421 TENANT_UNDEFINED, and the checklist never runs.
+@pytest.mark.parametrize("vector_id", _VERIFIER_SEAM_ROWS)
+def test_ipv6_authority_vector_meets_its_expected_outcome_at_the_verifier(
+    vector_id, integration_db, conformance_app
+) -> None:
+    """The vector's own ``expected_outcome``, graded by the real verifier below the router.
 
-    THIS GRADES THE ROUTING REFUSAL, NOT THE VERIFIER RULE THE VECTOR NAMES. The vectors
-    expect a verifier outcome. ``negative/031``, at
+    Why not through the router: :data:`_VERIFIER_SEAM_ROWS`. The vector's wire request goes
+    through the production capture (``SignedExchangeCapture``), exactly as the app would
+    record it, and the captured exchange is handed to ``verify_inbound_signature`` with what
+    the resolver would hand it for the conformance tenant: its ``TenantContext``, the bearer's
+    principal, and the tenant-bound keyid lookup. Everything else is the module's per-vector
+    case: the declared posture, the frozen clock, real Ed25519 over the transplanted URL.
+
+    ``negative/031`` expects, at
     ``dist/compliance/3.2.7/test-vectors/request-signing/negative/031-malformed-host-authority.json``
     L28-31 (adcp ``v3.2.7``, 8d1d3244b): ``"expected_outcome": {"success": false,
     "error_code": "request_target_uri_malformed", "failed_step": 10}``. The three positives
-    expect ``"success": true``. This seller answers earlier: it names a signed request's
-    tenant by the ``Host`` alone, no tenant can be served at a dotless host with a signing
-    posture (:data:`_HOST_NAMES_NO_SELLER`), so the request names no seller and is refused
-    before any verifier runs. What it answers is what is asserted here. The storyboard
-    runner reports all four ungradable over HTTP (031 ``transport_ungradable``), and the
-    verifier rules stay graded below the router (see :data:`_HOST_NAMES_NO_SELLER`).
-
-    The coverage boundary for :data:`_HOST_NAMES_NO_SELLER`, asserted rather than assumed.
-    The seller has declared the vector's posture at :data:`_SELLER_HOST`; the request dials
-    the vector's own host, which no tenant is served at, and a signed request is never
-    routed by ``x-adcp-tenant``. Two assertions, as in
-    :func:`test_unrouted_rows_never_reach_the_verifier`: the refusal alone would also hold
-    for a verifier that ran and then failed resolving a tenant, and the non-arrival alone
-    would also hold for any other refusal ahead of the checklist.
+    expect ``"success": true``. Asserted as the positive and negative tests assert them: a
+    positive returns the bearer's principal with a ``VerifiedSigner`` for the vector's keyid,
+    and a negative raises the vector's code.
     """
-    from tests.helpers.envelope_assertions import assert_envelope_shape
+    from functools import partial
+
+    from src.core.auth_utils import get_principal_by_signing_keyid, get_principal_from_token
+    from src.core.exceptions import AdCPRequestSignatureError
+    from src.core.signing.capture import SignatureSubject
+    from src.core.signing.verifier import verify_inbound_signature
+    from src.core.tenant_context import TenantContext
 
     app, portal = conformance_app
+    plan = TRANSPLANT[vector_id]
+    expected = _VECTORS[vector_id]["expected_outcome"]
 
     with _vector_case(vector_id) as (_env, token, calls):
-        response = _send(app, portal, vector_id, token)
-
-        assert not calls, f"{vector_id}: the verifier RAN on a request whose Host names no seller"
-        assert response.status_code == 421, (
-            f"{vector_id}: expected 421 for a Host naming no seller, got {response.status_code}. "
-            f"body={response.body[:200]!r}"
+        exchange = _captured_exchange(portal, vector_id, token)
+        assert exchange is not None and exchange.presents_signature(), (
+            f"{vector_id}: the production capture recorded no signed exchange for {plan.wire_url!r}"
         )
-        assert_envelope_shape(json.loads(response.body), "TENANT_UNDEFINED", recovery="terminal")
+        principal = get_principal_from_token(token, _TENANT_ID)
+        assert principal is not None, f"{vector_id}: the vector's bearer resolves no principal"
+        verify = partial(
+            verify_inbound_signature,
+            # None of the four bodies registers webhook credentials.
+            SignatureSubject(operation=plan.expected_operation, registers_credentials=False, exchange=exchange),
+            headers=exchange.headers(),
+            tenant=TenantContext.load(_TENANT_ID),
+            principal=principal,
+            signer_by_keyid=partial(get_principal_by_signing_keyid, tenant_id=_TENANT_ID),
+        )
+
+        if not expected["success"]:
+            with pytest.raises(AdCPRequestSignatureError) as refusal:
+                verify()
+            assert str(refusal.value.error_code) == expected["error_code"], (
+                f"{vector_id}: refused {refusal.value.error_code!r}, the vector expects {expected['error_code']!r}"
+            )
+            return
+
+        keyid = str(_signature_params(_VECTORS[vector_id])["keyid"])
+        verified = verify()
+        assert verified is not None and verified.principal_id == _PRINCIPAL_ID, (
+            f"{vector_id}: the verifier returned {verified!r}, not the bearer's principal"
+        )
+        assert calls, f"{vector_id}: the SDK verifier never ran — a positive that grades nothing"
+        signer = calls[-1].get(VERIFIER_RESULT)
+        assert signer is not None and signer.key_id == keyid, (
+            f"{vector_id}: no VerifiedSigner for {keyid!r} came back from the SDK verifier ({signer!r})"
+        )
+
+
+def _captured_exchange(portal: Any, vector_id: str, token: str | None) -> Any:
+    """The vector's wire request as ``SignedExchangeCapture`` records it, before any routing."""
+    from src.core.signing.capture import SignedExchangeCapture, captured_exchange
+
+    headers, body = _wire_request(vector_id, token)
+    scope = build_scope(_VECTORS[vector_id]["request"]["method"], TRANSPLANT[vector_id].wire_url, headers)
+    seen: dict[str, Any] = {}
+
+    async def record(inner_scope: Any, _receive: Any, _send: Any) -> None:
+        seen["exchange"] = captured_exchange(inner_scope)
+
+    portal.call(lambda: send_asgi_messages(SignedExchangeCapture(record), scope, whole_body(body)))
+    return seen.get("exchange")
 
 
 def test_unknown_keyid_vector_resolves_the_counterparty_before_failing(integration_db, conformance_app) -> None:
