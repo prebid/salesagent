@@ -398,12 +398,14 @@ def gam_order_cleanup(gam_adapter):
 
 
 def _make_create_request(product_id: str, po_number: str, delivery_type: str = "non_guaranteed"):
-    """Build a CreateMediaBuyRequest, MediaPackage, and pricing info for a given product.
+    """Build the adapter's create request, MediaPackage, and pricing info for a given product.
 
-    The request comes from ``CreateMediaBuyRequestFactory``, which builds the DTO the
+    The buyer's request comes from ``CreateMediaBuyRequestFactory``, which builds the DTO the
     registry binds to ``create_media_buy``, so a field the pinned schema requires (a fresh
-    ``idempotency_key``, a ``packages`` group) is never left out of a hand-written copy.
+    ``idempotency_key``, a ``packages`` group) is never left out of a hand-written copy. The
+    adapter receives it as production hands it over: ``AdapterCreateRequest.from_buyer_request``.
     """
+    from src.adapters.base import AdapterCreateRequest
     from src.core.schemas import MediaPackage
     from tests.factories import CreateMediaBuyRequestFactory, PackageRequestFactory
 
@@ -421,7 +423,7 @@ def _make_create_request(product_id: str, po_number: str, delivery_type: str = "
         format_ids=[],
     )
 
-    request = CreateMediaBuyRequestFactory.build(
+    buyer_request = CreateMediaBuyRequestFactory.build(
         account={"account_id": "acct_test"},
         brand={"domain": "testbrand.com"},
         po_number=po_number,
@@ -429,6 +431,7 @@ def _make_create_request(product_id: str, po_number: str, delivery_type: str = "
         end_time=end_time,
         packages=[PackageRequestFactory.payload(product_id=product_id, budget=10.0)],
     )
+    request = AdapterCreateRequest.from_buyer_request(buyer_request)
 
     # Pricing info that _create_media_buy_impl normally resolves from PricingOption DB records
     pricing_info = {
@@ -473,7 +476,7 @@ def _persist_media_buy(response, request, packages, start_time, end_time):
         session.flush()
 
         # Get platform_line_item_ids from the response
-        platform_ids = getattr(response, "_platform_line_item_ids", {})
+        platform_ids = response.platform_line_item_ids
 
         for pkg in packages:
             media_package = MediaPackageModel(
@@ -502,7 +505,7 @@ class TestGAMOrderCreation:
 
     def test_create_non_guaranteed_order(self, gam_adapter, gam_order_cleanup):
         """Non-guaranteed product with CPM creates a PRICE_PRIORITY order in GAM."""
-        from src.core.schemas import CreateMediaBuySuccess
+        from src.adapters.base import AdapterCreateResult
 
         request, packages, start_time, end_time, pricing_info = _make_create_request(
             "gam_e2e_non_guaranteed", f"E2E-NG-{uuid.uuid4().hex[:6]}"
@@ -510,7 +513,7 @@ class TestGAMOrderCreation:
 
         response = gam_adapter.create_media_buy(request, packages, start_time, end_time, pricing_info)
 
-        assert isinstance(response, CreateMediaBuySuccess), f"Expected success, got: {response}"
+        assert isinstance(response, AdapterCreateResult), f"Expected success, got: {response}"
         assert response.media_buy_id is not None, "Order ID should be set"
         assert len(response.packages) == 1
 
@@ -531,7 +534,7 @@ class TestGAMOrderCreation:
 
     def test_create_guaranteed_order(self, gam_adapter, gam_order_cleanup):
         """Guaranteed product creates a STANDARD order that needs activation approval."""
-        from src.core.schemas import CreateMediaBuySuccess
+        from src.adapters.base import AdapterCreateResult
 
         request, packages, start_time, end_time, pricing_info = _make_create_request(
             "gam_e2e_guaranteed", f"E2E-GR-{uuid.uuid4().hex[:6]}", delivery_type="guaranteed"
@@ -539,7 +542,7 @@ class TestGAMOrderCreation:
 
         response = gam_adapter.create_media_buy(request, packages, start_time, end_time, pricing_info)
 
-        assert isinstance(response, CreateMediaBuySuccess), f"Expected success, got: {response}"
+        assert isinstance(response, AdapterCreateResult), f"Expected success, got: {response}"
         assert response.media_buy_id is not None, "Order ID should be set"
 
         gam_order_cleanup.append(response.media_buy_id)
@@ -559,7 +562,7 @@ class TestGAMOrderCreation:
 
     def test_order_has_correct_advertiser(self, gam_adapter, gam_order_cleanup, gam_suite_network):
         """Created orders belong to the configured advertiser."""
-        from src.core.schemas import CreateMediaBuySuccess
+        from src.adapters.base import AdapterCreateResult
 
         request, packages, start_time, end_time, pricing_info = _make_create_request(
             "gam_e2e_non_guaranteed", f"E2E-ADV-{uuid.uuid4().hex[:6]}"
@@ -567,7 +570,7 @@ class TestGAMOrderCreation:
 
         response = gam_adapter.create_media_buy(request, packages, start_time, end_time, pricing_info)
 
-        assert isinstance(response, CreateMediaBuySuccess)
+        assert isinstance(response, AdapterCreateResult)
         gam_order_cleanup.append(response.media_buy_id)
 
         # Verify advertiser via direct GAM API
@@ -593,14 +596,14 @@ class TestGAMLifecycle:
         Mirrors manual script's pause step in test_lifecycle_archive_order.
         Uses adapter's update_media_buy which requires DB persistence.
         """
-        from src.core.schemas import CreateMediaBuySuccess, UpdateMediaBuySuccess
+        from src.adapters.base import AdapterCreateResult, AdapterUpdateResult
 
         request, packages, start_time, end_time, pricing_info = _make_create_request(
             "gam_e2e_non_guaranteed", f"E2E-PAUSE-{uuid.uuid4().hex[:6]}"
         )
 
         response = gam_adapter.create_media_buy(request, packages, start_time, end_time, pricing_info)
-        assert isinstance(response, CreateMediaBuySuccess)
+        assert isinstance(response, AdapterCreateResult)
         order_id = response.media_buy_id
         gam_order_cleanup.append(order_id)
 
@@ -616,7 +619,7 @@ class TestGAMLifecycle:
             today=datetime.now(UTC),
         )
 
-        assert isinstance(pause_response, UpdateMediaBuySuccess), f"Expected success, got: {pause_response}"
+        assert isinstance(pause_response, AdapterUpdateResult), f"Expected success, got: {pause_response}"
 
     def test_pause_then_archive_order(self, gam_adapter, gam_order_cleanup):
         """Can create, pause, and archive a HOUSE order.
@@ -625,14 +628,14 @@ class TestGAMLifecycle:
         """
         from googleads import ad_manager as gam_module
 
-        from src.core.schemas import CreateMediaBuySuccess, UpdateMediaBuySuccess
+        from src.adapters.base import AdapterCreateResult, AdapterUpdateResult
 
         request, packages, start_time, end_time, pricing_info = _make_create_request(
             "gam_e2e_house", f"E2E-ARCH-{uuid.uuid4().hex[:6]}"
         )
 
         response = gam_adapter.create_media_buy(request, packages, start_time, end_time, pricing_info)
-        assert isinstance(response, CreateMediaBuySuccess)
+        assert isinstance(response, AdapterCreateResult)
         assert response.media_buy_id is not None
         order_id = response.media_buy_id
 
@@ -647,7 +650,7 @@ class TestGAMLifecycle:
             budget=None,
             today=datetime.now(UTC),
         )
-        assert isinstance(pause_response, UpdateMediaBuySuccess), f"Pause should succeed, got: {pause_response}"
+        assert isinstance(pause_response, AdapterUpdateResult), f"Pause should succeed, got: {pause_response}"
 
         # Step 2: Archive the order via direct GAM API
         # (adapter's archive_order has the .get() zeep bug — )
@@ -670,14 +673,14 @@ class TestGAMLifecycle:
 
     def test_activate_guaranteed_requires_workflow(self, gam_adapter, gam_order_cleanup):
         """activate_order on a guaranteed order creates a workflow step instead of direct activation."""
-        from src.core.schemas import CreateMediaBuySuccess, UpdateMediaBuySuccess
+        from src.adapters.base import AdapterCreateResult, AdapterUpdateResult
 
         request, packages, start_time, end_time, pricing_info = _make_create_request(
             "gam_e2e_guaranteed", f"E2E-ACT-{uuid.uuid4().hex[:6]}", delivery_type="guaranteed"
         )
 
         create_response = gam_adapter.create_media_buy(request, packages, start_time, end_time, pricing_info)
-        assert isinstance(create_response, CreateMediaBuySuccess)
+        assert isinstance(create_response, AdapterCreateResult)
         order_id = create_response.media_buy_id
         gam_order_cleanup.append(order_id)
 
@@ -690,13 +693,17 @@ class TestGAMLifecycle:
             today=datetime.now(UTC),
         )
 
-        # For guaranteed orders, activate_order should create a workflow step
-        # (either success with workflow_step_id, or error about guaranteed items)
-        if isinstance(update_response, UpdateMediaBuySuccess):
-            # Success path: workflow step created for activation approval
-            assert update_response.workflow_step_id is not None, "Guaranteed activation should produce a workflow step"
-        else:
-            # Error path: activation blocked because of guaranteed items
-            assert any("guaranteed" in str(e.message).lower() for e in update_response.errors), (
-                f"Error should mention guaranteed items: {update_response.errors}"
-            )
+        # A guaranteed order is not activated directly: the adapter opens an activation
+        # approval step mapped to the order and reports no package as changed. It raises
+        # AdCPActivationWorkflowError when it cannot record the step.
+        assert update_response == AdapterUpdateResult(media_buy_id=order_id, affected_packages=[])
+
+        from src.core.database.repositories.uow import WorkflowUoW
+
+        with WorkflowUoW(GAM_LIFECYCLE_TENANT_ID) as uow:
+            assert uow.workflows is not None
+            mapping = uow.workflows.get_latest_mapping_for_object("media_buy", order_id)
+            assert mapping is not None, "Guaranteed activation should open a workflow step for the order"
+            step = uow.workflows.get_step_by_id(mapping.step_id)
+            assert step is not None
+            assert (step.tool_name, mapping.action) == ("activate_gam_order", "activate")
