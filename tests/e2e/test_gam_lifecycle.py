@@ -398,8 +398,14 @@ def gam_order_cleanup(gam_adapter):
 
 
 def _make_create_request(product_id: str, po_number: str, delivery_type: str = "non_guaranteed"):
-    """Build a CreateMediaBuyRequest, MediaPackage, and pricing info for a given product."""
-    from src.core.schemas import CreateMediaBuyRequest, MediaPackage
+    """Build a CreateMediaBuyRequest, MediaPackage, and pricing info for a given product.
+
+    The request comes from ``CreateMediaBuyRequestFactory``, which builds the DTO the
+    registry binds to ``create_media_buy``, so a field the pinned schema requires (a fresh
+    ``idempotency_key``, a ``packages`` group) is never left out of a hand-written copy.
+    """
+    from src.core.schemas import MediaPackage
+    from tests.factories import CreateMediaBuyRequestFactory, PackageRequestFactory
 
     start_time = datetime.now(UTC) + timedelta(hours=1)
     end_time = start_time + timedelta(days=7)
@@ -415,13 +421,13 @@ def _make_create_request(product_id: str, po_number: str, delivery_type: str = "
         format_ids=[],
     )
 
-    request = CreateMediaBuyRequest(
-        idempotency_key=str(uuid.uuid4()),  # required; a fresh UUID v4 per request, as the schema asks
+    request = CreateMediaBuyRequestFactory.build(
         account={"account_id": "acct_test"},
         brand={"domain": "testbrand.com"},
         po_number=po_number,
         start_time=start_time,
         end_time=end_time,
+        packages=[PackageRequestFactory.payload(product_id=product_id, budget=10.0)],
     )
 
     # Pricing info that _create_media_buy_impl normally resolves from PricingOption DB records
