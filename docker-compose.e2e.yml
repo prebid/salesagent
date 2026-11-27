@@ -894,6 +894,12 @@ services:
       # to prevent. Measured live: run innet_020926_1010 wrote its sessions to
       # the fallback path, not the per-run one.
       BDD_LIVENESS_SESSIONS: "${BDD_LIVENESS_SESSIONS:-}"
+      # Where every tox env writes its JSON report (tox.ini, {env:SUITE_REPORT_DIR:...}).
+      # run_all_tests.sh points it at its per-run results directory on the bind mount, so
+      # a finished suite's report survives a dead supervisor or daemon (cassini-aixo). The
+      # default is the container's own {toxworkdir}, never empty: an empty value would
+      # put every report at /<suite>.json.
+      SUITE_REPORT_DIR: "${SUITE_REPORT_DIR:-/app/.tox}"
       GEMINI_API_KEY: ${GEMINI_API_KEY:-test_key}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=}  # TEST ONLY — never use in production
       # The Google Ad Manager network the GAM tests run against (ToolingSettings.gam_suite_network),
@@ -940,14 +946,10 @@ services:
       # over -- which is the same principle ADCP_LOG_DIR applies to the server's
       # logs above.
       #
-      # LOAD-BEARING, and not only for ownership: run_all_tests.sh reads the
-      # per-suite JSON reports OUT of this volume
-      # (`docker run -v "${COMPOSE_PROJECT_NAME}_tox_data:/t:ro" ... cp /t/*.json`).
-      # Remove the mount and that extraction silently copies whatever stale
-      # ./.tox JSON the host happens to hold, emitting a fresh timestamped
-      # results directory full of a PREVIOUS run's green numbers -- observed
-      # live on two runs that executed zero suites. The mount and that
-      # extraction have to move together.
+      # Reports do NOT live here. The volume is deleted by the runner's
+      # `down -v`, and a report left in it was lost whenever the supervisor died
+      # before copying it out (cassini-cuhw). Each env writes its report to
+      # SUITE_REPORT_DIR above instead, on the bind mount.
       - tox_data:/app/.tox  # keep tox envs off the bind-mounted host tree
     working_dir: /app
     # venv lives at /opt/venv (UV_PROJECT_ENVIRONMENT in Dockerfile.test), outside

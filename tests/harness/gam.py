@@ -779,3 +779,24 @@ class GamSellerMixin:
         self._session.expire_all()
         creatives = self._session.scalars(select(Creative).filter_by(tenant_id=self._tenant_id)).all()
         return [str(c.data["ad_server_creative_id"]) for c in creatives if c.data.get("ad_server_creative_id")]
+
+    def package_line_item_ids(self) -> list[str | None]:
+        """The GAM line item id each package of the tenant's one media buy recorded, in the request's package order.
+
+        Read off the server's database: the persisted ``raw_request`` carries the
+        ``package_id`` the seller minted for each request package, and that package's row
+        its ``platform_line_item_id``. ``None`` for a package that recorded none.
+        """
+        from src.core.database.repositories.media_buy import MediaBuyRepository
+
+        self._session.expire_all()
+        repository = MediaBuyRepository(self._session, self._tenant_id)
+        (media_buy,) = repository.list_all()
+        recorded = {
+            package.package_id: package.package_config.get("platform_line_item_id")
+            for package in repository.get_packages(media_buy.media_buy_id)
+        }
+        return [
+            None if (line_item := recorded.get(package["package_id"])) is None else str(line_item)
+            for package in media_buy.raw_request["packages"]
+        ]

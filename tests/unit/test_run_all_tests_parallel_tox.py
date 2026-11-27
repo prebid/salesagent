@@ -48,8 +48,8 @@ _DOCKER_STUB = """#!/usr/bin/env bash
 # control flow proceeds exactly as it would against a real, healthy stack.
 #
 # "As it would against a healthy stack" includes WRITING THE REPORTS. tox runs
-# inside the container, so its `.tox/<suite>.json` never reaches the host when
-# `docker` is stubbed -- and the runner's missing-report branch correctly fails a
+# inside the container, so nothing writes `<suite>.json` when `docker` is
+# stubbed -- and the runner's missing-report branch correctly fails a
 # run that produced none ("a suite that produced none was not measured"). A stub
 # that swallows the tox call without leaving reports behind is simulating a
 # stack where every suite died, not a healthy one. Emit a minimal report per
@@ -63,28 +63,14 @@ _DOCKER_STUB = """#!/usr/bin/env bash
 # how the `quality` env, added to ALL_SUITES upstream, turned this simulation
 # into a red run that said nothing about the runner.
 #
-# The extraction container is simulated for the same reason: it is what moves the
-# reports out of the tox_data volume, and the runner grades only what it published.
-# Its contract is the runner's own: stdout carries the missing-suite list.
+# They go where tox.ini sends them: $SUITE_REPORT_DIR, the container path the runner
+# exports, which the `.:/app` bind mount maps onto this working directory. Writing
+# them anywhere else would grade a runner that looks in the wrong place.
 printf '%s\\n' "$*" >> "$DOCKER_STUB_LOG"
 case "$*" in
-  *" alpine sh -c "*)
-    _out="" _suites="${@: -2:1}" _subdir="${@: -1}" _missing=""
-    for _arg in "$@"; do case "$_arg" in *:/out) _out="${_arg%:/out}" ;; esac; done
-    for _s in ${_suites//,/ }; do
-      if [ -f ".tox/${_s}.json" ]; then cp ".tox/${_s}.json" "$_out/"; else _missing="$_missing $_s"; fi
-      case "$_s" in bdd*)
-        if [ -f ".tox/${_s}_payloads.json" ]; then
-          cp ".tox/${_s}_payloads.json" "$_out/$_subdir/$_s.json"
-        else
-          _missing="$_missing $_s(no-payload-artifact)"
-        fi ;;
-      esac
-    done
-    printf '%s' "$_missing"
-    ;;
   *tox*)
-    mkdir -p .tox
+    _reports="${SUITE_REPORT_DIR#/app/}"
+    mkdir -p "$_reports/payloads"
     _envs="" _seen_tox=0 _take_next=0
     for _arg in "$@"; do
       if [ "$_take_next" = 1 ]; then _envs="$_arg"; break; fi
@@ -96,14 +82,14 @@ case "$*" in
       # A suite that died before writing anything.
       [ "$_s" = "${DOCKER_STUB_DEAD_SUITE:-}" ] && continue
       printf '%s' '{"summary": {"collected": 1, "total": 1, "passed": 1, "deselected": 0}, "exitcode": 0}' \\
-        > ".tox/${_s}.json"
+        > "$_reports/${_s}.json"
       # A BDD suite now emits TWO artifacts: the pytest report and the dispatched-request
       # payload capture (tests/bdd/payload_capture.py), and the runner fails a run whose
       # BDD suite produced no payload artifact for the same reason it fails one that
       # produced no report -- a suite that produced none was not measured. Emitting only
       # the report here would simulate a stack whose BDD suites all died halfway, which
       # is the failure this stub's comment above already warns against.
-      case "$_s" in bdd*) printf '%s' "{\\"run\\": {\\"collected\\": 1}, \\"nodes\\": {\\"$_s\\": []}}" > ".tox/${_s}_payloads.json" ;; esac
+      case "$_s" in bdd*) printf '%s' "{\\"run\\": {\\"collected\\": 1}, \\"nodes\\": {\\"$_s\\": []}}" > "$_reports/payloads/${_s}.json" ;; esac
       # The storyboard suite publishes the runner's per-protocol summary to
       # test-results/ (tests/storyboard/test_storyboard_conformance.py, _publish_summary),
       # and the runner keeps that score inside the run directory -- a storyboard env that

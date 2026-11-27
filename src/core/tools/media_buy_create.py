@@ -67,7 +67,6 @@ from src.core.idempotency_replay import raise_on_payload_conflict
 from src.core.tools._creative_trafficking import (
     CarrierKey,
     _adapter_refusal,
-    _assigned_packages,
     _AssignedPackage,
     _carriers_by_package_id,
     _get_creative_ids,
@@ -361,13 +360,23 @@ def _requested_package(
     package_id: str,
     pricing_info: dict[str, Any] | None,
     paused: bool,
+    product_arms: tuple[list[Any], list[Any]],
 ) -> RequestedPackage:
     """What one package's row records, on either create path.
 
     The two format checklists are derived here once, from the snapshots of the declaration the
     package's selector selected. ``minItems: 1`` on ``formats_to_provide`` is why an empty
     selection records None.
+
+    A package that selected nothing records *product_arms*, the product's ``(format_options,
+    format_ids)`` at create, as its booked contract instead (``format_resolver
+    .booked_format_contract``): create_media_buy.mdx (v3.2.7) "validation and serving use the
+    package-time contract, never mutable Product discovery". It stays on the row, so the
+    wire's ``formats_to_provide`` does not list every format of the product.
     """
+    from src.core.format_resolver import booked_contract_record, format_contract
+
+    format_options, format_ids = product_arms
     return RequestedPackage(
         package_id=package_id,
         request=request,
@@ -375,6 +384,9 @@ def _requested_package(
         paused=paused,
         formats_to_provide=list(snapshots) or None,
         format_ids_to_provide=_legacy_formats_to_provide(snapshots, request),
+        booked_format_contract=None
+        if snapshots
+        else booked_contract_record(format_contract(format_options=format_options, format_ids=format_ids)),
     )
 
 
@@ -1150,25 +1162,29 @@ def execute_approved_media_buy(
                     # recorded snapshot") went red on all four transports. The projection is
                     # deletable when the LAST adapter reads the snapshot, not when the first
                     # one does.
-                    from src.core.format_resolver import snapshot_adapter_format_ids
+                    from src.core.format_resolver import booked_format_contract, snapshot_adapter_format_ids
 
                     recorded = _PACKAGE_FORMAT_SNAPSHOTS.validate_python(package_config.get("formats_to_provide") or [])
                     asserted = snapshot_adapter_format_ids(recorded)
+                    # The contract the package was booked on, the one the creative gate below also
+                    # holds it to: what it selected, or the product's contract at create when it
+                    # selected nothing. Never the product as it is now (create_media_buy.mdx,
+                    # v3.2.7: "never mutable Product discovery").
+                    contract = booked_format_contract(package_config, package_id=package_id)
 
                     # Convert formats to FormatId objects with comprehensive validation
                     format_ids_list: list[FormatId] = []
                     # A package that recorded no snapshot (its request named no format
-                    # selector) is placed on the product's CONTRACT
-                    # (``Product.format_contract``): a profile-linked product is served its
-                    # profile's arms, and a canonical one the projection its declarations
-                    # assert. The product's own ``format_ids`` column is never read: a row
-                    # moved onto ``format_options`` has it cleared, so reading it refused the
-                    # approval of every such buy as "no valid formats".
-                    formats: Sequence[Any] = asserted or ([] if recorded else product.format_contract.format_ids)
+                    # selector) is placed on the product's contract as it was booked: a
+                    # profile-linked product's profile arms, and a canonical one the projection
+                    # its declarations assert. The product's own ``format_ids`` column is never
+                    # read: a row moved onto ``format_options`` has it cleared, so reading it
+                    # refused the approval of every such buy as "no valid formats".
+                    formats: Sequence[Any] = asserted or ([] if recorded else contract.format_ids)
 
                     logger.debug(
                         f"[APPROVAL] Converting {len(formats)} formats for package {package_id} "
-                        f"from {'the recorded snapshot' if recorded else 'the live product'}"
+                        f"from {'the recorded snapshot' if recorded else 'the booked contract'}"
                     )
 
                     for idx, fmt in enumerate(formats):
@@ -1209,7 +1225,7 @@ def execute_approved_media_buy(
                     # canonical options: its request named no selector, so create recorded
                     # none (``_package_format_snapshots``) and placed it on the product's
                     # declarations with no legacy projection. The approval places it the same.
-                    if not format_ids_list and not recorded and not product.format_contract.format_options:
+                    if not format_ids_list and not recorded and not contract.format_options:
                         logger.error(
                             f"[APPROVAL] Failed to reconstruct package {package_id}: "
                             f"Product {product_id} has no valid formats - cannot create media buy"
@@ -1248,6 +1264,10 @@ def execute_approved_media_buy(
                         f"name={media_package.name}, cpm={cpm}, impressions={impressions}"
                     )
 
+                except AdCPSalesAgentError as error:
+                    # A typed refusal of the stored package (it recorded no contract) is the error.
+                    logger.error(f"[APPROVAL] Failed to reconstruct package {db_pkg.package_id}: {error}")
+                    return ApprovalResult.failed(error)
                 except ValidationError as ve:
                     logger.error(
                         f"[APPROVAL] Failed to reconstruct package {db_pkg.package_id}: {format_validation_error(ve)}"
@@ -1293,7 +1313,11 @@ def execute_approved_media_buy(
             # The creatives as the gate read them, per package: the adapter's check below is
             # handed them, and so is its upload after booking. Nothing reads the rows again.
             carriers = _validate_creatives_before_adapter_call(
-                gate_packages, tenant_id, buy_principal_id, session=session
+                gate_packages,
+                tenant_id,
+                buy_principal_id,
+                session=session,
+                stored={db_pkg.package_id: dict(db_pkg.package_config) for db_pkg in db_packages},
             )
 
         # Resolution from stored ids: this job acts as the buy's owner, on the buy's
@@ -1668,7 +1692,7 @@ def push_creative_to_existing_buy(
             # does not accept, say): the push is per creative, so the others are pushed.
             assert uow.products is not None
             try:
-                carriers = _read_for_push(uow.products, creative, _assigned_packages(packages, matching))
+                carriers = _read_for_push(uow.products, creative, packages, matching)
             except AdCPSalesAgentError as refusal:
                 return CreativePushFailure(f"Creative {creative_id} is not trafficked: {refusal}", refusal)
             # Grouped while the unit is open: its rows detach when it commits.
@@ -3163,6 +3187,7 @@ async def _create_media_buy_impl(
                     package_id=minted_id,
                     pricing_info=package_pricing_info_by_index.get(idx),
                     paused=bool(req_pkg.paused),
+                    product_arms=declared_format_arms[req_pkg.product_id],
                 )
                 for idx, (minted_id, req_pkg) in enumerate(zip(minted_package_ids, req.packages, strict=True))
             ]
@@ -3750,6 +3775,7 @@ async def _create_media_buy_impl(
                 package_id=resp_package.package_id,
                 pricing_info=package_pricing_info.get(resp_package.package_id),
                 paused=bool(resp_package.paused),
+                product_arms=declared_format_arms[req_pkg.product_id],
             )
             for req_pkg, resp_package, snapshots in zip(
                 req.packages, response.packages, format_snapshots_by_index, strict=True

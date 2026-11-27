@@ -93,13 +93,13 @@ WHAT THIS MODULE DOES NOT DO, deliberately:
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from dataclasses import field as dataclass_field
 from decimal import Decimal, InvalidOperation
 from enum import Enum, StrEnum
 from functools import lru_cache
-from typing import Any, TypeGuard, get_args
+from typing import TYPE_CHECKING, Any, TypeGuard, get_args
 
 from adcp.canonical_formats import formats_are_equivalent, upgrade_legacy_format_id
 from adcp.canonical_formats.format_options import FormatKindNotInClosedSetError
@@ -129,8 +129,12 @@ from src.core.exceptions import (
     AdCPSalesAgentError,
     problems_refusal,
 )
+from src.core.operator_errors import OperatorRefusal
 from src.core.schemas import Format, FormatOptionIdentity, FormatSelector
 from src.core.traffic_carrier import TrafficSize, TrafficSizeRange
+
+if TYPE_CHECKING:
+    from src.core.format_resolver import FormatContract
 
 logger = logging.getLogger(__name__)
 
@@ -2568,23 +2572,37 @@ def outside_common_intersection(product: Any) -> tuple[LibraryFormatDeclaration,
     return tuple(d for d in declared if any(d not in (layer.declarations or ()) for layer in slices))
 
 
-def refuse_outside_common_intersection(product: Any, refused: Callable[[str], Exception] = ValueError) -> None:
-    """``refused(<why>)`` when a product's served contract is not the common intersection the pin requires of it.
+class FormatOptionsOutsideCommonIntersection(OperatorRefusal):
+    """A product of several publishers, with no placements, offering a format option not all of them accept.
+
+    One class for every write path :func:`refuse_outside_common_intersection` guards: the admin
+    product and profile forms and :class:`ProductRepository`'s writes. The admin error handler
+    answers it with 400 and ``MESSAGE``. Its details name the product and each option outside
+    the intersection with the publisher it is scoped to.
+    """
+
+    MESSAGE = (
+        "The product sells inventory of several publishers and publishes no placements, so every "
+        "format option must be accepted by all of them. Declare the options scoped to one publisher "
+        "product-local by omitting publisher_domain, or publish placements with publisher-scoped identities."
+    )
+
+    def __init__(self, product_id: str, outside: Iterable[LibraryFormatDeclaration]) -> None:
+        scoped = sorted({f"{_declaration_label(d)} ({d.publisher_domain})" for d in outside})
+        details = (f"Product: {product_id}", *(f"Scoped to one publisher: {option}" for option in scoped))
+        super().__init__(" ".join((self.MESSAGE, *details)), details=details)
+
+
+def refuse_outside_common_intersection(product: Any) -> None:
+    """:class:`FormatOptionsOutsideCommonIntersection` when a product's served contract is not the common intersection.
 
     Asked of every product save -- the admin product forms, an inventory profile's save for
     each product it supplies the contract to, and :class:`ProductRepository`'s writes -- so
-    no write path stores what :func:`outside_common_intersection` finds. The admin forms
-    pass the refusal they answer the operator with; the repository raises ``ValueError``.
+    no write path stores what :func:`outside_common_intersection` finds.
     """
     outside = outside_common_intersection(product)
     if outside:
-        raise refused(
-            f"Product {product.product_id!r} sells inventory of several publishers and publishes no "
-            f"placements, so every format option must be accepted by all of them. Scoped to one "
-            f"publisher: {', '.join(sorted({_declaration_label(d) for d in outside}))}. Declare "
-            f"them product-local by omitting publisher_domain, or publish placements with "
-            f"publisher-scoped identities."
-        )
+        raise FormatOptionsOutsideCommonIntersection(product.product_id, outside)
 
 
 def _placement_projection(references: Iterable[LibraryFormatId]) -> tuple[LibraryFormatDeclaration, ...]:
@@ -2781,7 +2799,7 @@ def _fills(
 
 
 def creatives_uncovered(
-    creatives: Sequence[tuple[Any, Collection[str] | None]], product: Any
+    creatives: Sequence[tuple[Any, Collection[str] | None]], product: Any, *, contract: FormatContract
 ) -> FormatSatisfaction | None:
     """The first included placement a package's creative set leaves uncovered, or None.
 
@@ -2797,8 +2815,10 @@ def creatives_uncovered(
     *creatives* is that set: each stored creative row with the ``placement_ids`` its
     assignment routes it to, None for an assignment that names none ("When omitted, the
     creative is eligible for all placements", ``sync-creatives-request.json``). *product* is
-    the product ORM row: its ``format_contract`` and its stored ``placements`` documents, the
-    two things the create-time selector gate reads off the same row.
+    the product ORM row, whose stored ``placements`` documents the create-time selector gate
+    reads too. *contract* is the format contract the package is held to: the product's
+    ``format_contract`` when it is being booked or assigned now, the contract it was booked on
+    when an approval or a push replays it (``format_resolver.booked_format_contract``).
 
     A creative covers a placement when it is routed there and satisfies the placement's
     effective set, asked of :func:`creative_satisfies` -- the one creative validator, manifest
@@ -2821,7 +2841,6 @@ def creatives_uncovered(
     # The product's upper bound and included placements, read exactly as a package selector
     # reads them -- which is what makes this the selector rule's twin rather than a second
     # reading of the product.
-    contract = product.format_contract
     bound = resolve_routes(
         (),
         contract.format_options,
@@ -3598,6 +3617,7 @@ def require_covered(
     creatives: Sequence[tuple[Any, Collection[str] | None]],
     product: Any,
     *,
+    contract: FormatContract,
     field: str | None = None,
     **entity: Any,
 ) -> None:
@@ -3608,7 +3628,7 @@ def require_covered(
     ``sync_creatives`` assignments, and ``update_media_buy``'s ``creative_ids`` and
     ``creative_assignments``. ``entity`` names the package and product the refusal is about.
     """
-    verdict = creatives_uncovered(creatives, product)
+    verdict = creatives_uncovered(creatives, product, contract=contract)
     if verdict is not None:
         raise creative_refusal(verdict, field=field, **entity)
 

@@ -12,13 +12,16 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from bs4 import BeautifulSoup
 from pytest_bdd import given, parsers, then, when
 
 from src.core.database.models import UserRole
 from tests.bdd.steps.domain.admin_accounts import _require_admin_page
+from tests.harness.admin_inventory_profile import rendered_form
 from tests.harness.admin_tenant_scoping import (
     ACTIVE_BUY_BUDGET,
     NON_MATCHING_ROW_ROLE,
+    POLICY_FORM,
     REDIRECTS,
     expected_suggestions_body,
     redirect_path,
@@ -120,7 +123,7 @@ def then_target_unchanged(ctx: dict) -> None:
     """A rejected request leaves the tenant's stored data as the request found it.
 
     The env says what that data is (``target_state``): here the tenant's row counts and
-    policy settings; for the publisher routes (``PublisherAuthorizationEnv``) every column
+    advertising policy; for the publisher routes (``PublisherAuthorizationEnv``) every column
     of its publisher rows and of what was derived from them.
     """
     env = _env(ctx)
@@ -158,3 +161,28 @@ def then_suggestions_are_defaults(ctx: dict) -> None:
     body = _require_admin_page(ctx).get_json()
     expected = expected_suggestions_body()
     assert body == expected, f"Expected {expected!r}, got {body!r}"
+
+
+@then("the reloaded policy page of the target tenant shows the posted policy form")
+def then_reloaded_policy_page_shows_posted_form(ctx: dict) -> None:
+    """Loaded again, the Policy page's form submits exactly what was posted: the saved policy is the one shown.
+
+    Graded through the page, not the database: the defect of #2692 was on the read side,
+    where the page rendered its defaults over whatever the save had stored.
+    """
+    shown = rendered_form(_env(ctx).reload_policy_page())
+    expected = {name: [value] for name, value in POLICY_FORM.items()}
+    assert shown == expected, f"Expected the form {expected!r}, got {shown!r}"
+
+
+@then("the policy page says the tenant has saved no policy, with policy checks off")
+def then_policy_page_has_no_saved_policy(ctx: dict) -> None:
+    """The "no policy saved" notice is on the page, and its form starts with both checks unticked."""
+    page = _require_admin_page(ctx)
+    notice = BeautifulSoup(page.data, "html.parser").find(id="no-policy-saved")
+    assert notice is not None, "the page does not say that no policy is saved"
+    form = rendered_form(page)
+    assert (form.get("enabled"), form.get("require_manual_review")) == (None, None), (
+        f"Expected both checks off, got enabled={form.get('enabled')!r}, "
+        f"require_manual_review={form.get('require_manual_review')!r}"
+    )

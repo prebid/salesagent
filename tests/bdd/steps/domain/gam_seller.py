@@ -1224,6 +1224,22 @@ _LINE_ITEM_READERS = {
 _INTEGER_COLUMNS = frozenset({"priority", "costPerUnitMicros", "units"})
 
 
+def _expected_line_items(datatable: Any) -> list[dict[str, Any]]:
+    """The booking Then's table, one row per line item, an integer column as ``(int, value)``."""
+    return [
+        {column: (int, int(cell)) if column in _INTEGER_COLUMNS else cell for column, cell in row.items()}
+        for row in table_rows(datatable)
+    ]
+
+
+def _line_item_columns(item: Any) -> dict[str, Any]:
+    """The booking Then's columns read off one GAM line item, an integer column as ``(type, value)``."""
+    return {
+        column: (type(value), value) if column in _INTEGER_COLUMNS else value
+        for column, value in ((column, read(item)) for column, read in _LINE_ITEM_READERS.items())
+    }
+
+
 @then("Google Ad Manager received these line items, in package order:")
 def then_line_items_in_package_order(ctx: dict, datatable: Any) -> None:
     """The seller sent GAM exactly these line items, one per package in the request's order.
@@ -1234,20 +1250,32 @@ def then_line_items_in_package_order(ctx: dict, datatable: Any) -> None:
     a missing, extra or reordered line item fails it. An integer column is compared with its
     type, so a float goal (GAM's ``Goal.units`` is a long) fails it.
     """
-    expected = [
-        {column: (int, int(cell)) if column in _INTEGER_COLUMNS else cell for column, cell in row.items()}
-        for row in table_rows(datatable)
-    ]
-    sent = [
-        {
-            column: (type(value), value) if column in _INTEGER_COLUMNS else value
-            for column, value in ((column, read(item)) for column, read in _LINE_ITEM_READERS.items())
-        }
-        for item in ctx["env"].gam_objects_sent("LineItemService", "createLineItems")
-    ]
+    expected = _expected_line_items(datatable)
+    sent = [_line_item_columns(item) for item in ctx["env"].gam_objects_sent("LineItemService", "createLineItems")]
     assert sent == expected, (
         f"expected GAM to receive line items {expected}; it received {sent} (approval: {ctx.get('approval_result')})"
     )
+
+
+@then("Google Ad Manager holds each package's line item, under the line item id the package recorded:")
+def then_each_package_line_item(ctx: dict, datatable: Any) -> None:
+    """Row *i* is the line item GAM holds under the id the request's *i*-th package recorded.
+
+    Matched by package id, not by the order GAM received or returns line items in: each
+    package's stored row records its line item's id (``platform_line_item_id``). The
+    created line items must be exactly the recorded ones, so a package with no line item,
+    two packages on one line item, or a line item no package recorded fails it. Columns
+    and integer typing as in "Google Ad Manager received these line items, in package order".
+    """
+    created = {str(item["id"]): item for item in _line_items_created(ctx)}
+    recorded = ctx["env"].package_line_item_ids()
+    assert len(set(recorded)) == len(recorded) and set(recorded) == set(created), (
+        f"expected each package to record its own line item of the ones GAM created ({sorted(created)}); "
+        f"the packages recorded {recorded} (approval: {ctx.get('approval_result')})"
+    )
+    expected = _expected_line_items(datatable)
+    booked = [_line_item_columns(created[line_item_id]) for line_item_id in recorded if line_item_id is not None]
+    assert booked == expected, f"expected the packages' line items to be {expected}; GAM holds {booked}"
 
 
 @then("the seller's approval books the media buy")

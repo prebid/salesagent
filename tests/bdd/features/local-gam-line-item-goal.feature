@@ -82,7 +82,9 @@ Feature: A Google Ad Manager seller books each package's own volume, type, prior
     Then the response status should be "submitted"
     When the seller approves the media buy
     Then the seller's approval books the media buy
-    And Google Ad Manager received these line items, in package order:
+    # Each row is the line item the package in that position recorded, matched by package id.
+    # The order the approval creates the line items in is not graded here (#2645).
+    And Google Ad Manager holds each package's line item, under the line item id the package recorded:
       | lineItemType | priority | costType | costPerUnitMicros | goalType | unitType    | units |
       | STANDARD     | 8        | CPM      | 20000000          | LIFETIME | IMPRESSIONS | 30000 |
       | STANDARD     | 8        | CPM      | 12000000          | LIFETIME | IMPRESSIONS | 35000 |

@@ -38,12 +38,18 @@ from pydantic import TypeAdapter, ValidationError
 from src.core.database.database_session import get_db_session
 from src.core.errors.details import (
     CapabilityRefusalDetails,
+    ConfigurationDetails,
     EntityRefDetails,
     FormatDeclarationDivergenceDetails,
     FormatOptionDivergenceSummary,
     PlatformExtensionCollisionDetails,
 )
-from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPFormatNotFoundError, AdCPSalesAgentError
+from src.core.exceptions import (
+    AdCPCapabilityNotSupportedError,
+    AdCPFormatNotFoundError,
+    AdCPPersistedStateError,
+    AdCPSalesAgentError,
+)
 from src.core.schemas import (
     CreativeFormatIdentity,
     Format,
@@ -947,6 +953,46 @@ def linked_format_contract(
         format_options=resolve_declarations(authored, publisher_options or {}) if authored else authored,
         format_ids=profile.format_ids if profile else format_ids,
     )
+
+
+#: The ``package_config`` key holding the product's contract a package was booked on, for a
+#: package that selected no declaration. Repository-owned, never on the wire.
+BOOKED_FORMAT_CONTRACT = "booked_format_contract"
+
+
+def booked_contract_record(contract: FormatContract) -> dict[str, list[Any]]:
+    """*contract* as a package row keeps it: its declarations, or its legacy arm when it has none.
+
+    A canonical contract's legacy projection is derived from its declarations, so only the
+    declarations are kept.
+    """
+    if contract.format_options:
+        return {"format_options": [dict(declaration) for declaration in contract.format_options]}
+    return {"format_ids": list(contract.format_ids)}
+
+
+def booked_format_contract(package_config: Mapping[str, Any], *, package_id: str) -> FormatContract:
+    """The format contract a stored package was booked on: what it selected, else the product's contract then.
+
+    create_media_buy.mdx (v3.2.7): "validation and serving use the package-time contract,
+    never mutable Product discovery". A package that selected declarations recorded them in
+    ``formats_to_provide``. One that selected none, because its request named no selector
+    ("omitting both selects all formats supported by the product",
+    ``media-buy/package-request.json``) or the product has no canonical arm, recorded the
+    product's contract under :data:`BOOKED_FORMAT_CONTRACT`. Create writes one of the two,
+    and a migration filled in the rows stored before it, so a package with neither is a
+    store defect.
+
+    Raises:
+        AdCPPersistedStateError: the package recorded no contract.
+    """
+    selected = package_config.get("formats_to_provide")
+    if selected:
+        return format_contract(format_options=selected, format_ids=None)
+    record = package_config.get(BOOKED_FORMAT_CONTRACT)
+    if record is None:
+        raise AdCPPersistedStateError(details=ConfigurationDetails(package_id=package_id), field="formats_to_provide")
+    return format_contract(format_options=record.get("format_options"), format_ids=record.get("format_ids"))
 
 
 def package_format_snapshot(

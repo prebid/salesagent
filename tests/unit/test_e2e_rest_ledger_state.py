@@ -73,9 +73,6 @@ from tests.helpers.ledger import load_ledger_nodeids
 # comparison.
 EXPECTED_LEDGER: frozenset[str] = frozenset(
     {
-        # Added for prebid/salesagent#2645 (approval books line items in database order),
-        # non-strict because it is intermittent.
-        "tests/bdd/test_local_gam_line_item_goal.py::test_a_buy_the_seller_approves_books_each_packages_budget_at_the_price_of_the_option_it_selected[e2e_rest]",
         # salesagent-3cs7o.54 GRADUATED. The entry read "asset-level provenance absent
         # from the stored creative over e2e_rest only ... every source-readable hop is
         # cleared by measurement; the next step is a live-stack probe". The probe was

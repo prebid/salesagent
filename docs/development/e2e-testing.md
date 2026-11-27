@@ -392,9 +392,15 @@ The JSON is the authoritative record:
   collected/reported counts disagree, so a half-run cannot read as passing.
 - A suite that ran but produced no report is an **error**, not an omission —
   it exited before writing one, and the runner exits nonzero for it.
-- `.tox/` persists between runs, so both runners purge old reports first; a
-  report exists only if this run produced it. Trust the directory plus its
-  `.suites` manifest, never a lone JSON file's timestamp.
+- The in-network runner has each suite write its report straight into a fresh
+  per-run directory, so a report exists only if this run produced it, and a
+  finished suite's report survives a runner or Docker daemon that dies later.
+  `.suites` is written before the suites start, so a killed run still names
+  the suites it never finished.
+- The host runner copies reports out of `.tox/`, which persists between runs,
+  so it purges old reports first.
+- Trust the directory plus its `.suites` manifest, never a lone JSON file's
+  timestamp.
 
 A useful corollary: when the process exit code is nonzero but every report in
 the directory shows zero failures, the failure is outside the suites. The

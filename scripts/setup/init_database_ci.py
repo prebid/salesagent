@@ -247,7 +247,6 @@ def init_db_ci():
                     is_active=True,  # Explicitly set for auth lookup
                     authorized_emails=["ci-test@example.com"],  # Required by setup checklist
                     authorized_domains=None,  # Optional when emails are set
-                    policy_settings=None,  # SQL NULL
                     signals_agent_config=None,  # SQL NULL
                     ai_policy=None,  # SQL NULL
                     auto_approve_format_ids=["display_300x250_image", "display_728x90_image"],
@@ -571,7 +570,6 @@ def init_db_ci():
                     is_active=True,
                     authorized_emails=["iso-test@example.com"],
                     authorized_domains=None,
-                    policy_settings=None,
                     signals_agent_config=None,
                     ai_policy=None,
                     auto_approve_format_ids=["display_300x250_image"],
