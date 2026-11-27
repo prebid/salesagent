@@ -9,14 +9,14 @@ Root cause: ``_dict_to_value`` (src/a2a_server/adcp_a2a_server.py) parses the
 skill's response dict into a ``google.protobuf.Value`` via
 ``json_format.Parse``. ``google.protobuf.Value``/``Struct`` (the well-known
 types backing A2A's ``Part.data``) have no integer variant -- every JSON
-number is stored as ``number_value`` (a double). ``extract_data_from_artifact``
-(tests/utils/a2a_helpers.py) reads the artifact back with
-``json_format.MessageToJson`` + ``json.loads``, which is the same conversion
-production's own wire path (``a2a`` SDK's ``jsonrpc_dispatcher.MessageToDict``)
-performs -- so this in-process capture IS the real wire, not a harness
-approximation. The result: any originally-int field placed in a DataPart
-comes back as a Python ``float`` (``86400`` -> ``86400.0``) on every A2A
-skill response, not just capabilities.
+number is stored as ``number_value`` (a double). The harness protobuf reader
+(``tests/harness/a2a_wire.py``) converts the Task with
+``json_format.MessageToDict`` and applies ``restore_a2a_integer_types``,
+the same restoration used by the production HTTP boundary. Without
+restoration, an originally-int field placed in a DataPart comes back as
+a Python ``float`` (``86400`` -> ``86400.0``).
+The tests below check the native capture and the actual HTTP response
+independently.
 """
 
 from __future__ import annotations
@@ -93,10 +93,9 @@ class TestA2AWireIntegerSerialization:
 
     def test_replay_ttl_seconds_is_an_integer_on_the_a2a_wire(self, integration_db):
         """adcp.idempotency.replay_ttl_seconds is `type: integer`
-        in the pinned v3.1.1 get-adcp-capabilities-response.json schema. The real
-        A2A wire (captured via extract_data_from_artifact -> MessageToJson, the
-        same conversion the production jsonrpc_dispatcher performs) must not
-        silently widen it to a JSON float.
+        in the pinned get-adcp-capabilities-response.json schema. The native
+        capture uses MessageToDict and the HTTP boundary's integer restoration;
+        it must not silently widen the field to a JSON float.
         """
         with CapabilitiesEnv() as env:
             env.setup_default_data()

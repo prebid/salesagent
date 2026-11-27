@@ -62,6 +62,7 @@ if TYPE_CHECKING:
 # fixture lookup. Simple ``import`` is not enough — pytest only discovers
 # fixtures from conftest files and registered plugins.
 pytest_plugins = [
+    "tests.bdd.steps.domain.a2a_task_ownership",
     "tests.bdd.payload_capture",
     "tests.bdd.scenario_liveness",
     "tests.bdd.steps.generic.given_auth",
@@ -2351,7 +2352,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         #   That pass rode the adapter flag its Given also raised; with the Given setting the
         #   tenant flag alone it is xfailed in _XFAIL_TAGS against #2483 on every transport.
         # - T-UC-003-approval-adapter → GRADUATE — BR-RULE-017 INV-3: same real-wire path;
-        #   the last_a2a_task guard is Transport.A2A-gated and inert on e2e_rest.
         # No UC-003 entries remain in e2e_rest_known_failures.txt — no sibling conflict.
 
         # Graduated: eleven of the twelve scenarios of the _UC005_E2E_FIXTURE_INJECTION_TAGS
@@ -5244,15 +5244,16 @@ _TRANSPORT_SPECIFIC_TAGS = {"rest", "mcp", "a2a"}
 # escape-hatch detectors (GH #1892), whereas this keeps a real ``[a2a]`` test id
 # that ``--collect-only`` shows.
 _SINGLE_TRANSPORT_TAGS = {
-    "a2a_untyped_ingest": "A2A",
+    "a2a_untyped_ingest": (["A2A"], []),
     # local-pre-dispatch-refusals.feature: the refused shape is the transport's own frame,
     # so each scenario names the one transport whose frame it sends.
-    "predispatch-rest": "REST",
-    "predispatch-a2a": "A2A",
-    "predispatch-mcp": "MCP",
+    "predispatch-rest": (["REST"], []),
+    "predispatch-a2a": (["A2A"], []),
+    "predispatch-mcp": (["MCP"], []),
     # local-mcp-tool-discovery.feature: tools/list is MCP's own discovery frame and exists on
     # no other transport.
-    "mcptools": "MCP",
+    "mcptools": (["MCP"], []),
+    "a2a-task-ownership": (["A2A"], ["E2E_A2A"]),
 }
 
 # UC + tag combinations that should run IMPL-only (no 4-way parametrization).
@@ -5631,8 +5632,8 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     # _SINGLE_TRANSPORT_TAGS.
     single = marker_names & _SINGLE_TRANSPORT_TAGS.keys()
     if single:
-        transport = Transport[_SINGLE_TRANSPORT_TAGS[next(iter(single))]]
-        metafunc.parametrize("ctx", [transport], ids=[transport.value], indirect=True)
+        in_process, e2e = _SINGLE_TRANSPORT_TAGS[next(iter(single))]
+        _parametrize_ctx(metafunc, [Transport[name] for name in in_process], [Transport[name] for name in e2e])
         return
 
     # Admin scenarios are not AdCP tool surfaces (no a2a/mcp/rest/e2e_rest), but
@@ -6759,6 +6760,11 @@ _UC006_WIRED_SCENARIOS = frozenset(
 )
 
 ENV_ROUTES: list[EnvRoute] = [
+    EnvRoute(
+        tag="a2a-task-ownership",
+        when=lambda m: "a2a-task-ownership" in m,
+        env_builder=_env("tests.harness.a2a_task_ownership.A2ATaskOwnershipEnv"),
+    ),
     # ── ADMIN (hand-authored admin UI features) ─────────────────────────────
     # T-ADMIN-* detects as the ADMIN bucket (storyboard_spec.detect_uc); the
     # bucket row serves BR-ADMIN-ACCOUNTS. BR-ADMIN-TENANT-SCOPING carries the

@@ -2194,11 +2194,6 @@ class AccountListDispatchMixin:
         kwargs.setdefault("identity", self.identity)  # type: ignore[attr-defined]
         return _list_accounts_impl(**kwargs)
 
-    def _call_list_a2a(self, **kwargs: Any) -> Any:
-        from src.core.schemas.account import ListAccountsResponse
-
-        return self._run_a2a_handler("list_accounts", ListAccountsResponse, **kwargs)  # type: ignore[attr-defined]
-
     def _call_list_mcp(self, **kwargs: Any) -> Any:
         from src.core.schemas.account import ListAccountsResponse
 

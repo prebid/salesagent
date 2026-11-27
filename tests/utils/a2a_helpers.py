@@ -10,11 +10,9 @@ import uuid
 from typing import Any
 from unittest.mock import ANY
 
-from a2a.types import Artifact, Message, Part, Role
+from a2a.types import Message, Part, Role
 from google.protobuf import json_format, struct_pb2
 from pydantic import BaseModel
-
-from src.a2a_server.adcp_a2a_server import restore_a2a_integer_types
 
 
 def assert_delivery_forwarded_account(mock_delivery, expected_account, **forwarded) -> None:
@@ -40,35 +38,6 @@ def assert_delivery_forwarded_account(mock_delivery, expected_account, **forward
     # this a single assert_called_once_with, the form the weak-mock guard requires.
     expected_req = GetMediaBuyDeliveryRequest(account=expected_account, **forwarded)
     mock_delivery.assert_called_once_with(req=expected_req, identity=ANY)
-
-
-def extract_data_from_artifact(artifact: Artifact) -> dict[str, Any]:
-    """Extract the data dictionary from an A2A artifact.
-
-    A2A responses may contain multiple parts:
-    - Part with text: Human-readable message (optional, may be first)
-    - Part with data: Structured data (required)
-
-    In a2a-sdk 1.0, Part.data is a protobuf Value, not a plain dict.
-
-    google.protobuf.Value has no integer variant -- json_format.MessageToJson
-    widens every number to a double (86400 -> 86400.0), which is exactly what
-    the real a2a-sdk wire (jsonrpc_dispatcher.MessageToDict) does too. Passing
-    the result through restore_a2a_integer_types keeps this "real A2A wire"
-    capture (tests/CLAUDE.md) honest for known integer-typed AdCP fields
-    instead of silently diverging from what production (src/app.py's /a2a
-    route wrapper) emits.
-
-    Args:
-        artifact: A2A Artifact from response
-
-    Returns:
-        Dictionary containing the structured response data, or empty dict if not found
-    """
-    for part in artifact.parts:
-        if part.HasField("data"):
-            return restore_a2a_integer_types(json.loads(json_format.MessageToJson(part.data)))
-    return {}
 
 
 def _json_default(obj: Any) -> Any:

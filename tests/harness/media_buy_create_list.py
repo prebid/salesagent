@@ -13,12 +13,9 @@ and route by request type. The get_media_buys dispatch itself is inherited from
 ``MediaBuyListDispatchMixin`` rather than re-implemented, so this env and
 ``MediaBuyListEnv`` grade the same tool through the same code.
 
-Routing happens at the ``deliver_*`` frame, not ``call_*``: ``BaseTestEnv`` owns
-the one ``call_mcp``/``call_a2a`` pair as ``deliver_*(...).payload``, and the wire
-channel a scenario grades — ``DeliverResult.wire_response`` — travels on the
-RETURN VALUE. A ``call_*`` override here would both violate the single-dispatch
-guard (``tests/unit/test_architecture_harness_single_dispatch.py``) and throw the
-list branch's real wire away.
+MCP and A2A routing uses ``address_tool`` and ``response_parser`` in the shared
+core. ``BaseTestEnv`` owns delivery and the payload-returning adapters; the
+``TransportResult`` carries the original wire alongside its parsed outcome.
 
 REST is routed too, and has to be: ``get_media_buys`` answers on
 ``POST /api/v1/media-buys/query`` and ``_NO_REST_UC_TAG_PREFIXES`` is now EMPTY
@@ -48,7 +45,6 @@ from typing import Any, Literal
 from tests.harness.delivery_poll import DeliveryDispatchMixin
 from tests.harness.media_buy_create import MediaBuyCreateEnv
 from tests.harness.media_buy_list import MediaBuyListDispatchMixin
-from tests.harness.transport import DeliverResult
 
 # The verb discriminators are the mixins' own ``is_delivery_request`` and
 # ``is_list_request``, inherited rather than restated here: a local copy is a second
@@ -87,37 +83,20 @@ class MediaBuyCreateListEnv(DeliveryDispatchMixin, MediaBuyListDispatchMixin, Me
             return self._call_list_impl(**kwargs)
         return super().call_impl(**kwargs)
 
-    def deliver_a2a(self, **kwargs: Any) -> DeliverResult:
-        """Route by request CONTENT: delivery and list requests to their mixins, else create.
-
-        JUSTIFIED OVERRIDE (``_KNOWN_DELIVER_OVERRIDES``): this env selects the
-        tool AND the parser from request content, so it can declare no single
-        ``A2A_SKILL`` for the base to dispatch on.
-
-        The ``DeliverResult`` is returned AS IS — the mixins drive ``_run_a2a_handler``,
-        which already yields one carrying the REAL artifact wire. Re-wrapping it would
-        double-nest the payload and discard that wire.
-        """
-        verb = self._verb_of(kwargs)
+    def address_tool(self, tool: str, payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        verb = self._verb_of(payload)
         if verb == "delivery":
-            return self._deliver_delivery_a2a(**kwargs)
+            return "get_media_buy_delivery", payload
         if verb == "list":
-            return self._deliver_list_a2a(**kwargs)
-        return super().deliver_a2a(**kwargs)
+            return "get_media_buys", payload
+        return super().address_tool(tool, payload)
 
-    def deliver_mcp(self, **kwargs: Any) -> DeliverResult:
-        """Content router; see :meth:`deliver_a2a`.
-
-        The mixins return the ``DeliverResult`` whose ``wire_response`` is the real
-        ``structured_content`` — the MCP bytes the envelope ``status`` assertions (#1941)
-        grade.
-        """
-        verb = self._verb_of(kwargs)
-        if verb == "delivery":
-            return self._deliver_delivery_mcp(**kwargs)
-        if verb == "list":
-            return self._deliver_list_mcp(**kwargs)
-        return super().deliver_mcp(**kwargs)
+    def response_parser(self, tool: str) -> Any:
+        if tool == "get_media_buy_delivery":
+            return lambda **data: self._parse_delivery_rest_response(data)
+        if tool == "get_media_buys":
+            return lambda **data: self._parse_list_rest_response(data)
+        return super().response_parser(tool)
 
     # -- REST: one env, three endpoints ---------------------------------------
     #

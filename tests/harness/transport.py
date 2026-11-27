@@ -24,6 +24,128 @@ from pydantic import BaseModel
 from src.core.resolved_identity import TransportProtocol
 
 
+class WireError(Exception):
+    """A transport failure carrying the envelope the buyer received, VERBATIM.
+
+    Deliberately NOT an ``AdCPSalesAgentError`` subclass. The harness used to rebuild the
+    matching production exception from wire bytes so a test could write
+    ``pytest.raises(AdCPNotFoundError)`` through a transport; that map covered 20 of
+    43 classes, was silent about the other 23, and its own docstring conceded the
+    reconstruction was lossy. Grading OUR class hierarchy through a lossy copy of
+    production's constructor is not the same as grading the buyer's contract.
+
+    This type carries no code-to-class knowledge at all. It exists so a failed wire
+    dispatch can still raise -- callers up the stack expect an exception -- while the
+    thing being asserted stays the envelope, reachable as ``.envelope`` and published
+    by the dispatchers as ``TransportResult.wire_error_envelope``.
+
+    *response* is the raw HTTP response this envelope arrived on, when it arrived on
+    one. An envelope is not always the whole refusal: ``WWW-Authenticate: Signature
+    error="<code>"`` lives in the HEADERS, so a leg that raised the envelope alone
+    left ``assert_signature_challenge`` with nothing to read and it refused to grade
+    (correctly -- tests/CLAUDE.md, assert on the wire, never on a reconstruction).
+    ``None`` on the in-process legs, which have no response to carry.
+    """
+
+    def __init__(self, envelope: dict, response: Any = None) -> None:
+        self.envelope = envelope
+        self.response = response
+        errors = envelope.get("errors") or [{}]
+        code = errors[0].get("code") if isinstance(errors[0], dict) else None
+        super().__init__(f"wire error {code or '(no code)'}")
+
+
+class WireRefusal(AssertionError):
+    """An HTTP refusal that arrived with NO body to read an envelope out of.
+
+    Carries the response, because the evidence of WHICH refusal happened can live
+    outside the body: a signature refusal's sole extra signal is
+    ``WWW-Authenticate: Signature error="<code>"``. Raising a bare
+    ``AssertionError`` here discarded that header, so an unsigned refusal on the
+    ``/a2a`` and ``/mcp`` legs could be observed only as "some 4xx" — the exact
+    status-shaped vacuity ``assert_signature_challenge`` exists to remove
+    (salesagent-n78j0.1.2), and the reason the REST leg already had
+    ``_non_json_error_result``.
+
+    A 4XX IS NOT ITSELF A REASON TO RAISE THIS, and used to be: ``_jsonrpc_body``
+    raised on ``status_code >= 400`` outright, on the rationale that a signature
+    refusal is bodyless. That was true of #1291's ASGI verifier, which sent its own
+    401 from above the application. It is false on #1721's design, where the refusal
+    is raised inside the resolver and rendered by ``AuthChallengeResponder``, which
+    DERIVES the 401 by reading an AdCP code out of a finished JSON body — so the
+    body always exists, and discarding it left the ``code``, the ``message`` and
+    above all the ``recovery`` of the whole 28-code request-signature family
+    ungraded on both JSON-RPC legs (salesagent-hmq0l).
+    """
+
+    def __init__(self, message: str, response: Any) -> None:
+        super().__init__(message)
+        self.response = response
+
+
+def _wire_envelope(envelope: dict) -> dict | None:
+    """Recognize either error layer permitted by AdCP 3.2.7 L3, unchanged.
+
+    Reader recognition accepts an envelope-only peer as well as payload errors.
+    Seller emission assertions separately require both mirrored layers; this
+    function fills neither and never reconstructs a body from an exception.
+    """
+    if not isinstance(envelope, dict):
+        return None
+    if isinstance(envelope.get("adcp_error"), dict) or (
+        isinstance(envelope.get("errors"), list) and envelope["errors"]
+    ):
+        return envelope
+    return None
+
+
+def _jsonrpc_body(response: Any, *, surface: str) -> dict[str, Any]:
+    """One JSON-RPC envelope out of an HTTP response, SSE-framed or not.
+
+    MCP's streamable HTTP answers a POST with ``text/event-stream`` (FastMCP's
+    ``http_app`` does not enable JSON responses), so the envelope arrives as an
+    SSE ``data:`` line; ``/a2a`` answers with plain JSON. One reader for both,
+    because the CALLER only ever wants the envelope and a per-leg copy of this
+    framing would be two ways to mis-read the same wire.
+
+    THE STATUS IS NOT CONSULTED. A refused request answers with an envelope like any
+    other outcome — that is what ``AuthChallengeResponder`` reads to decide the 401 in
+    the first place — so reading the body is what the status says to do, not something
+    the status can forbid. Only an EMPTY body is a refusal this function cannot parse,
+    and that is the one case it raises on. The same order REST has had all along
+    (``unwrap_rest_response`` parses, then classifies) and the one the E2E A2A leg was
+    corrected to (``tests/harness/test_client.py`` §
+    ``test_http_error_status_still_surfaces_the_wire_error_envelope``): parse first,
+    classify second. Classifying first throws away the only evidence of what was
+    classified.
+
+    A body that is not JSON at all is still a ``WireRefusal`` — a Starlette 404 page
+    or a proxy's error HTML carries no envelope to read, and letting a decode error
+    escape would report a real refusal as a harness crash.
+    """
+    import json as _json
+
+    if not response.content:
+        raise WireRefusal(f"{surface} returned HTTP {response.status_code} with no body", response)
+
+    if "text/event-stream" not in response.headers.get("content-type", ""):
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise WireRefusal(
+                f"{surface} returned HTTP {response.status_code} with a non-JSON body: {response.text[:800]!r}",
+                response,
+            ) from exc
+
+    for line in response.text.splitlines():
+        if not line.startswith("data:"):
+            continue
+        envelope = _json.loads(line[len("data:") :].strip())
+        if isinstance(envelope, dict) and ("result" in envelope or "error" in envelope):
+            return envelope
+    raise AssertionError(f"{surface} SSE response carried no JSON-RPC envelope: {response.text[:800]!r}")
+
+
 def is_pinned_error_code(code: str | None) -> bool:
     """Whether ``code`` is a canonical AdCP error code in the pinned enum.
 
@@ -265,15 +387,15 @@ class TransportResult:
         envelope: Transport-specific metadata (HTTP status, ToolResult, etc.).
         error: Exception raised during dispatch, if any.
         raw_response: Unprocessed transport response (httpx.Response, ToolResult, etc.).
-        wire_response: Serialized success-path response body as a dict, captured
-            from the real wire (REST HTTP JSON body, MCP structured_content, A2A
-            artifact DataPart). ``None`` on error and on IMPL (no wire — serialize
-            the typed ``payload`` instead). Lets success-path tests assert the
-            actual serialized shape (e.g. the v3.1 format_id federation contract).
+        wire_response: Captured response body (REST JSON, MCP structured_content,
+            or A2A artifact DataPart). A2A retains this body on domain and typed
+            parser failures too. Direct native delivery retains the converted
+            Task in envelope["task"] with has_wire=False; HTTP delivery additionally
+            retains raw_response and has_wire=True. Parsers receive deep copies.
         wire_error_envelope: Raw two-layer error envelope dict captured from
             the actual wire bytes (REST HTTP body, MCP ToolError content text,
-            A2A failed-Task artifact DataPart). ``None`` on success or on the
-            IMPL transport, which has no wire. This is the canonical field
+            A2A artifact DataPart with adcp_error or native FAILED state).
+            ``None`` on success or when no error envelope was captured. This is the canonical field
             for error verification — see ``tests/CLAUDE.md`` § Error
             Verification Policy.
         has_wire: Whether these bytes crossed a REAL wire, declared by the

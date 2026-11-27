@@ -1,21 +1,21 @@
 """Dispatcher classes — one per transport.
 
-Each dispatcher calls the env's transport-specific method and wraps the
-result in a TransportResult. The env subclass provides the actual call logic;
-the dispatcher only handles result wrapping and error capture.
+Each dispatcher returns a TransportResult with the observed wire evidence.
+MCP and A2A delegate through the base delivery methods to the shared core;
+REST retains the environment's endpoint and body builders.
 
 ONE DISPATCH FORM. The MCP and A2A dispatchers call ``env.deliver_mcp`` /
 ``env.deliver_a2a`` — the single pair ``BaseTestEnv`` owns
-(``tests/harness/_base.py``), which ``call_mcp``/``call_a2a`` delegate to as
-``deliver_*(**kwargs).payload``. There is no second channel: the deprecated
+(``tests/harness/_base.py``). ``call_mcp``/``call_a2a`` return the parsed payload
+or raise the exact captured exception. There is no second channel: the deprecated
 raw-kwargs dispatch path was deleted once its last 18 call sites migrated, and
 per-env ``call_mcp``/``call_a2a`` re-implementations are banned by
 ``tests/unit/test_architecture_harness_single_dispatch.py``. A scenario builds
 the request model; the transport serializes it.
 
-THE WIRE RIDES THE RETURN VALUE. Success-path wire bytes arrive on
-``DeliverResult.wire_response`` and are re-emitted on
-``TransportResult.wire_response``; error-path wire bytes arrive on
+THE WIRE RIDES THE RETURN VALUE. The MCP primitive's ``DeliverResult`` is read
+once by the core; dispatchers retain ``TransportResult.wire_response`` and
+error-path wire bytes on
 ``TransportResult.wire_error_envelope`` from ``client.py``'s per-transport
 unwraps. No dispatcher reads another object's private wire stash — that
 attribute (``_last_wire_response``) is deleted, which is what makes a second
@@ -45,7 +45,6 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from tests.harness.transport import (
-    DeliverResult,
     Transport,
     TransportResult,
 )
@@ -65,7 +64,7 @@ if TYPE_CHECKING:
 # client.py — the two together being the "mutual" part).
 #
 # The MCP/A2A/REST error-path unwraps themselves are NOT re-implemented here:
-# this module delegates to client.py's unwrap_mcp_error / unwrap_a2a_error /
+# this module delegates to client.py's unwrap_mcp_error / unwrap_delivery_error /
 # unwrap_rest_error, so there is one error unwrap per transport family for both
 # dispatch paths (CLAUDE.md DRY invariant; remediation finding 1). The same rule
 # now covers the REST *response* unwrap (``unwrap_rest_response``), which is why
@@ -162,69 +161,21 @@ def _refuse_signed_generic_client(signed: SignatureRealization, transport: Trans
     )
 
 
-def a2a_transport_result(call: Callable[[], DeliverResult | Any]) -> TransportResult:
-    """One ``TransportResult`` out of any dispatch onto the ``/a2a`` wire.
-
-    Stated once because A2A has MORE THAN ONE thing a buyer can send it — a
-    skill invocation and a bare credential registration
-    (``tasks/pushNotificationConfig/set``) — and both have to produce results a
-    scenario can grade side by side. A second copy of this wrapping would be
-    free to drop the refusal's raw response, which
-    ``assert_signature_challenge`` reports as "no wire to read" rather than as
-    the acceptance it actually is.
-
-    *call* returns a :class:`~tests.harness.transport.DeliverResult` on a leg that
-    observes a success-path wire (the skill dispatch, ``env.deliver_a2a``), and a
-    bare payload on one that does not (the credential registration, which
-    deliberately captures no wire — the operation dispatch's capture belongs to
-    the operation dispatch). Either way the wire rides the RETURN VALUE and is
-    never read back off another object's private attribute.
-
-    The error path delegates to ``client.py``'s ``unwrap_a2a_error`` — the one
-    A2A error unwrap, shared with ``AdCPTestClient``, which owns wire-envelope
-    recovery and the derived status — then re-attaches the refusal response.
-    """
-    from tests.harness.client import unwrap_a2a_error
+def a2a_transport_result(call: Callable[[], TransportResult]) -> TransportResult:
+    """Return captured A2A evidence; capture only exceptions preceding a result."""
+    from tests.harness.a2a_wire import unwrap_delivery_error
 
     try:
-        delivered = call()
+        return call()
     except Exception as exc:
-        # ONE A2A error unwrap for both dispatch paths (client.py). This used to
-        # be a second copy of that body, which is how the derived status ended up
-        # on this path and not on AdCPTestClient.call — the path the graded
-        # storyboard scenarios actually take. It reads the REAL envelope off the
-        # exception and must never hand back a synthesized stand-in under
-        # ``wire_error_envelope`` — see the module note above. It declares
-        # ``has_wire=False`` at its own construction site, and re-attaching the
-        # refusal response leaves that declaration alone: a catch-all cannot tell
-        # whether bytes moved before the raise.
-        return _carrying_refusal_response(unwrap_a2a_error(exc, Transport.A2A), exc)
-    if isinstance(delivered, DeliverResult):
-        # Real A2A wire: the artifact DataPart dict, carried back on the SAME
-        # return value as the payload. It used to be read off
-        # env._last_wire_response — one object reaching into another's private
-        # attribute, which is what allowed a second writer and a stale wire.
-        return TransportResult(
-            has_wire=True,  # the artifact DataPart came back from the handler
-            payload=delivered.payload,
-            envelope={"transport": "a2a"},
-            wire_response=delivered.wire_response,
-        )
-    # A leg that returned a bare payload rather than a ``DeliverResult``: no
-    # success-path wire was captured, so it declares has_wire=False rather than
-    # claiming a wire whose body it never stashed.
-    return TransportResult(payload=delivered, envelope={"transport": "a2a"}, has_wire=False)
+        return _carrying_refusal_response(unwrap_delivery_error(exc, Transport.A2A), exc)
 
 
 class A2ADispatcher:
     """Dispatch via ``handler.on_message_send`` — exercises the full A2A pipeline.
 
-    ``env.deliver_a2a`` drives ``AdCPRequestHandler.on_message_send`` end-to-end
-    (message parsing → skill routing → ``serve`` → ``to_wire``
-    → Task/Artifact framing). On a failed Task, the harness reconstructs the
-    ``AdCPSalesAgentError`` from the artifact DataPart and stashes the real wire
-    envelope on the exception via ``_wire_error_envelope`` — read off it by
-    ``client.py``'s ``unwrap_a2a_error``, the one A2A error unwrap.
+    ``env.deliver_a2a`` returns the shared reader's native Task and AdCP
+    outcome, including captured failures, without a second error parse.
 
     ``signed`` is consumed here but not forwarded. Whether a signature is
     realizable is a fact about the ENV (does it have a counterparty key?), not
@@ -317,14 +268,9 @@ class McpDispatcher:
             # re-attached on top: a bodyless 401 leaves that unwrap no envelope
             # to recover.
             return _carrying_refusal_response(unwrap_mcp_error(exc, Transport.MCP), exc)
-        # Real MCP wire: the structured_content dict, carried back on the SAME
-        # return value as the payload — see the A2A sibling above.
-        return TransportResult(
-            has_wire=True,  # structured_content came back from the MCP client
-            payload=delivered.payload,
-            envelope={"transport": "mcp"},
-            wire_response=delivered.wire_response,
-        )
+        if delivered.error is not None:
+            return _carrying_refusal_response(delivered, delivered.error)
+        return delivered
 
 
 def _effective_rest_method(method: str, *, has_params: bool) -> str:
@@ -341,84 +287,6 @@ def _effective_rest_method(method: str, *, has_params: bool) -> str:
     if method != "get":
         return method
     return "post" if has_params else "get"
-
-
-def _deliver_e2e_rest_signed(
-    env: BaseTestEnv,
-    *,
-    base_url: str,
-    endpoint: str,
-    method: str,
-    body: dict[str, Any],
-    credential: Any,
-    signed: SignatureRealization,
-) -> Any:
-    """E2E_REST delivery through ``env.wire_request`` — the signABLE path.
-
-    Not a second copy of ``client._deliver_e2e_rest``: that function serializes
-    its own request (httpx's ``json=``), which is the one thing a signature
-    cannot survive — httpx re-serializes with its own separators, so the bytes
-    signed are not the bytes sent and the verifier answers
-    ``request_signature_digest_mismatch``. Once the env CAN sign, every request
-    it makes — signed or not — goes through ``wire_request``, which owns the
-    three rules a signed request obeys (serialize once and send exactly those
-    bytes; carry the same credential and tenant hint whether or not you sign; one
-    identity, on ``Authorization``). The fork is on ``can_sign``, not on
-    ``signed``, so a signed and an unsigned dispatch differ by exactly the
-    signature (owner decision D1's corollary); an env that cannot sign keeps the
-    single upstream delivery implementation untouched.
-
-    ONE thing is this leg's OWN and is stated here rather than inside that seam,
-    because only this leg has it: the ORIGIN is the live stack's, port included —
-    nginx forwards ``Host`` verbatim and ``_verify_url`` rebuilds the authority
-    from it, so the in-process default (``http://testserver``) would cover a
-    different ``@target-uri`` than the verifier reconstructs.
-
-    The tenant hint used to be this leg's too, for a reason that has since become
-    every leg's: the header named a module-level ``sig_tenant`` that does not
-    exist in the live database, and a header asserting a tenant other than the
-    one being addressed is a lie inside the signed byte range — one ladder
-    reordering away from collapsing the posture bucket to ``none``, an unverified
-    pass-through wearing a 200. ``wire_request`` now sets it for all four legs,
-    and nothing else is carried across from *credential*: there are no testing
-    headers left to forward (the ``x-dry-run`` channel went with the testing
-    hooks), so this leg passes no ``extra`` at all.
-
-    *credential* is read for ONE bit and no more. ``wire_request`` owns the
-    credential it sends — the signing capability's bearer, on ``Authorization``,
-    per owner decision D3/D4 — so what a caller passes here cannot add a second
-    identity to the request; it can only say whether an ACCEPTABLE one is
-    presented. That bit is what selects the branch being graded: security.mdx
-    :1269 makes an unsigned request carrying a valid bearer a spec-correct 200,
-    so only a call presenting no bearer (``credential={}``, or one built with
-    ``token=None``) reaches the verifier's refusal at all.
-
-    *base_url* is passed in rather than read off ``env.e2e_config`` here: the
-    caller has already established it is not ``None`` (and returns a
-    ``TransportResult`` naming ``e2e_config=`` when it is), so re-deriving it
-    would either duplicate that check or type as optional.
-    """
-    import httpx
-
-    from tests.harness.client import _presented
-    from tests.helpers.signing import wire_origin
-
-    raw, headers = env.wire_request(
-        path=endpoint,
-        # A parameterless GET has no body to sign, and none to send.
-        body=None if method == "get" else body,
-        signed=signed,
-        origin=wire_origin(base_url),
-        # ``_presented`` is the one place an omitted credential falls back to
-        # env.credential(), shared with every other e2e delivery; the bearer is
-        # then the acceptable-credential bit, not the header set to send.
-        credentialed=bool(_presented(env, credential).get("Authorization")),
-        method=method.upper(),
-    )
-    with httpx.Client(base_url=base_url, timeout=30) as client:
-        # Signed or not, the bytes signed are the bytes sent — `content=`, never
-        # `json=`, which would re-serialize them.
-        return client.request(method.upper(), endpoint, content=raw, headers=headers)
 
 
 class RestE2EDispatcher:
@@ -441,7 +309,7 @@ class RestE2EDispatcher:
     (the wire-grading work; design doc §5). THE ONE EXCEPTION is an env that CAN
     SIGN: a signature requires the ``wire_request`` seam (serialize once, send
     exactly those bytes), which that delivery function does not go through, so
-    the signable path is ``_deliver_e2e_rest_signed`` above. This is the only leg
+    the signable path delegates to ``env._http_request``. This is the only leg
     that leaves the process, and the owner's D1 ruling — "the http path is the
     only really truthful one" — makes it the one that matters most.
 
@@ -460,11 +328,10 @@ class RestE2EDispatcher:
 
     def dispatch(self, env: BaseTestEnv, *, signed: SignatureRealization = False, **kwargs: Any) -> TransportResult:
         from tests.harness.address_table import ToolAddress
-        from tests.harness.client import _deliver_e2e_rest, unwrap_rest_response
+        from tests.harness.client import _deliver_e2e_rest, _presented, unwrap_rest_response
         from tests.harness.transport import NO_IDENTITY_OVERRIDE
 
-        if signed and not env.can_sign:
-            env.signing  # raises, naming enable_request_signing()  # noqa: B018
+        env._refuse_unsignable(signed)
         if not env.e2e_config:
             return TransportResult(
                 error=RuntimeError("E2E dispatch requires env.e2e_config (pass e2e_config= to env)"), has_wire=False
@@ -483,13 +350,11 @@ class RestE2EDispatcher:
         method = _effective_rest_method(getattr(env, "REST_METHOD", "post"), has_params=bool(kwargs))
 
         if env.can_sign:
-            response = _deliver_e2e_rest_signed(
-                env,
-                base_url=env.e2e_config.base_url,
-                endpoint=endpoint,
-                method=method,
-                body=body,
-                credential=credential,
+            response = env._http_request(
+                method.upper(),
+                endpoint,
+                body=None if method == "get" else body,
+                credential=_presented(env, credential),
                 signed=signed,
             )
         else:
@@ -526,7 +391,7 @@ class McpE2EDispatcher:
     """
 
     def dispatch(self, env: BaseTestEnv, *, signed: SignatureRealization = False, **kwargs: Any) -> TransportResult:
-        from tests.harness.client import _dispatch_core, flatten_payload
+        from tests.harness.client import _dispatch_core
         from tests.harness.transport import NO_IDENTITY_OVERRIDE, MissingToolNameError, Transport
 
         if signed:
@@ -542,65 +407,27 @@ class McpE2EDispatcher:
             )
 
         credential = kwargs.pop("credential", NO_IDENTITY_OVERRIDE)
-        req = kwargs.pop("req", None)
-        payload = flatten_payload(req, **kwargs)
-
-        return _dispatch_core(env, Transport.E2E_MCP, tool_name, payload, credential)
+        return _dispatch_core(env, Transport.E2E_MCP, tool_name, kwargs, credential)
 
 
 class A2AE2EDispatcher:
-    """Dispatch via a real JSON-RPC ``message/send`` HTTP request to the live A2A endpoint.
+    """Send an environment-owned request over the real A2A HTTP endpoint.
 
-    Unlike ``RestE2EDispatcher`` (which reuses each env's hand-written
-    ``REST_ENDPOINT``/``build_rest_body``/``parse_rest_response`` overrides),
-    this delegates entirely to ``AdCPTestClient``/``_deliver_e2e_a2a``
-    (``tests/harness/client.py``, the wire-grading work) — the address,
-    JSON-RPC envelope construction, and Task-state handling all live there,
-    derived from the live ``create_agent_card()`` registration
-    (``tests/harness/address_table.py``), not re-implemented per-env.
-
-    Tool-name threading: unlike ``AdCPTestClient.call(tool, payload,
-    transport)`` (which takes the tool name explicitly), the legacy
-    ``env.call_via(transport, **kwargs)`` entry point this dispatcher is
-    reached through carries no tool-name parameter — every OTHER dispatcher
-    sidesteps this because the env subclass's own ``deliver_a2a``/``deliver_mcp``
-    override already has the tool name hard-coded in its body (e.g.
-    ``self._run_a2a_handler("get_products", ...)``). Since this
-    dispatcher must call the generic client instead of an env override, the
-    caller supplies the tool name explicitly via a ``tool_name=`` kwarg (or
-    an ``env.A2A_SKILL`` class attribute, for envs that want to declare it
-    once) — same open question the wire-grading work's ``McpE2EDispatcher`` faces for
-    ``Transport.E2E_MCP``, resolved independently here since neither
-    dispatcher's fix depends on the other's.
-
-    ``signed`` is consumed and REFUSED, for the reason given on
-    ``McpE2EDispatcher``. The in-process ``Transport.A2A`` leg signs; this one
-    cannot, and running it unsigned would grade a signing scenario green having
-    signed nothing.
+    The shared core resolves request-dependent addressing before selecting the
+    environment's local response reader. Generic callers use AdCPTestClient.
+    Explicit signed dispatch remains refused on this legacy E2E entry point.
     """
 
     def dispatch(self, env: BaseTestEnv, *, signed: SignatureRealization = False, **kwargs: Any) -> TransportResult:
-        from tests.harness.client import _dispatch_core, flatten_payload
-        from tests.harness.transport import NO_IDENTITY_OVERRIDE, MissingToolNameError, Transport
+        from tests.harness.client import _dispatch_core
+        from tests.harness.transport import NO_IDENTITY_OVERRIDE, Transport
 
         if signed:
             _refuse_signed_generic_client(signed, Transport.E2E_A2A)
 
         credential = kwargs.pop("credential", NO_IDENTITY_OVERRIDE)
         tool_name = kwargs.pop("tool_name", None) or getattr(env, "A2A_SKILL", None)
-        if not tool_name:
-            raise MissingToolNameError(
-                "A2AE2EDispatcher.dispatch() needs a tool/skill name to resolve an address via "
-                "AdCPTestClient — pass tool_name=... to env.call_via(Transport.E2E_A2A, ...) (or "
-                "declare env.A2A_SKILL), or call AdCPTestClient(env).call(tool, payload, "
-                "Transport.E2E_A2A) directly instead — the primary path this design promotes "
-                "(see tests/harness/client.py — rewriting per-env shaping is a non-goal)."
-            )
-
-        req = kwargs.pop("req", None)
-        payload = flatten_payload(req, **kwargs)
-
-        return _dispatch_core(env, Transport.E2E_A2A, tool_name, payload, credential)
+        return _dispatch_core(env, Transport.E2E_A2A, tool_name, kwargs, credential)
 
 
 DISPATCHERS: dict[

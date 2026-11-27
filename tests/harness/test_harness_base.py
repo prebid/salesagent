@@ -337,16 +337,18 @@ class TestBaseClassContract:
             ok: bool = True
 
         class _TestEnv(BaseTestEnv):
-            # Test double: overrides the DELIVER point, which is what the
-            # dispatchers call.
-            def deliver_mcp(self, **kwargs):
-                return DeliverResult(payload=_Resp(), wire_response=None)
+            MCP_TOOL = "get_products"
+            RESPONSE_MODEL = _Resp
+
+            def _run_mcp_client(self, tool, model, **kwargs):
+                return DeliverResult(payload={"ok": True}, wire_response={"ok": True})
 
         env = _TestEnv()
         result = env.call_via(Transport.MCP)
         assert result.is_success
         assert result.payload.ok is True
         assert result.envelope.get("transport") == "mcp"
+        assert result.require_wire() == {"ok": True}
 
     def test_nested_integration_env_raises(self):
         """Nesting two IntegrationEnvs must raise to prevent session corruption."""

@@ -1,29 +1,15 @@
 """Guard: the harness has ONE dispatch mechanism, and it lives on the base.
 
-The invariant: ``AdCPTestClient`` is the
-implementation ``call_via``/``call_mcp``/``call_a2a`` delegate to, **not** a
-peer beside them. Today the harness carries two live dispatch mechanisms — the
-generic ``AdCPTestClient`` (``tests/harness/client.py``) and the hand-written
-``call_mcp``/``call_a2a`` quartet re-implemented on every env class — and the
-old quartet is still the default authoring path, so each new env adds a 35th,
-36th... copy.
+The shared client core owns MCP/A2A dispatch. Environment hooks address the tool
+and select its local reader; the base delivery methods retain the result and wire.
 
-This guard pins the finished shape:
+This guard pins that shape:
 
-1. ``call_mcp`` / ``call_a2a`` are defined ONCE, on ``BaseTestEnv``
-   (``tests/harness/_base.py``), as ``deliver_*(...).payload``, and are NEVER
-   overridden by a subclass. A new env written on the old pattern fails CI.
-2. Transport overrides that genuinely need to stay are ``deliver_mcp`` /
-   ``deliver_a2a`` returning a ``DeliverResult`` — counted against a
-   shrink-only allowlist. Per the reviewed change-set's binding input R2, the
-   census MUST count ``def deliver_mcp``/``def deliver_a2a``: a
-   ``call_mcp``/``call_a2a`` census reads ZERO after the rename and would
-   grade nothing, passing vacuously.
-3. ``_last_wire_response`` — the per-env private wire-stash attribute the
-   dispatchers reach across object boundaries to read — does not exist. The
-   wire travels on the RETURN VALUE (``DeliverResult.wire_response``).
-   Deleting the attribute is what makes a second writer structurally
-   impossible (change-set B2 + binding input R3).
+1. ``call_mcp`` / ``call_a2a`` live once on ``BaseTestEnv`` and return a parsed
+   payload or raise the exact captured exception.
+2. ``deliver_mcp`` / ``deliver_a2a`` also live once on the base, returning
+   ``TransportResult``. The override census is empty and may not grow.
+3. ``_last_wire_response`` does not exist. Wire evidence travels on the result.
 
 MEMBERSHIP IS AST-DERIVED, NOT A DIRECTORY GLOB (change-set §5, finding 4).
 A ``tests/harness/*.py`` glob is evadable and the evasion path is ALREADY
@@ -55,10 +41,10 @@ _BASE_MODULE = "tests/harness/_base.py"
 _ENV_ROOTS = frozenset({"BaseTestEnv", "IntegrationEnv", "BareIntegrationEnv"})
 
 # The old quartet's transport entry points. After the single-dispatch change these exist ONLY on
-# BaseTestEnv, as ``return self.deliver_*(**kwargs).payload``.
+# BaseTestEnv, as adapters for the captured result.
 _LEGACY_DISPATCH_METHODS = frozenset({"call_mcp", "call_a2a"})
 
-# The new override point: the method the dispatchers call and envs override.
+# The delivery methods called by transport dispatchers.
 _DELIVER_METHODS = frozenset({"deliver_mcp", "deliver_a2a"})
 
 # The deleted per-env wire stash (change-set B2 / R3).
@@ -75,64 +61,7 @@ _EXEMPLAR_OUT_OF_HARNESS_ENV = "_RefusalDialectEnv"
 # implement atom from its B1 JUSTIFIED-OVERRIDE enumeration (each entry
 # carrying a one-line reason at the source site); it only shrinks afterwards.
 # An env that can delegate to the base MUST NOT appear here.
-_KNOWN_DELIVER_OVERRIDES: set[tuple[str, str, str]] = {
-    # Seeded ONCE from the B1 JUSTIFIED-OVERRIDE enumeration. Every entry
-    # is an env that CANNOT delegate to the base, with the reason. Shrink-only:
-    # an env that can delegate must not be added here.
-    #
-    # Selects BOTH tool and parser from request CONTENT, so it can declare no
-    # single MCP_TOOL/A2A_SKILL.
-    # Selects the transport target from request CONTENT (_is_list_request), so
-    # it can declare no single MCP_TOOL/A2A_SKILL.
-    ("tests/harness/media_buy_create_list.py", "MediaBuyCreateListEnv", "deliver_mcp"),
-    ("tests/harness/media_buy_create_list.py", "MediaBuyCreateListEnv", "deliver_a2a"),
-    ("tests/harness/media_buy_dual.py", "MediaBuyDualEnv", "deliver_mcp"),
-    ("tests/harness/media_buy_dual.py", "MediaBuyDualEnv", "deliver_a2a"),
-    # Reshapes kwargs (_flatten_request) and parses the success|error union via
-    # parse_rest_response, which needs the media_buy_id discriminator.
-    ("tests/harness/media_buy_create.py", "MediaBuyCreateEnv", "deliver_mcp"),
-    ("tests/harness/media_buy_create.py", "MediaBuyCreateEnv", "deliver_a2a"),
-    # Supplies a required kwargs default (creatives=[]) before dispatch.
-    ("tests/harness/creative_sync.py", "CreativeSyncEnv", "deliver_mcp"),
-    # Commits factory data, defaults creatives=[], and JSON-normalizes kwargs
-    # through build_rest_body before dispatch, so it cannot delegate to the base.
-    # (The previous reason — "deliberate raw-wrapper bypass ... LANE C owns
-    # replacing the bypass" — is stale: it WAS replaced in dc280c5ee, and
-    # deliver_a2a now calls the real _run_a2a_handler. The entry stays because of
-    # the setup above, not because of a bypass that no longer exists; an allowlist
-    # whose recorded reasons drift false cannot be audited.)
-    ("tests/harness/creative_sync.py", "CreativeSyncEnv", "deliver_a2a"),
-    # `MediaBuyListEnv`'s deliver_mcp and deliver_a2a were removed here. Their two
-    # recorded reasons were a stale one ("uses the legacy _run_mcp_wrapper", untrue since
-    # GH #1900) and FIXME(#1928) ("the wire omits the pinned-required confirmed_at +
-    # revision on every media_buys item"). The second was measured on the wire rather than
-    # taken on the model: MCP and A2A, seller-confirmed and never-confirmed, all four carry
-    # both fields and parse clean against the pinned GetMediaBuysResponse. The env
-    # delegates and both entries are gone — the allowlist shrank by two, and this time the
-    # claim behind it was checked.
-    # FIXME(#2012): by_package entries omit the pinned-required
-    # pricing_model/rate/currency, so the core's pinned parse fails on every
-    # delivery response. Both entries are removed when #2012 lands.
-    ("tests/harness/delivery_poll.py", "DeliveryPollEnv", "deliver_mcp"),
-    ("tests/harness/delivery_poll.py", "DeliveryPollEnv", "deliver_a2a"),
-    # Their real wire does not satisfy the tool's PINNED response model, which
-    # the client core parses into — so joining the core would turn a live
-    # conformance gap into a dispatch error (list_creative_formats assets).
-    ("tests/harness/creative_formats.py", "CreativeFormatsEnv", "deliver_mcp"),
-    ("tests/harness/creative_formats.py", "CreativeFormatsEnv", "deliver_a2a"),
-    # `TaskManagementEnv.deliver_mcp` was removed here. Its FIXME(#2201) reason -- the
-    # list_tasks wire omitting the pinned-required query_summary and pagination -- stopped
-    # being true when #2201 landed and the response started extending the pinned
-    # ListTasksResponse. Confirmed by the self-retiring test that guarded it going RED
-    # ('DID NOT RAISE') rather than by reading the change: the allowlist shrank because an
-    # instrument said so out loud.
-    # Test doubles, not real envs: they exist to prove the dispatch contract.
-    ("tests/harness/test_harness_base.py", "_TestEnv", "deliver_mcp"),
-    # `_RealA2AWireCreativeSyncEnv` in
-    # tests/integration/test_request_validation_suggestion_parity.py was removed
-    # here: that module was retired (its coverage subsumed elsewhere), so the
-    # override it justified no longer exists. The allowlist shrank.
-}
+_KNOWN_DELIVER_OVERRIDES: set[tuple[str, str, str]] = set()
 
 
 # --------------------------------------------------------------------------
@@ -268,20 +197,13 @@ def _scan_wire_stash_references() -> set[tuple[str, int]]:
 def test_no_env_subclass_overrides_the_legacy_dispatch_methods():
     """``call_mcp``/``call_a2a`` live ONLY on ``BaseTestEnv``.
 
-    Binding input R1 abolished the "non-convertible override that stays as
-    ``call_mcp``" category: because the dispatchers now read the wire off the
-    RETURN VALUE, every MCP/A2A override must BOTH rename to ``deliver_*`` AND
-    return a ``DeliverResult``. So this allowlist is empty by construction —
-    a justified override is expressed as a ``deliver_*`` entry in
-    ``_KNOWN_DELIVER_OVERRIDES``, never as a surviving ``call_*``.
+    Environment differences belong in the core's addressing and reader hooks.
     """
     violations = _scan_method_defs(_LEGACY_DISPATCH_METHODS)
     assert violations == set(), (
         f"{len(violations)} env subclass(es) still define their own call_mcp/call_a2a instead of "
-        f"delegating to BaseTestEnv (which defines each once as `return self.deliver_*(**kwargs).payload`): "
-        f"{sorted(violations)}. Rename the override to deliver_mcp/deliver_a2a returning a DeliverResult "
-        f"and allowlist it in _KNOWN_DELIVER_OVERRIDES, or delete it and declare MCP_TOOL/A2A_SKILL so the "
-        f"base delegates for you."
+        f"delegating to BaseTestEnv: {sorted(violations)}. Declare MCP_TOOL/A2A_SKILL and use "
+        f"address_tool/response_parser for request routing and local response models."
     )
 
 
@@ -322,7 +244,7 @@ def test_base_env_owns_the_one_dispatch_pair():
     defined = {stmt.name for stmt in base.body if isinstance(stmt, ast.FunctionDef | ast.AsyncFunctionDef)}
     assert _DELIVER_METHODS <= defined, (
         f"BaseTestEnv must define {sorted(_DELIVER_METHODS)} — the ONE dispatch pair the transport "
-        f"dispatchers call and envs override. Missing: {sorted(_DELIVER_METHODS - defined)} "
+        f"dispatchers call. Missing: {sorted(_DELIVER_METHODS - defined)} "
         f"See this module's docstring for why the pair is singular."
     )
     assert _LEGACY_DISPATCH_METHODS <= defined, (
@@ -330,23 +252,21 @@ def test_base_env_owns_the_one_dispatch_pair():
         f"34 out-of-harness call sites depend on. Missing: {sorted(_LEGACY_DISPATCH_METHODS - defined)}."
     )
 
-    # ...and each legacy entry point is exactly the one-line delegation, so a
-    # second dispatch implementation cannot grow back inside the base itself.
-    for legacy, deliver in (("call_mcp", "deliver_mcp"), ("call_a2a", "deliver_a2a")):
+    # Both adapters dispatch once and raise the original captured exception.
+    for suffix in ("mcp", "a2a"):
+        legacy = f"call_{suffix}"
+        source = f"""result = self.deliver_{suffix}(**kwargs)
+if result.error is not None:
+    raise result.error
+return result.payload"""
         func = next(s for s in base.body if isinstance(s, ast.FunctionDef | ast.AsyncFunctionDef) and s.name == legacy)
         body = [s for s in func.body if not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant))]
-        assert len(body) == 1 and isinstance(body[0], ast.Return), (
-            f"BaseTestEnv.{legacy} must be a single `return self.{deliver}(**kwargs).payload` statement, "
-            f"got {len(body)} statement(s) — a second dispatch implementation must not grow back inside the base."
+        actual = ast.dump(ast.Module(body=body, type_ignores=[]))
+        expected = ast.dump(ast.parse(source))
+        assert actual == expected, (
+            f"BaseTestEnv.{legacy} must deliver once and adapt only its captured result; "
+            f"expected {source!r}, got {actual[:300]}"
         )
-        returned = body[0].value
-        assert (
-            isinstance(returned, ast.Attribute)
-            and returned.attr == "payload"
-            and isinstance(returned.value, ast.Call)
-            and isinstance(returned.value.func, ast.Attribute)
-            and returned.value.func.attr == deliver
-        ), f"BaseTestEnv.{legacy} must return `self.{deliver}(...).payload`, got {ast.dump(returned)[:160]}"
 
 
 def test_no_per_env_wire_stash_attribute():

@@ -419,7 +419,7 @@ def _c4_payload(env: Any) -> dict[str, Any]:
 
 def _dispatch_call_via(env: Any, transport: Transport, payload: dict[str, Any]) -> TransportResult:
     """``env.call_via`` — the dispatcher path (``tests/harness/dispatchers.py``)."""
-    return env.call_via(transport, identity=None, **payload)
+    return env.call_via(transport, credential={}, **payload)
 
 
 def _dispatch_client(env: Any, transport: Transport, payload: dict[str, Any]) -> TransportResult:

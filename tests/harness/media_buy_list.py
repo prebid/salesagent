@@ -24,7 +24,6 @@ from src.core.schemas._base import GetMediaBuysRequest, GetMediaBuysResponse
 from tests.harness._base import IntegrationEnv, rest_body_from_kwargs
 from tests.harness._realize import realize_e2e
 from tests.harness.database_faults import DatabaseFaultMixin
-from tests.harness.transport import DeliverResult
 from tests.helpers.scheduler_isolation import run_status_tick
 
 
@@ -41,12 +40,9 @@ def _run_status_sweep(_env: object) -> list[logging.LogRecord]:
 class MediaBuyListDispatchMixin:
     """get_media_buys dispatch across impl/A2A/MCP/REST.
 
-    Deliberately named ``_call_list_*`` / ``_deliver_list_*`` rather than
-    ``call_*`` / ``deliver_*``: the composite env inherits create dispatch from
-    ``MediaBuyCreateEnv`` under those public names and routes to these
-    explicitly, so neither tool's dispatch can shadow the other's by MRO
-    accident. The REST shaping hooks below obey the same rule for the same
-    reason — they are ``_build_list_rest_body`` / ``_parse_list_rest_response``
+    The implementation and REST helpers use list-specific names so neither
+    tool's dispatch can shadow the other's by MRO accident. The REST shaping
+    hooks are ``_build_list_rest_body`` / ``_parse_list_rest_response``
     here, and only the env that dispatches get_media_buys as its PRIMARY verb
     binds them to the public ``build_rest_body`` / ``parse_rest_response``.
     A public builder on this mixin would shadow the CREATE builder for
@@ -55,11 +51,8 @@ class MediaBuyListDispatchMixin:
     break the create REST branch that tests/integration/test_harness_rest_refusal.py
     pins.
 
-    Both dispatch spellings exist for one reason each, and neither is a second
-    implementation: ``_deliver_list_*`` returns the ``DeliverResult`` (payload
-    AND wire) that a ``deliver_*`` override must return, and ``_call_list_*``
-    is that same result's ``.payload``, for a caller that routes at the
-    ``call_*`` frame.
+    MCP and A2A use the shared core; the composite env's owner hooks select the
+    list tool and this mixin's local response reader.
     """
 
     def _call_list_impl(self, **kwargs: Any) -> GetMediaBuysResponse:
@@ -82,57 +75,6 @@ class MediaBuyListDispatchMixin:
 
         return _get_media_buys_impl(req=req, identity=identity)
 
-    def _deliver_list_a2a(self, **kwargs: Any) -> DeliverResult:
-        """Dispatch get_media_buys through the REAL A2A pipeline (on_message_send).
-
-        The production A2A path is ``_handle_get_media_buys_skill`` —
-        ``get_media_buys_raw`` has ZERO production callers, so dispatching to it
-        here gave false confidence (#1417): a boundary fix on the raw
-        wrapper made 'A2A' tests green while the real skill handler still
-        leaked bare ValidationErrors.
-        """
-        return self._run_a2a_handler("get_media_buys", GetMediaBuysResponse, **kwargs)
-
-    def _deliver_list_mcp(self, **kwargs: Any) -> DeliverResult:
-        """Dispatch get_media_buys through the REAL FastMCP ``Client`` pipeline.
-
-        Was ``_run_mcp_wrapper``, which is deprecated precisely because it hand-builds
-        a mock Context and calls the wrapper directly: it skips the middleware,
-        TypeAdapter validation and the token→DB→identity auth chain, and — the reason
-        it had to change here — it stashes NO ``wire_response``. Every MCP assertion
-        on this tool therefore graded a re-serialized typed payload rather than the
-        bytes a buyer receives, which is exactly the blind spot GH #1900 slipped
-        through. ``_run_mcp_client`` stashes ``structured_content``, the real MCP wire.
-
-        The wrapper path is wrong for the error path too, and for two further
-        reasons. It calls the module function directly, while a failure becomes an
-        ``AdCPToolError`` only in ``RegistryTool.run`` (``src/core/main.py``): through
-        it none is ever raised, so
-        nothing is stashed and the dispatcher captures ``None`` for BOTH the error
-        envelope and the success response — while this env goes on declaring
-        ``has_wire=True``. And a raised ``AdCPSalesAgentError`` propagated raw out of
-        ``asyncio.run(wrapper_fn(...))`` was never serialized into a ``ToolError``, so
-        ``McpDispatcher`` captured ``wire_error_envelope=None`` and every MCP error
-        assertion in UC-019 graded a reconstructed exception that could not have
-        failed if production stopped emitting an envelope at all
-        (salesagent-3dawm.18/.19).
-
-        Through the client, the rejection moves from ``_resolve_status_filter``
-        inside ``_impl`` to FastMCP's TypeAdapter at the schema boundary, which
-        changes the message and field shape. That is what a real MCP buyer
-        receives — ``RequestCompatMiddleware`` translates the TypeAdapter rejection
-        into the two-layer error — so grading it is the point.
-        """
-        return self._run_mcp_client("get_media_buys", GetMediaBuysResponse, **kwargs)
-
-    def _call_list_a2a(self, **kwargs: Any) -> Any:
-        """The parsed A2A payload for get_media_buys."""
-        return self._deliver_list_a2a(**kwargs).payload
-
-    def _call_list_mcp(self, **kwargs: Any) -> Any:
-        """The parsed MCP payload for get_media_buys."""
-        return self._deliver_list_mcp(**kwargs).payload
-
     #: The route get_media_buys answers on — ``@router.post("/media-buys/query")`` in
     #: src/routes/api_v1.py. It lives on the MIXIN, beside the other three dispatches,
     #: because a composite env dispatches this verb at a DIFFERENT endpoint from its
@@ -148,7 +90,7 @@ class MediaBuyListDispatchMixin:
         every transport — no dispatch of create, update or delivery ever carries a
         ``GetMediaBuysRequest``. Public and owned here so the composite envs route
         REST on exactly the same predicate their ``call_impl``/``deliver_a2a``/
-        ``deliver_mcp`` already route on; a second private copy is how one transport
+        ``address_tool`` already routes on; a second private copy is how one transport
         drifts into dispatching a different tool than the other three.
         """
         return isinstance(kwargs.get("req"), GetMediaBuysRequest)
@@ -204,7 +146,7 @@ class MediaBuyListEnv(DatabaseFaultMixin, MediaBuyListDispatchMixin, Integration
     # `confirmed_at: null`, which the pin declares as type ["string","null"]. The reason
     # was stale, so the overrides and their two _KNOWN_DELIVER_OVERRIDES rows are gone.
     #
-    # RESPONSE_MODEL stays: the core dispatches, and _deliver_via_client re-parses with
+    # RESPONSE_MODEL stays: the core dispatches and parses once with
     # this env's own parser, so callers still receive the LOCAL GetMediaBuysResponse.
     MCP_TOOL = "get_media_buys"
     A2A_SKILL = "get_media_buys"

@@ -38,7 +38,6 @@ from unittest.mock import MagicMock
 from src.core.schemas import ListCreativeFormatsResponse
 from tests.harness._base import IntegrationEnv
 from tests.harness.peer_agent import PeerCreativeAgentMixin
-from tests.harness.transport import DeliverResult
 from tests.helpers.peer_creative_agent import new_peer_key
 
 
@@ -52,22 +51,9 @@ class CreativeFormatsEnv(PeerCreativeAgentMixin, IntegrationEnv):
     # Dispatch declaration: the base owns call_mcp/call_a2a.
     RESPONSE_MODEL = ListCreativeFormatsResponse
 
-    # JUSTIFIED OVERRIDE — does NOT declare MCP_TOOL/A2A_SKILL, so it does not
-    # take the base's client-core delegation. AdCPTestClient's UNWRAP parses the
-    # wire into spec_response_model("list_creative_formats") — the PINNED
-    # ListCreativeFormatsResponse — and our real format-registry wire does not
-    # satisfy it (measured: 2520 errors, e.g. formats.N.assets.M.max_count /
-    # .assets required by the pinned Assets variants but absent from ours).
-    # That is a list_creative_formats-vs-pinned-schema conformance gap, NOT a
-    # dispatch defect, so it is recorded and graded elsewhere rather than being
-    # hidden by making the core's parse swallow ValidationError.
-    def deliver_mcp(self, **kwargs: Any) -> DeliverResult:
-        """Dispatch list_creative_formats via the real FastMCP Client pipeline."""
-        return self._run_mcp_client("list_creative_formats", ListCreativeFormatsResponse, **kwargs)
+    MCP_TOOL = "list_creative_formats"
 
-    def deliver_a2a(self, **kwargs: Any) -> DeliverResult:
-        """Dispatch list_creative_formats via the real A2A handler pipeline."""
-        return self._run_a2a_handler("list_creative_formats", ListCreativeFormatsResponse, **kwargs)
+    A2A_SKILL = "list_creative_formats"
 
     EXTERNAL_PATCHES = {
         "registry": "src.core.creative_agent_registry.get_creative_agent_registry",

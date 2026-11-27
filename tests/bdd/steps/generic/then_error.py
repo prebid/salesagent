@@ -25,6 +25,11 @@ from tests.bdd.steps._outcome_helpers import (
 # ── Helpers ─────────────────────────────────────────────────────────
 
 
+@then(parsers.parse('the error envelope status should be "{status}"'))
+def then_error_envelope_status(ctx: dict, status: str) -> None:
+    assert ctx["result"].error_envelope()["status"] == status
+
+
 def _wire_code(ctx: dict) -> str | None:
     """Return the authoritative wire error code when a wire envelope was captured.
 
