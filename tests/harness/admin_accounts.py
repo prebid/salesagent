@@ -948,6 +948,7 @@ class AdminAccountEnv:
         client = stub_gam_client(**network_answers)
         self._in_process_cleanups.enter_context(patch(GAM_CLIENT_PATCH["gam_client"], return_value=client))
 
+    # FIXME(#2755): realize the OAuth client on e2e from GAM_SUITE_OAUTH_* settings.
     @realize_e2e(_NO_GAM_OAUTH_CLIENT_ON_E2E)
     def serve_gam_oauth_client(self) -> None:
         """The deployment has a GAM OAuth client, and Google accepts every refresh token for it, until ``__exit__``.
