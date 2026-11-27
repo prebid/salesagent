@@ -114,17 +114,31 @@ def iter_module_trees(scan_dirs: list[Path]) -> Iterator[tuple[ast.Module, str]]
             yield tree, rel(py_file)
 
 
+#: The function :func:`enclosing_function` names for code that no ``def`` encloses.
+MODULE_LEVEL = "<module>"
+
+
+def enclosing_function(node: ast.AST, outer: str) -> str:
+    """The function that holds *node*, when *outer* holds the code around it.
+
+    A ``def`` holds itself. Anything else (a lambda, a comprehension, a class body, a
+    statement) is held by *outer*, which is :data:`MODULE_LEVEL` outside every ``def``. The
+    one rule behind :func:`walk_with_enclosing_function` (per node) and :func:`iter_scopes`
+    (per scope), so every guard reports a row under the same function.
+    """
+    return node.name if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) else outer
+
+
 def walk_with_enclosing_function(tree: ast.AST) -> Iterator[tuple[ast.AST, str]]:
-    """Yield ``(node, enclosing_function_name)`` for every node in ``tree``."""
+    """Yield ``(node, enclosing_function_name)`` for every node in ``tree``; see :func:`enclosing_function`."""
 
-    def visit(node: ast.AST, func_name: str) -> Iterator[tuple[ast.AST, str]]:
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
-            func_name = node.name
-        yield node, func_name
+    def visit(node: ast.AST, outer: str) -> Iterator[tuple[ast.AST, str]]:
+        function = enclosing_function(node, outer)
+        yield node, function
         for child in ast.iter_child_nodes(node):
-            yield from visit(child, func_name)
+            yield from visit(child, function)
 
-    yield from visit(tree, "<module>")
+    yield from visit(tree, MODULE_LEVEL)
 
 
 def collect_error_aliases(tree: ast.AST) -> set[str]:
@@ -715,20 +729,19 @@ def iter_scopes(tree: ast.Module, bindings: QueryBindings) -> Iterator[tuple[ast
     it, so they see what the class's enclosing scope sees. With :func:`scope_nodes`, every
     node is visited under exactly one scope.
 
-    The function is a ``def``'s own name, else the innermost ``def`` around the scope, else
-    ``"<module>"``: a lambda, comprehension or class body is held by the function around it.
-    It is the name :func:`walk_with_enclosing_function` gives each node the scope owns, and
-    the one a guard keys a row by.
+    The function is :func:`enclosing_function`'s: a ``def``'s own name, else the innermost
+    ``def`` around the scope, else ``"<module>"``. A lambda, comprehension or class body is
+    held by the function around it. It is the name a guard keys a row by.
     """
     # (scope, what it sees, what the scopes nested in it inherit, the function that holds it)
-    pending: list[tuple[ast.AST, QueryBindings, QueryBindings, str]] = [(tree, bindings, bindings, "<module>")]
+    pending: list[tuple[ast.AST, QueryBindings, QueryBindings, str]] = [(tree, bindings, bindings, MODULE_LEVEL)]
     while pending:
         scope, view, inherited, function = pending.pop()
         yield scope, view, function
         nested = [node for node in scope_nodes(scope) if isinstance(node, SCOPE_NODES)]
         for node in reversed(nested):
             node_view = inherited.in_scope(node)
-            holder = node.name if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) else function
+            holder = enclosing_function(node, function)
             pending.append((node, node_view, inherited if isinstance(node, ast.ClassDef) else node_view, holder))
 
 
@@ -1137,11 +1150,12 @@ def find_raw_select_violations(
     """Find raw ``select(Model)`` / ``select(Model.column)`` calls in src/ for models in *model_names*.
 
     Returns ``(rel_path, function_name, model_name, lineno)`` tuples — at most
-    one per function (one violation per function is enough for a guard); a call in a
-    nested function counts for every function enclosing it.
+    one per function (one violation per function is enough for a guard). The function is
+    the one that holds the call (:func:`iter_scopes`): a call in a nested ``def`` counts for
+    that ``def`` alone, and one in a lambda or comprehension for the function around it.
     Files where ``skip(rel_path)`` is True are excluded from the scan.
 
-    The entity is :func:`orm_references`': ``select`` must be SQLAlchemy's and the model
+    The entity is :func:`select_entity`'s: ``select`` must be SQLAlchemy's and the model
     imported from ``models.py``, both as the call's own scope sees them (an alias hid four
     raw selects until #2128; a Pydantic namesake, or a parameter named ``select``, is not
     graded -- there is no fallback to the spelling). A column projection addresses its model.
@@ -1150,14 +1164,14 @@ def find_raw_select_violations(
     for tree, rel_path in iter_module_trees([repo_root() / "src"]):
         if skip(rel_path):
             continue
-        references = orm_references(rel_path, tree)
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        reported: set[str] = set()
+        for scope, view, function in iter_scopes(tree, query_bindings(rel_path, tree)):
+            if function in reported:
                 continue
-            for call in iter_call_expressions(node):
-                model_name = references.get(id(call))
-                if model_name and model_name in model_names:
-                    violations.append((rel_path, node.name, model_name, call.lineno))
+            for node in scope_nodes(scope):
+                if isinstance(node, ast.Call) and (model_name := select_entity(node, view)) in model_names:
+                    violations.append((rel_path, function, model_name, node.lineno))
+                    reported.add(function)
                     break  # One violation per function is enough
     return violations
 

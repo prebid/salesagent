@@ -57,7 +57,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/adapters/google_ad_manager.py", "get_packages_snapshot"),
     ("src/adapters/xandr.py", "_create_human_task"),
     # ── Admin app ──
-    ("src/admin/app.py", "create_app"),
+    # create_app removed — its one select is in the nested inject_context, which holds it
     ("src/admin/app.py", "inject_context"),
     # ── Admin blueprints ──
     ("src/admin/blueprints/activity_stream.py", "get_recent_activities"),

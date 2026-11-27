@@ -13,12 +13,14 @@ AND every module under ``src/core/tools/``:
 1. **Query detector** — any query selecting a Creative-family model
    (``Creative``, ``CreativeReview``, ``CreativeAssignment``, under ANY import
    alias such as ``DBCreative``/``CreativeModel``/``DBAssignment``, whole or as a
-   column projection such as ``select(Creative.creative_id)``) that
+   column projection such as ``select(Creative.creative_id)``, through ``select``
+   or a legacy ``<session>.query(...)``) that
    compares ``creative_id`` (via ``==``, ``filter_by`` kwargs, or ``.in_()``)
    without also comparing ``principal_id`` **in the same query chain**
    (per-QUERY granularity: a scoped query cannot credit an unscoped sibling
    in the same function). The model and ``select`` resolve by import, as the
-   query's own scope sees them (``orm_references`` in ``_architecture_helpers``);
+   query's own scope sees them (``statement_root`` / ``statement_entity`` in
+   ``_architecture_helpers``, the answers the filter_by guard reads);
    the chain is walked by the shared ``select_chain``, and only its filter
    stages (``where`` / ``filter`` / ``filter_by``) count as comparisons, so a
    join's ON clause never scopes a query.
@@ -54,6 +56,8 @@ from tests.unit._architecture_helpers import (
     scope_bindings,
     scope_nodes,
     select_chain,
+    statement_entity,
+    statement_root,
     walk_with_enclosing_function,
 )
 
@@ -93,10 +97,8 @@ def _model_attr(expr: ast.expr, references: dict[int, str]) -> str | None:
     return None
 
 
-def _creative_query_chains(
-    tree: ast.Module, relpath: str, references: dict[int, str]
-) -> list[tuple[ast.Call, list[ast.Call], str]]:
-    """Every query on a Creative-family model, once: ``(select call, its filter stages, function)``.
+def _creative_query_chains(tree: ast.Module, relpath: str) -> list[tuple[ast.Call, list[ast.Call], str]]:
+    """Every query on a Creative-family model, once: ``(statement root, its filter stages, function)``.
 
     Per scope (``iter_scopes``, which also names the function that holds the scope: the one
     a row is reported under). Accumulator-style queries come first: every name the scope
@@ -104,30 +106,27 @@ def _creative_query_chains(
     ``fold_name``, so ``name = select(...)...`` and every later ``name = name.where(...)``
     are graded as ONE query on their FULL filter set (an unscoped accumulator is flagged;
     principal_id pinned in a later statement is credited). For a parameter or a loop
-    target nothing is folded, and its inline ``select(...)`` chain is graded on its own.
+    target nothing is folded, and its inline chain is graded on its own.
     Then the inline chains, longest first, so a sub-chain of a graded chain is skipped.
-    Chains are walked by ``select_chain``; only the filter stages are kept.
-    *references* is ``orm_references(relpath, tree)``.
+    Chains are walked by ``select_chain``; only the filter stages are kept. A statement
+    starts where ``statement_root`` says (``select(...)`` or ``<session>.query(...)``) and
+    addresses the class ``statement_entity`` says, the answers every query guard reads.
     """
     chains: list[tuple[ast.Call, list[ast.Call], str]] = []
     for scope, imports, function in iter_scopes(tree, query_bindings(relpath, tree)):
-        nodes = list(scope_nodes(scope))
         assigned = scope_bindings(scope)
         # Opaque or not, a fold is graded on the calls it folded: a rebind it cannot read
         # (``s = wrap(s)``) receives the statement with those filters already applied.
         folded = [(fold.root, fold.calls) for name in assigned if (fold := fold_name(name, assigned, imports))]
-        inline = [
-            (base, calls)
-            for base, calls in (select_chain(n, SELECT_CHAIN_METHODS) for n in nodes if isinstance(n, ast.Call))
-            if isinstance(base, ast.Call) and id(base) in references
-        ]
+        chained = (select_chain(n, SELECT_CHAIN_METHODS) for n in scope_nodes(scope) if isinstance(n, ast.Call))
+        inline = [(root, calls) for base, calls in chained if (root := statement_root(base, imports)) is not None]
         inline.sort(key=lambda chain: -len(chain[1]))
         seen: set[int] = set()
-        for select_call, calls in [*folded, *inline]:
-            if id(select_call) in seen or references.get(id(select_call)) not in _CREATIVE_MODELS:
+        for root, calls in [*folded, *inline]:
+            if id(root) in seen or statement_entity(root, imports) not in _CREATIVE_MODELS:
                 continue
-            seen.add(id(select_call))
-            chains.append((select_call, [c for c in calls if call_callee_name(c) in SELECT_FILTER_METHODS], function))
+            seen.add(id(root))
+            chains.append((root, [c for c in calls if call_callee_name(c) in SELECT_FILTER_METHODS], function))
     return chains
 
 
@@ -172,10 +171,10 @@ def find_unscoped_creative_queries(tree: ast.Module, relpath: str) -> list[tuple
     """
     references = orm_references(relpath, tree)
     violations: list[tuple[int, str]] = []
-    for select_call, filters, function in _creative_query_chains(tree, relpath, references):
+    for root, filters, function in _creative_query_chains(tree, relpath):
         compared = _attrs_compared_in_chain(filters, references)
         if "creative_id" in compared and "principal_id" not in compared:
-            violations.append((select_call.lineno, function))
+            violations.append((root.lineno, function))
     return violations
 
 
@@ -424,6 +423,28 @@ class TestDetectorMetaTests:
         )
         assert _flagged(source) == []
         assert _flagged(source.replace("    s = s.where(Creative.principal_id == p)\n", "")) == ["f"]
+
+    @pytest.mark.arch_guard
+    def test_detector_reads_a_legacy_query_root(self):
+        """``<session>.query(Creative)`` addresses Creative as ``select(Creative)`` does, inline or
+        folded: the root and its class are ``statement_root`` and ``statement_entity``, the answers
+        the filter_by guard reads. The detector used to read the class off ``select(...)`` calls only."""
+        source = (
+            "from src.core.database.models import Creative\n"
+            "def inline(s, cid):\n"
+            "    return s.query(Creative).filter_by(creative_id=cid).first()\n"
+            "def folded(s, cid):\n"
+            "    q = s.query(Creative)\n"
+            "    q = q.filter_by(creative_id=cid)\n"
+            "    return q.first()\n"
+            "def scoped(s, cid, pid):\n"
+            "    return s.query(Creative).filter_by(creative_id=cid, principal_id=pid).first()\n"
+            "def scoped_later(s, cid, pid):\n"
+            "    q = s.query(Creative).filter_by(creative_id=cid)\n"
+            "    q = q.filter(Creative.principal_id == pid)\n"
+            "    return q.first()\n"
+        )
+        assert _flagged(source) == ["inline", "folded"]
 
     @pytest.mark.arch_guard
     def test_detector_names_the_function_that_holds_a_nested_scope(self):

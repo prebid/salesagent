@@ -32,7 +32,6 @@ from tests.unit._architecture_helpers import (
     statement_entity,
     statement_root,
     uv_version_pattern_map,
-    walk_with_enclosing_function,
 )
 
 _ITER_CALL_SOURCE = """
@@ -259,9 +258,7 @@ async def f(a=lambda: 0):
 def test_iter_scopes_names_the_function_that_holds_each_scope() -> None:
     """A ``def`` names itself; any other scope, the innermost ``def`` around it, else ``<module>``.
 
-    For every positioned node a scope owns, that is the name ``walk_with_enclosing_function``
-    gives the node, except a ``def`` statement itself, which runs in the scope around it.
-    (Context and operator nodes are shared singletons, so ``id()`` cannot tell them apart.)
+    The rule is ``enclosing_function``, which ``walk_with_enclosing_function`` applies per node.
     """
     tree = ast.parse(_FUNCTIONS_SOURCE)
     scopes = list(iter_scopes(tree, query_bindings("src/x.py", tree)))
@@ -280,16 +277,6 @@ def test_iter_scopes_names_the_function_that_holds_each_scope() -> None:
         ("GeneratorExp", "g"),
         ("Lambda", "f"),  # the decorator
     ]
-    walked = {id(node): function for node, function in walk_with_enclosing_function(tree)}
-    mismatched = [
-        (type(node).__name__, node.lineno, function, walked[id(node)])
-        for scope, _, function in scopes
-        for node in scope_nodes(scope)
-        if hasattr(node, "lineno")
-        and not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
-        and walked[id(node)] != function
-    ]
-    assert mismatched == []
 
 
 @pytest.mark.arch_guard
