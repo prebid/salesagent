@@ -445,46 +445,84 @@ Feature: BR-UC-001 Discover Available Inventory
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-002-3 @invariant @BR-RULE-002 @analysis-2026-03-09 @schema-v3.1
-  Scenario Outline: BR-RULE-002 INV-3 holds - policy disabled or no usable seller AI, check skipped
-    Given the tenant has advertising_policy <policy>
+  Scenario: BR-RULE-002 INV-3 holds - policy disabled, check skipped
+    Given the tenant has advertising_policy disabled
     And the platform has an AI credential of its own
-    And the seller's AI is configured <where>
+    And the seller's AI is configured in ai_config
     And the LLM evaluates the brief as BLOCKED
     When the Buyer Agent sends a get_products request with any brief content
     Then the request should proceed to product discovery without policy check
     # INV-3 holds: policy disabled, check skipped
     # The BLOCKED verdict is what makes "without policy check" observable: had the check
     # run, the request would fail with POLICY_VIOLATION.
-    # With policy enabled, a seller whose own AI configuration cannot run the check (no
-    # API key, or one the model factory refuses to build) is skipped the same way, not
-    # refused with CONFIGURATION_ERROR: get_products is discovery, and the gap is the
-    # seller's configuration, not the buyer's request.
-    # The platform's own credential is declared because the check runs on the seller's
-    # credential only: a seller who configured nothing is skipped too, and a check run on
-    # the platform's key would block the brief here.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
-    Examples:
-      | policy   | where                                              |
-      | disabled | in ai_config                                       |
-      | enabled  | nowhere                                            |
-      | enabled  | in an ai_config row without an API key             |
-      | enabled  | in an ai_config the model factory refuses to build |
+  @T-UC-001-inv-002-3v @invariant @BR-RULE-002 @analysis-2026-11-23 @schema-v3.1
+  Scenario Outline: BR-RULE-002 INV-3 violated - policy enabled with no usable seller AI, CONFIGURATION_ERROR
+    Given the tenant has advertising_policy enabled
+    And the platform has an AI credential of its own
+    And the seller's AI is configured <where>
+    And the LLM evaluates the brief as BLOCKED
+    When the Buyer Agent sends a get_products request with any brief content
+    Then the wire error CONFIGURATION_ERROR details missing_tasks should be ["advertising_policy"]
+    # INV-3 violated: the seller turned checks on, and has no AI configuration of its own
+    # that can run them (no API key, or one the model factory refuses to build). Checks
+    # that cannot run are a policy the seller believes is enforced and is not, so the
+    # advertising_policy setup task is incomplete and get_products serves nothing until
+    # the operator fixes it. Owner decision recorded in #2694 and #2698; it replaces the
+    # earlier reading that skipped the check here.
+    # The platform's own credential is declared because the check runs on the seller's
+    # credential only: the platform's key does not make the seller's setup complete.
+    # The BLOCKED verdict is declared so that a check run on the platform's key would
+    # fail with POLICY_VIOLATION instead of passing this scenario.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json
+    #   line 137: CONFIGURATION_ERROR "The seller's deployment is misconfigured in a way that
+    #   prevents handling the request -- the buyer cannot fix it, retrying will not help, and
+    #   reporting to the seller's operator is the only remediation."
 
-  @T-UC-001-inv-002-4 @invariant @BR-RULE-002 @analysis-2026-03-09 @schema-v3.1
-  Scenario: BR-RULE-002 INV-4 holds - policy service unavailable, fail-open
+    Examples:
+      | where                                              |
+      | nowhere                                            |
+      | in an ai_config row without an API key             |
+      | in an ai_config the model factory refuses to build |
+
+  @T-UC-001-inv-002-4 @invariant @BR-RULE-002 @analysis-2026-11-23 @schema-v3.1
+  Scenario: BR-RULE-002 INV-4 holds - policy service unavailable, SERVICE_UNAVAILABLE
     Given the tenant has advertising_policy enabled
     And the seller's AI is configured in ai_config
     And the LLM policy service is unavailable
     When the Buyer Agent sends a get_products request with a brief
-    Then the request should proceed (fail-open behavior)
-    # INV-4 holds: policy service unavailable, fail-open
+    Then the operation should fail with error code "SERVICE_UNAVAILABLE"
+    # INV-4 holds: with checks on, a policy model that fails refuses the request instead
+    # of returning products nobody checked (owner decision, #2694 and #2698).
     # The check runs only on the seller's own AI configuration, so the seller has one: with
-    # none, the check is skipped (INV-3) and "unavailable" is never reached.
-    # Folds in Extension *a "policy service unavailable (fail-open)"
-    # (@T-UC-001-ext-a-failopen, #2696), whose "completed with a products array" this
-    # scenario's whole-catalog assertion subsumes.
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
+    # none, the request is refused CONFIGURATION_ERROR (INV-3) and "unavailable" is never
+    # reached.
+    # Folds in Extension *a "policy service unavailable" (@T-UC-001-ext-a-failopen, #2696),
+    # whose outcome this scenario now grades as SERVICE_UNAVAILABLE.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json
+    #   line 136: SERVICE_UNAVAILABLE "Seller service is temporarily unavailable. Retry with
+    #   exponential backoff. Recovery: transient."
+
+  @T-UC-001-ext-no-policy @extension @error @BR-RULE-002 @analysis-2026-11-23 @schema-v3.1
+  Scenario Outline: Extension - the tenant has saved no advertising policy, <buying_mode> mode
+    Given the tenant declares no advertising policy
+    When the Buyer Agent sends a get_products request in <buying_mode> buying mode
+    Then the wire error CONFIGURATION_ERROR details missing_tasks should be ["advertising_policy"]
+    # POST-F2: Buyer knows the seller cannot serve products until its operator saves a
+    # policy. POST-F3: the recovery is terminal, the buyer reports to the seller's operator.
+    # A tenant that has not saved an advertising policy serves no products, in every
+    # buying mode (owner decision, #2694 and #2698).
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json
+    #   line 137: CONFIGURATION_ERROR "The seller's deployment is misconfigured in a way that
+    #   prevents handling the request -- the buyer cannot fix it, retrying will not help, and
+    #   reporting to the seller's operator is the only remediation."
+
+    Examples:
+      | buying_mode |
+      | brief       |
+      | wholesale   |
+      | refine      |
 
   @T-UC-001-inv-002-5 @invariant @BR-RULE-002 @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-002 INV-5 holds - policy evaluation returns ALLOWED
@@ -511,7 +549,7 @@ Feature: BR-UC-001 Discover Available Inventory
     Then the operation should fail with error code "POLICY_VIOLATION"
     # The verdict is decided inside the scripted policy model, from the prompt production
     # sent it: a prompt that names every entry above is BLOCKED, and any other prompt fails
-    # the model call, which get_products fails open on (INV-4) and answers with products.
+    # the model call, which get_products answers with SERVICE_UNAVAILABLE (INV-4).
     # So POLICY_VIOLATION on the wire means each saved list reached the model.
     # advertising_policy is implementation-only (not in AdCP 3.2.7); POLICY_VIOLATION is in
     # the pinned enums/error-code.json.
@@ -901,7 +939,7 @@ Feature: BR-UC-001 Discover Available Inventory
       | partition                      | outcome                                  |
       | policy_disabled                | request proceeds (no check performed)    |
       | policy_allowed                 | request proceeds (LLM returned ALLOWED)  |
-      | policy_service_unavailable     | request proceeds (fail-open)             |
+      | policy_service_unavailable     | error: SERVICE_UNAVAILABLE               |
       | policy_requires_human_review   | plan escalated for human review (regardless of enforcement level) |
 
     Examples: Invalid partitions
@@ -1255,7 +1293,7 @@ Feature: BR-UC-001 Discover Available Inventory
       | policy disabled                              | valid     |
       | evaluation passes                            | valid     |
       | enforcement 'must' violated                  | invalid   |
-      | LLM service unavailable (fail-open)          | valid     |
+      | LLM service unavailable                      | invalid   |
       | policy requires_human_review: true           | valid     |
 
   @T-UC-001-boundary-principal @boundary @allowed_principal_ids @analysis-2026-03-09 @schema-v3.1 @implementation-only

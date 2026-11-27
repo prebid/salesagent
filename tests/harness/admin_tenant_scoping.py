@@ -236,7 +236,8 @@ class AdminTenantScopingEnv(AdminAccountEnv):
     def seed_target_tenant(self) -> TargetTenant:
         """A tenant with one catalogue product, one active media buy and an active member who is not the caller."""
         with bound_factory_session():
-            tenant = TenantFactory(tenant_id=self._new_tenant_id("scope"))
+            # Saved no policy: the policy scenarios start from NULL, and the page says so.
+            tenant = TenantFactory(tenant_id=self._new_tenant_id("scope"), advertising_policy=None)
             product = ProductFactory(tenant=tenant, product_id=mint_id("prod"))
             buy = MediaBuyFactory(
                 tenant=tenant,

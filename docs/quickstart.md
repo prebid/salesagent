@@ -81,6 +81,7 @@ With `CREATE_DEMO_TENANT=true`, the system creates:
 - Sample currencies (USD, EUR, GBP)
 - A test principal/advertiser for API access
 - Sample products
+- A saved advertising policy that accepts briefs without checking them (a tenant with no saved policy serves no products)
 
 This demo data lets you explore features without configuring Google Ad Manager or another ad server.
 

@@ -30,7 +30,7 @@ def tenant_without_a_policy(server_seeding, server_tenant):
     from tests.factories import AdapterConfigFactory, UserFactory
 
     with server_seeding():
-        tenant = server_tenant("ui_policy")
+        tenant = server_tenant("ui_policy", advertising_policy=None)
         AdapterConfigFactory(tenant=tenant, adapter_type="mock")
         UserFactory(tenant=tenant, email=ADMIN_EMAIL, role="admin")
         return tenant.tenant_id

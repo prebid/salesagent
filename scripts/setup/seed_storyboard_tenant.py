@@ -231,6 +231,7 @@ def seed_storyboard_tenant() -> str:
     from adcp.types import BrandReference
     from sqlalchemy import select
 
+    from scripts.setup.seed_advertising_policy import unchecked_advertising_policy
     from scripts.setup.seed_products import canonical_declaration, seed_product, seed_verified_website
     from src.core.credentials import hash_token
     from src.core.database.database_session import get_db_session
@@ -278,6 +279,9 @@ def seed_storyboard_tenant() -> str:
                 session.flush()
                 print(f"  ✓ Re-asserted virtual_host: {STORYBOARD_VIRTUAL_HOST}")
             existing.account_sandbox = account_sandbox
+            # A tenant with no saved policy serves no products (#2698).
+            if existing.advertising_policy is None:
+                existing.advertising_policy = unchecked_advertising_policy()
             print(f"  ✓ Tenant already exists (ID: {tenant_id})")
         else:
             tenant_id = str(uuid.uuid4())
@@ -297,6 +301,7 @@ def seed_storyboard_tenant() -> str:
                     is_active=True,
                     authorized_emails=["storyboard@example.com"],
                     authorized_domains=None,
+                    advertising_policy=unchecked_advertising_policy(),
                     signals_agent_config=None,
                     ai_policy=None,
                     auto_approve_format_ids=["display_300x250_image", "display_728x90_image", "video_standard_30s"],

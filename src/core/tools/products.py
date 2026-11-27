@@ -26,6 +26,7 @@ from src.core.exceptions import (
     AdCPInternalError,
     AdCPPolicyViolationError,
     AdCPSalesAgentError,
+    AdCPServiceUnavailableError,
     AdCPValidationError,
 )
 from src.core.format_resolver import (
@@ -53,6 +54,7 @@ from src.core.schemas import (
 from src.services.ai import AIServiceFactory
 from src.services.ai.factory import AIProviderError
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
+from src.services.setup_checklist_service import require_advertising_policy
 
 logger = logging.getLogger(__name__)
 
@@ -234,6 +236,8 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
     # Always a tenant: a request naming no seller is refused CONFIGURATION_ERROR by the
     # resolver, so there is no empty-catalog answer for one.
     tenant = identity.tenant
+    # No enforceable policy, no products, in every buying mode (#2698).
+    require_advertising_policy(tenant.tenant_id, tenant.advertising_policy, tenant.ai_config)
 
     # Extract offering text from brand (the pinned SDK: brand replaces brand_manifest).
     # req.brand is BrandReference | None (Pydantic model with .domain attribute).
@@ -281,15 +285,13 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
         # Only the seller's OWN configuration runs the check (platform_fallback=False). The
         # platform key from the environment would switch policy checks on for every tenant
         # of any deployment that sets one, and a blocking verdict is a buyer-visible
-        # rejection the seller did not configure. The factory builds the model or answers
-        # None, so a configuration it cannot build (a blank model for a foreign provider)
-        # skips the check here rather than raising CONFIGURATION_ERROR into this
-        # auth-optional discovery call.
+        # rejection the seller did not configure. A seller with no usable configuration of
+        # its own was refused CONFIGURATION_ERROR by require_advertising_policy above, so
+        # None here is a resolved model pydantic-ai could not construct: the model is
+        # unavailable, and a check that cannot run never passes a brief unchecked (#2698).
         policy_model = AIServiceFactory().build(seller_ai, platform_fallback=False)
         if policy_model is None:
-            # No usable AI configuration of the seller's own - cannot run policy checks
-            policy_result = None
-            logger.warning(f"Policy checks enabled but no usable AI configuration for tenant {tenant.tenant_id}")
+            raise AdCPServiceUnavailableError()
         else:
             policy_service = PolicyCheckService(model=policy_model)
 
@@ -320,18 +322,12 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
 
             except AIProviderError as e:
                 # The provider failed the check (run_agent classifies it); any other
-                # exception is a defect and propagates instead of passing an unscreened brief.
-                # structural-guard: fail-open is conformant at AdCP.
-                # `errors` is required on get-products-response.json only in its
-                # `if status == "failed"` branch; this path completes and returns
-                # products, so no emission condition applies. There is also no
-                # `incomplete[]` scope for policy screening — the product set is not
-                # partial, it is unscreened — and the event IS durably recorded by the
-                # policy_check_failure audit entry written just below.
-                # No reason for the screening gap reaches the buyer. The states that
-                # produce one are seller-side CONFIGURATION (policy disabled by tenant, no
-                # Gemini key), and disclosing them would leak the seller's operational
-                # posture to the buyer for no spec reason.
+                # exception is a defect and propagates. Either way no brief passes
+                # unscreened: with checks on, a failed check is SERVICE_UNAVAILABLE (AdCP
+                # 3.2.7 enums/error-code.json line 136, "Seller service is temporarily
+                # unavailable. Retry with exponential backoff."), not an unchecked catalog
+                # (#2698). The reason stays in the audit log and the server log; the wire
+                # carries the code alone, so the seller's provider posture is not disclosed.
                 logger.error(f"Policy check failed for tenant {tenant.tenant_id}: {e}")
                 audit_logger = get_audit_logger("AdCP", tenant.tenant_id)
                 audit_logger.log_operation(
@@ -346,12 +342,7 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
                         "brief": brief_text[:100] + "..." if len(brief_text) > 100 else brief_text,
                     },
                 )
-
-                # Fail open by default: allow the campaign, record the reason in the
-                # audit log above. Nothing is added to the response — see the
-                # structural-guard note on this handler for why that is conformant.
-                policy_result = None
-                logger.warning(f"Policy check failed, allowing campaign by default: {e}")
+                raise AdCPServiceUnavailableError(internal_detail=e) from e
 
     # Handle policy result based on settings
     if policy_result and policy_result.status == PolicyStatus.BLOCKED:

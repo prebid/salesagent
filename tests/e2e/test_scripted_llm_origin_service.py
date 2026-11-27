@@ -108,7 +108,7 @@ async def test_a_dropped_connection_raises_what_ranking_catches(origin: str) -> 
     assert isinstance(excinfo.value.__cause__, httpx.RemoteProtocolError)
 
 
-async def test_a_scripted_policy_failure_raises_what_get_products_fails_open_on(origin: str) -> None:
+async def test_a_scripted_policy_failure_raises_what_get_products_refuses_on(origin: str) -> None:
     """What BR-RULE-002 INV-4 meets over e2e: the real service raises AIProviderError."""
     install_script(_SELLER_KEY, policy={"fail_status": 503})
 

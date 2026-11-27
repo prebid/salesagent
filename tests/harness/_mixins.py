@@ -1987,13 +1987,13 @@ class ProductMixin:
 
         On both legs the real ``PolicyCheckService`` meets the failure (in-process from a
         model that raises it, over e2e from the scripted origin), ``run_agent`` raises
-        ``AIProviderError``, and ``_get_products_impl`` fails open on it.
+        ``AIProviderError``, and ``_get_products_impl`` answers SERVICE_UNAVAILABLE (#2698).
         """
         from src.services.policy_check_service import PolicyCheckService
         from tests.e2e._scripted_llm import MODEL_UNAVAILABLE
 
         # The real service on a model that fails: production's run_agent classifies the
-        # failure and get_products fails open on it, the path the e2e leg takes too.
+        # failure and get_products refuses on it, the path the e2e leg takes too.
         self.mock["policy_service"].return_value = PolicyCheckService(model=MODEL_UNAVAILABLE.model())  # type: ignore[attr-defined]
 
     @realize_e2e(_e2e_set_policy_blocked_if_prompt_names)
@@ -2003,9 +2003,9 @@ class ProductMixin:
         Graded INSIDE the model, because the prompt has no wire surface: production's real
         ``PolicyCheckService`` builds the prompt and calls the scripted model, which answers
         BLOCKED when every text is in it and otherwise fails with the 400 the e2e origin
-        answers a call no entry matches. ``get_products`` fails open on that failure, so a
-        text that never reached the model shows on the wire as products instead of
-        ``POLICY_VIOLATION``. Over e2e the origin grades the same texts on the prompt the
+        answers a call no entry matches. ``get_products`` answers SERVICE_UNAVAILABLE on
+        that failure, so a text that never reached the model shows on the wire as
+        SERVICE_UNAVAILABLE instead of ``POLICY_VIOLATION``. Over e2e the origin grades the same texts on the prompt the
         live server sends (``_e2e_set_policy_blocked_if_prompt_names``).
         """
         from src.services.policy_check_service import PolicyCheckService

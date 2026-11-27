@@ -65,7 +65,7 @@ from src.core.schemas import CreateMediaBuyRequest
 from src.core.schemas.account import Account
 from src.core.tenant_context import TenantContext
 from src.core.tools.media_buy_create import _create_media_buy_impl
-from tests.factories import AccountFactory, PricingOptionFactory, PrincipalFactory
+from tests.factories import AccountFactory, AdvertisingPolicyFactory, PricingOptionFactory, PrincipalFactory
 from tests.factories.principal import plaintext_token_for
 from tests.helpers.adcp_factories import create_test_package_request
 from tests.integration.conftest import create_test_product_with_pricing, get_pricing_option_id
@@ -115,6 +115,7 @@ class TestMinimumSpendValidation:
                 updated_at=now,
                 # Required: Access control configuration
                 authorized_emails=["test@example.com"],
+                advertising_policy=AdvertisingPolicyFactory(enabled=False),  # policy saved (#2698)
             )
             session.add(tenant)
 

@@ -1,8 +1,8 @@
 """A defect in get_products' own AI code fails the request; only a provider failure degrades.
 
-Ranking and the policy check fail open when the PROVIDER fails: ``run_agent``
-(``src/services/ai/factory.py``) raises ``AIProviderError`` for that, and those are the only
-exceptions either consumer catches. BR-UC-001's INV-4 and BR-RULE-002 rows grade the
+When the PROVIDER fails, ranking falls back to catalog order and the policy check answers
+SERVICE_UNAVAILABLE (#2698): ``run_agent`` (``src/services/ai/factory.py``) raises
+``AIProviderError`` for that, and those are the only exceptions either consumer catches. BR-UC-001's INV-4 and BR-RULE-002 rows grade the
 provider failures on every transport. What they cannot show is the other half: an exception
 raised by our own code on that path (here a ``ValueError`` out of the prompt builder) used
 to be caught as well and answered with catalog order, or with an unscreened brief, and

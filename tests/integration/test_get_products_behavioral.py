@@ -14,7 +14,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic_ai.exceptions import ModelHTTPError
 
-from src.core.exceptions import AdCPAuthorizationError, AdCPSalesAgentError, AdCPValidationError
+from src.core.exceptions import (
+    AdCPAuthorizationError,
+    AdCPSalesAgentError,
+    AdCPServiceUnavailableError,
+    AdCPValidationError,
+)
 from src.core.format_resolver import NamedFormats
 from src.core.resolved_identity import PublicIdentity, ResolvedIdentity
 from src.core.tenant_context import TenantContext
@@ -385,15 +390,15 @@ class TestRestrictedBriefManualReviewRejection:
         assert exc_info.value.error_code == "POLICY_VIOLATION"
 
 
-class TestPolicyServiceFailopenPipeline:
-    """Test policy service exception results in fail-open behavior.
+class TestPolicyServiceUnavailablePipeline:
+    """Test policy service failure refuses the request with SERVICE_UNAVAILABLE (#2698).
 
-    BDD scenario: T-UC-001-inv-002-4 (S10, formerly Extension *a fail-open)
+    BDD scenario: T-UC-001-inv-002-4 (S10, formerly Extension *a fail-open; now SERVICE_UNAVAILABLE)
     """
 
     @pytest.mark.asyncio
-    async def test_policy_exception_returns_products_normally(self, integration_db):
-        """When PolicyCheckService.check_brief_compliance raises, products still returned."""
+    async def test_policy_provider_failure_refuses(self, integration_db):
+        """When the provider fails the policy check, no unchecked products are returned."""
         with ProductEnv(tenant_id="pol-failopen", principal_id="p1") as env:
             tenant = TenantFactory(
                 tenant_id="pol-failopen",
@@ -412,10 +417,8 @@ class TestPolicyServiceFailopenPipeline:
             mock_policy_inst.check_brief_compliance = AsyncMock(side_effect=AIProviderError("Gemini API timeout"))
             env.mock["policy_service"].return_value = mock_policy_inst
 
-            response = await env.call_impl(brief="Normal campaign")
-
-        assert len(response.products) == 1
-        assert response.products[0].product_id == "p1"
+            with pytest.raises(AdCPServiceUnavailableError):
+                await env.call_impl(brief="Normal campaign")
 
 
 # ---- Adapter annotation: test 6 (S25) ----
@@ -561,8 +564,9 @@ class TestBriefPolicyComplianceMatrix:
             (True, True, None, PolicyStatus.RESTRICTED, False, False, None),
             (True, True, None, PolicyStatus.ALLOWED, False, False, None),
             (False, True, None, None, False, False, None),
-            (True, False, None, None, False, False, None),
-            (True, True, AIProviderError("Down"), None, False, False, None),
+            # Checks on with no AI of the seller's own, and a failed check, refuse (#2698).
+            (True, False, None, None, False, True, "CONFIGURATION_ERROR"),
+            (True, True, AIProviderError("Down"), None, False, True, "SERVICE_UNAVAILABLE"),
         ],
         ids=[
             "BLOCKED",
