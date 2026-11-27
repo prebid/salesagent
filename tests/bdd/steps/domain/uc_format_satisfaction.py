@@ -1847,6 +1847,29 @@ def given_existing_media_buy(ctx: dict) -> None:
     ctx["existing_package"] = package
 
 
+@given(parsers.re(r"^that package was booked selecting (?P<selection>that option|no option)$"))
+def given_package_booked(ctx: dict, selection: str) -> None:
+    """The held package's format contract as create records it, from the product as it is now.
+
+    ``that option``: the snapshot of the product's one declaration in ``formats_to_provide``.
+    ``no option``: no snapshot, and the product's whole contract under ``booked_format_contract``.
+    Both through the production builders, so the row is one create writes.
+    """
+    from src.core.format_resolver import BOOKED_FORMAT_CONTRACT, booked_contract_record, package_format_snapshot
+
+    package, product = ctx["existing_package"], ctx["default_product"]
+    if selection == "that option":
+        (declaration,) = product.format_options
+        recorded: dict[str, Any] = {
+            "formats_to_provide": [package_format_snapshot(declaration, product_id=product.product_id)],
+            BOOKED_FORMAT_CONTRACT: None,
+        }
+    else:
+        recorded = {"formats_to_provide": None, BOOKED_FORMAT_CONTRACT: booked_contract_record(product.format_contract)}
+    package.package_config = {**(package.package_config or {}), **recorded}
+    ctx["env"]._commit_factory_data()
+
+
 @given(parsers.parse('a creative identified by canonical kind "{kind}" exists'))
 def given_creative_exists(ctx: dict, kind: str) -> None:
     """Seed the creative the update will assign, without assigning it yet."""

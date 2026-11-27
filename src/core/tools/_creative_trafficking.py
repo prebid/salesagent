@@ -115,7 +115,7 @@ def _package_creatives(
     products: "ProductRepository",
     packages: "Sequence[MediaPackage] | Sequence[_AssignedPackage]",
     creatives_list: "Sequence[Any]",
-    stored: "Mapping[str, Mapping[str, Any]] | None",
+    stored: "Mapping[str, DBMediaPackage] | None",
 ) -> list[tuple[int, Any, "FormatContract", list[Any]]]:
     """``(package index, product row, contract, creative rows)`` for every package naming creatives and a stored product.
 
@@ -127,8 +127,8 @@ def _package_creatives(
     refuses it before either question is asked.
 
     The contract is the one each package was booked on. For a buy already stored (the
-    approval and the retroactive push), *stored* holds each package's ``package_config`` by
-    package id, and the contract is read off it (``format_resolver.booked_format_contract``),
+    approval and the retroactive push), *stored* holds each package's row by package id, and
+    the contract is read off it (``format_resolver.booked_format_contract``),
     only for a package whose product still exists, as only those are paired. *stored* is None
     only on create, where the buy is being booked now, so the product's contract now IS the
     booking-time one.
@@ -153,11 +153,7 @@ def _package_creatives(
         product = products_by_id.get(package.product_id) if package.product_id else None
         if not pkg_creative_ids or product is None:
             continue
-        contract = (
-            product.format_contract
-            if stored is None
-            else booked_format_contract(stored[package.package_id], package_id=package.package_id)
-        )
+        contract = product.format_contract if stored is None else booked_format_contract(stored[package.package_id])
         pairings.append(
             (index, product, contract, [creatives_by_id[cid] for cid in pkg_creative_ids if cid in creatives_by_id])
         )
@@ -202,7 +198,7 @@ def _validate_creatives_before_adapter_call(
     principal_id: str,
     session: "Session",
     *,
-    stored: "Mapping[str, Mapping[str, Any]] | None",
+    stored: "Mapping[str, DBMediaPackage] | None",
 ) -> dict[CarrierKey, CreativeToTraffic]:
     """Validate all creatives have required fields BEFORE calling adapter.
 
@@ -220,7 +216,7 @@ def _validate_creatives_before_adapter_call(
             "not found" (uniform, no field leak) instead of passing the gate
             on their row and violating the composite FK on assignment insert.
         session: SQLAlchemy session (from UoW).
-        stored: each stored package's ``package_config`` by package id, or None on create
+        stored: each stored package's row by package id, or None on create
             (:func:`_package_creatives`).
 
     Returns:
@@ -630,7 +626,7 @@ def _read_for_push(
     from src.core.format_satisfaction import creative_refusal
 
     assigned = _assigned_packages(packages, assignments)
-    stored = {package.package_id: package.package_config or {} for package in packages}
+    stored = {package.package_id: package for package in packages}
     pairing_verdicts = _pairing_verdicts(_package_creatives(products, assigned, [creative], stored))
     for _index, product, _creative, verdict in pairing_verdicts:
         if not verdict:

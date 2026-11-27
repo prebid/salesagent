@@ -48,14 +48,20 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
 
   # sync_creatives records the creative agent's preview link as an HTML creative's URL. The
   # markup is what GAM serves; the preview page is not sent to GAM as an image.
+  #
+  # The package is booked on a product that sells the HTML format. An assignment is checked
+  # against the formats the package was booked on, never against the product as it is now
+  # (creative/tracker-execution-contracts.mdx, v3.2.7: "Package assignment and
+  # create_media_buy revalidate the selected manifest against the immutable package
+  # snapshot"), so adding the format to the product after booking would not admit it.
   @T-UC-006-local-gam-html-creative
   Scenario: An HTML creative is created in GAM as a third-party creative whose snippet is its markup
-    Given the product "prod-banner" supports format_ids ["display_300x250_image", "display_300x250_html"]
+    Given the buyer holds a buy booked in Google Ad Manager as order "6000010" whose package "pkg-html" is line item "5000013" accepting 300x250, on a product selling '{"format_ids": [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}, {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_html"}]}'
     And the buyer holds an approved 300x250 HTML creative "cr-html" with markup "<div>Example ad</div>", recorded with the creative agent's preview link "https://preview.example.com/cr-html" as its URL
-    When the Buyer Agent references library creative "cr-html", without resending it, assigned to package "pkg-banner-a"
-    Then creative "cr-html" is assigned to package "pkg-banner-a"
+    When the Buyer Agent references library creative "cr-html", without resending it, assigned to package "pkg-html"
+    Then creative "cr-html" is assigned to package "pkg-html"
     And Google Ad Manager created one third-party creative for advertiser "3000001" whose snippet is "<div>Example ad</div>" and which names no image URL
-    And Google Ad Manager associated that creative with line items "5000001"
+    And Google Ad Manager associated that creative with line items "5000013"
 
   @T-UC-006-local-gam-weighted-assignment
   Scenario: A weighted assignment puts its line item on manual rotation and carries the weight
