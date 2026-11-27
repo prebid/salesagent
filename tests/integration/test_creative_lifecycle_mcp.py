@@ -245,8 +245,12 @@ class TestCreativeLifecycleMCP:
             )
             session.add(principal)
 
+            session.commit()
+            _seed_account("creative_test", ("test_advertiser",))
+
             # Create test media buy with packages in raw_request
             media_buy = MediaBuy(
+                account_id=ACCOUNT_ID,
                 tenant_id="creative_test",
                 media_buy_id="test_media_buy_1",
                 principal_id="test_advertiser",
@@ -333,10 +337,6 @@ class TestCreativeLifecycleMCP:
         self.test_tenant_id = "creative_test"
         self.test_principal_id = "test_advertiser"
         self.test_media_buy_id = "test_media_buy_1"
-
-        # ``account`` is in sync-creatives-request.json /required, so every sync call in
-        # this file needs one the calling principal can reach. Factories, per CLAUDE.md.
-        _seed_account("creative_test", ("test_advertiser",))
 
     @pytest.fixture
     def sample_creatives(self):

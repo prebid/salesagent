@@ -350,13 +350,21 @@ def test_media_buy(db_session, test_tenant, test_principal, test_product):
     from datetime import datetime, timedelta
 
     from src.core.database.models import MediaBuy
+    from tests.factories.account import seed_default_account
+    from tests.utils.database_helpers import bind_factories_to_session
+
+    tenant_id = test_tenant.tenant_id
+    principal_id = test_principal.principal_id
+    with bind_factories_to_session(db_session):
+        account_id = seed_default_account(tenant_id, principal_id)
 
     unique_id = str(uuid.uuid4())[:8]
     now = datetime.now(UTC)
     media_buy = MediaBuy(
         media_buy_id=f"test_media_buy_{unique_id}",
-        tenant_id=test_tenant.tenant_id,
-        principal_id=test_principal.principal_id,
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+        account_id=account_id,
         order_name=f"Test Order {unique_id}",
         advertiser_name=f"Test Advertiser {unique_id}",
         budget=1000.00,

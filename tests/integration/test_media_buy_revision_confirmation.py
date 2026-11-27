@@ -134,6 +134,7 @@ def _create_from_request(repo: MediaBuyRepository, media_buy: MediaBuy) -> Media
     return repo.create_from_request(
         seller_committed=True,
         media_buy_id="mb_create_from_request",
+        account_id=media_buy.account_id,
         req=_make_request("revision-confirmation-create-from-request"),
         principal_id=media_buy.principal_id,
         advertiser_name="Test Advertiser",
@@ -470,6 +471,7 @@ class TestConfirmedAtStamp:
             elif door == "create_from_request":
                 repo.create_from_request(
                     media_buy_id="mb_bad_status_door",
+                    account_id=media_buy.account_id,
                     req=_make_request("revision-confirmation-bad-status-door"),
                     principal_id=media_buy.principal_id,
                     advertiser_name="Test Advertiser",

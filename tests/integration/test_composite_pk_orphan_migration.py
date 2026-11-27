@@ -10,10 +10,12 @@ Fix: DELETE orphan rows before FK creation (parent creative is gone, reviews are
 meaningless).
 """
 
+from datetime import timedelta
+
 import pytest
 from sqlalchemy import text
 
-from tests.integration.migration_helpers import run_alembic_upgrade
+from tests.integration.migration_helpers import run_alembic_upgrade, seed_media_buy
 
 MIGRATION_REV = "1a88e4967119"
 PRE_MIGRATION_REV = "3a16c5fc27ce"
@@ -45,13 +47,17 @@ def _insert_orphan_data(engine):
             )
         )
         # Media buy (needed for creative_assignments FK)
-        conn.execute(
-            text(
-                "INSERT INTO media_buys (media_buy_id, tenant_id, principal_id, order_name, "
-                "advertiser_name, start_date, end_date, status, raw_request) "
-                "VALUES ('mb1', 't1', 'p1', 'Test Order', 'Test Advertiser', "
-                "CURRENT_DATE, CURRENT_DATE + 7, 'draft', '{}')"
-            )
+        today = conn.execute(text("SELECT CURRENT_DATE")).scalar_one()
+        seed_media_buy(
+            conn,
+            tenant_id="t1",
+            principal_id="p1",
+            media_buy_id="mb1",
+            order_name="Test Order",
+            advertiser_name="Test Advertiser",
+            start_date=today,
+            end_date=today + timedelta(days=7),
+            status="draft",
         )
         # Two creatives: one to keep, one to delete (creating orphans)
         for cid in ("c_valid", "c_deleted"):

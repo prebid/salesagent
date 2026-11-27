@@ -38,7 +38,7 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy import text
 
-from tests.integration.migration_helpers import run_alembic_downgrade, run_alembic_upgrade
+from tests.integration.migration_helpers import run_alembic_downgrade, run_alembic_upgrade, seed_media_buy
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -148,24 +148,19 @@ def _seed(engine, rows=SEED_ROWS) -> None:
             {"tid": TENANT_ID, "pid": PRINCIPAL_ID},
         )
         for media_buy_id, status, approved_at, confirmed_at in rows:
-            conn.execute(
-                text(
-                    "INSERT INTO media_buys (media_buy_id, tenant_id, principal_id, order_name, "
-                    "advertiser_name, start_date, end_date, status, raw_request, "
-                    "created_at, updated_at, approved_at, confirmed_at) "
-                    "VALUES (:mbid, :tid, :pid, 'Order', 'Advertiser', "
-                    "DATE '2026-01-10', DATE '2026-01-20', :status, '{}', "
-                    ":created_at, :created_at, :approved_at, :confirmed_at)"
-                ),
-                {
-                    "mbid": media_buy_id,
-                    "tid": TENANT_ID,
-                    "pid": PRINCIPAL_ID,
-                    "status": status,
-                    "created_at": T_CREATED,
-                    "approved_at": approved_at,
-                    "confirmed_at": confirmed_at,
-                },
+            seed_media_buy(
+                conn,
+                tenant_id=TENANT_ID,
+                principal_id=PRINCIPAL_ID,
+                media_buy_id=media_buy_id,
+                advertiser_name="Advertiser",
+                start_date="2026-01-10",
+                end_date="2026-01-20",
+                status=status,
+                created_at=T_CREATED,
+                updated_at=T_CREATED,
+                approved_at=approved_at,
+                confirmed_at=confirmed_at,
             )
         conn.commit()
 
