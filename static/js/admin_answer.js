@@ -6,5 +6,5 @@
 // value to change, so every line is shown, one per line.
 function adminErrorText(data) {
     const issues = (data.issues || []).map(issue => issue.text);
-    return [data.error || data.message || 'Unknown error', ...issues, ...(data.details || [])].join('\n');
+    return [data.error || 'Unknown error', ...issues, ...(data.details || [])].join('\n');
 }

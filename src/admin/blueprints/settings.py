@@ -22,7 +22,7 @@ from src.admin.utils import require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.admin.utils.helpers import caller_reads_json
 from src.admin.utils.secret_fields import KEEP, submitted_secret
-from src.admin.utils.url_policy import redirect_if_url_blocked
+from src.admin.utils.url_policy import require_allowed_url
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
@@ -500,8 +500,8 @@ def update_slack(tenant_id):
         if change is KEEP:
             continue
         # Stored now and posted to later, so a new URL is graded by ingest-time egress policy.
-        if change is not None and (blocked := redirect_if_url_blocked(change, label, integrations_page)):
-            return blocked
+        if change is not None:
+            require_allowed_url(change, label)
         columns[field] = change
 
     if not columns:

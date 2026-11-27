@@ -297,6 +297,11 @@ class AdminAccountEnv:
         path = self.products_path("add")
         return self.client.submit(path, form_data, from_page=path)
 
+    def submit_creative_agent_add(self, form_data: dict[str, str]) -> AdminResponse:
+        """POST the add-creative-agent form as a browser does from its page."""
+        path = f"/tenant/{self._tenant_id}/creative-agents/add"
+        return self.client.submit(path, form_data, from_page=path)
+
     def submit_product_edit(self, tenant_id: str, product_id: str, form_data: dict[str, Any]) -> AdminResponse:
         """POST *tenant_id*'s product *product_id* edit form as a browser does from its page."""
         path = _product_edit_path(tenant_id, product_id)

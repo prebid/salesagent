@@ -20,6 +20,7 @@ import pytest
 from sqlalchemy import select
 
 from src.admin.app import create_app
+from src.admin.utils.url_policy import EgressUrlRefused
 from src.core.database.models import TenantAuthConfig
 from src.services.auth_config_service import get_tenant_redirect_uri
 from tests.factories import TenantAuthConfigFactory, TenantFactory
@@ -150,7 +151,8 @@ class TestSaveConfig:
             },
         )
         assert response.status_code == 400
-        assert response.get_json()["error"] == "OIDC discovery URL is not allowed by outbound egress policy."
+        body = response.get_json()
+        assert (body["error"], body["details"]) == (EgressUrlRefused.MESSAGE, ["OIDC discovery URL"])
 
         factory_session.expire_all()
         cfg = factory_session.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant.tenant_id)).first()
@@ -176,7 +178,8 @@ class TestSaveConfig:
             },
         )
         assert response.status_code == 400
-        assert response.get_json()["error"] == "OIDC logout URL is not allowed by outbound egress policy."
+        body = response.get_json()
+        assert (body["error"], body["details"]) == (EgressUrlRefused.MESSAGE, ["OIDC logout URL"])
 
         factory_session.expire_all()
         cfg = factory_session.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant.tenant_id)).first()

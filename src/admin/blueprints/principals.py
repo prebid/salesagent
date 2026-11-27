@@ -571,7 +571,7 @@ def register_webhook(tenant_id, principal_id):
     try:
         auth_type = request.form.get("auth_type", "none")
 
-        # ONE gate, not two. This route used to run redirect_if_url_blocked here
+        # ONE gate, not two. This route used to run the url_policy ingest check here
         # AND accept_push_notification_primitives below, so a webhook URL was
         # judged twice by two different verdicts -- and the two did not agree:
         # the first resolves DNS (via resolve_for_dial), the second does not.

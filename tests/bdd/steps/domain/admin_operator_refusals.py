@@ -7,6 +7,8 @@ refusal is answered with is read off its class, so no scenario restates it.
 from __future__ import annotations
 
 import json
+import re
+from html import escape
 
 from pytest_bdd import given, parsers, then, when
 
@@ -115,6 +117,18 @@ def given_other_tenant_has_product(ctx: dict) -> None:
     tenant_id = _other_tenant_id(ctx)
     ctx["admin_product_id"] = f"edit_probe_{tenant_id}"
     _env(ctx).seed_product(ctx["admin_product_id"], tenant_id=tenant_id)
+
+
+@when("the operator submits the add creative agent form from its page with:")
+def when_submit_add_creative_agent_from_page(ctx: dict, datatable: list) -> None:
+    ctx["admin_page"] = _env(ctx).submit_creative_agent_add(_submitted(ctx, datatable))
+
+
+@then(parsers.parse('the page flashes the error "{text}"'))
+def then_page_flashes_error(ctx: dict, text: str) -> None:
+    """*text* is one error flash of its own on the page (templates/base.html), not text elsewhere on it."""
+    flashed = re.findall(r'<div class="alert alert-error">\s*(.*?)\s*<button', _require_admin_page(ctx).data.decode())
+    assert escape(text) in flashed, f"The page does not flash the error {text!r}; its error flashes are {flashed!r}"
 
 
 @given(parsers.parse('that tenant has a product "{product_id}" sold across two publishers'))
@@ -241,6 +255,11 @@ _ABSENT_RECORD_REQUESTS: dict[str, tuple[str, str, dict[str, str] | None]] = {
     "workflow step": ("post", "/tenant/{tenant}/workflows/bdd_absent_context/steps/bdd_absent_step/approve", {}),
     "GAM order": ("get", "/api/tenant/{tenant}/orders/bdd_absent_order", None),
     "sync job": ("get", "/tenant/{tenant}/gam/sync-status/bdd_absent_sync", None),
+    "inventory assignment": (
+        "delete",
+        f"/tenant/{{tenant}}/products/bdd_absent_product/inventory/{_ABSENT_ROW_ID}",
+        None,
+    ),
 }
 
 

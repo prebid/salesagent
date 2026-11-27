@@ -41,10 +41,12 @@ from adcp.types import AuthenticationScheme, ErrorCode
 from sqlalchemy import select
 
 from src.admin.blueprints import principals as principals_blueprint
+from src.admin.utils.url_policy import EgressUrlRefused
 from src.core.database.models import CreativeAgent, PushNotificationConfig, SignalsAgent, Tenant
 from src.core.errors.codes import CODE_TABLE, Recovery
 from src.core.exceptions import AdCPSalesAgentError
 from tests.factories import PrincipalFactory
+from tests.harness.admin_client import BROWSER_PAGE_HEADERS
 from tests.helpers.admin_session import admin_blueprint_app
 from tests.helpers.webhook_credential_refusal import SHORT_CREDENTIAL, assert_admin_flash_refuses_the_credential
 from tests.integration._egress_ingest_helpers import (
@@ -111,6 +113,26 @@ def management_api_client(seeded_tenant, monkeypatch):
     return admin_blueprint_app(tenant_management_api).test_client()
 
 
+def refused(label: str) -> dict[str, object]:
+    """The JSON answer to a URL refused for the field *label*."""
+    return {"success": False, "error": EgressUrlRefused.MESSAGE, "details": [label]}
+
+
+def refusal_flashes(label: str) -> list[tuple[str, str]]:
+    """What a browser is shown for a URL refused for the field *label*."""
+    return [("error", EgressUrlRefused.MESSAGE), ("error", label)]
+
+
+def post_form_from_page(client, path: str, data: dict[str, str], *, page: str | None = None):
+    """POST the form *data* to *path* as a browser does from *page* (default: *path*, a form posting to itself).
+
+    A browser asks for a page and names the page it is on, and the admin error handler
+    answers a refusal with a flash on that page.
+    """
+    headers = {**BROWSER_PAGE_HEADERS, "Referer": f"http://localhost{page or path}"}
+    return client.post(path, data=data, headers=headers, follow_redirects=False)
+
+
 def signals_agents_for(env) -> list[SignalsAgent]:
     """Every signals agent row for the test tenant, read fresh.
 
@@ -124,11 +146,11 @@ def signals_agents_for(env) -> list[SignalsAgent]:
 
 
 def post_signals_agent(client, url: str):
-    """POST the signals-agent add form with *url* as the agent URL."""
-    return client.post(
+    """POST the signals-agent add form with *url* as the agent URL, from the add page."""
+    return post_form_from_page(
+        client,
         f"/tenant/{TENANT_ID}/signals-agents/add",
-        data={"agent_url": url, "name": "Ingest Policy Agent", "enabled": "on", "timeout": "30"},
-        follow_redirects=False,
+        {"agent_url": url, "name": "Ingest Policy Agent", "enabled": "on", "timeout": "30"},
     )
 
 
@@ -171,7 +193,7 @@ def test_signals_agent_add_refuses_and_stores_nothing(
 
     assert response.status_code == 302
     assert "/signals-agents/add" in response.headers["Location"]
-    assert flashes(authenticated_admin_client) == [("error", "Agent URL is not allowed by outbound egress policy.")]
+    assert flashes(authenticated_admin_client) == refusal_flashes("Agent URL")
     assert signals_agents_for(seeded_tenant) == []
 
 
@@ -209,10 +231,10 @@ def test_signals_agent_edit_refuses_and_leaves_the_stored_url_alone(
     agent = create_agent_through_the_add_form(authenticated_admin_client, seeded_tenant, monkeypatch)
     set_flags(monkeypatch)
 
-    response = authenticated_admin_client.post(
+    response = post_form_from_page(
+        authenticated_admin_client,
         f"/tenant/{TENANT_ID}/signals-agents/{agent.id}/edit",
-        data={"agent_url": url, "name": "Ingest Policy Agent", "enabled": "on", "timeout": "30"},
-        follow_redirects=False,
+        {"agent_url": url, "name": "Ingest Policy Agent", "enabled": "on", "timeout": "30"},
     )
 
     assert response.status_code == 302
@@ -223,11 +245,9 @@ def test_signals_agent_edit_refuses_and_leaves_the_stored_url_alone(
 def test_signals_agent_test_connection_refuses_a_stored_url_without_connecting(
     authenticated_admin_client, seeded_tenant, monkeypatch
 ):
-    """A stored URL is graded again on the way out, in the endpoint's own JSON envelope.
+    """A stored URL is graded again on the way out, answered as JSON to the page's fetch().
 
-    This is the third response shape: ``{"success": false, "error": ...}`` at
-    400, not the bare ``{"error": ...}`` the tenant-management API returns. A
-    row written while the hatches were open must not become an outbound request
+    A row written while the hatches were open must not become an outbound request
     once they are closed — which is exactly why the check is repeated at send
     time rather than trusted from ingest.
     """
@@ -240,10 +260,7 @@ def test_signals_agent_test_connection_refuses_a_stored_url_without_connecting(
     )
 
     assert response.status_code == 400
-    assert response.get_json() == {
-        "success": False,
-        "error": "Agent URL is not allowed by outbound egress policy.",
-    }
+    assert response.get_json() == refused("Agent URL")
 
 
 def test_signals_agent_add_refusal_reason_reaches_the_logs(
@@ -270,7 +287,25 @@ def test_signals_agent_add_refusal_reason_reaches_the_logs(
         f"the seam did not log the real refusal reason; got {[r.getMessage() for r in caplog.records]}"
     )
     admin_records = [r.getMessage() for r in caplog.records if r.name == "src.admin.utils.url_policy"]
-    assert admin_records == [f"[SECURITY] Rejected Agent URL at ingest: {METADATA_URL!r}"]
+    assert admin_records == ["[SECURITY] Rejected Agent URL at ingest: https://169.254.169.254/..."]
+
+
+def test_a_refused_url_is_logged_with_its_scheme_and_host_only(
+    authenticated_admin_client, seeded_tenant, monkeypatch, caplog
+):
+    """The operator's log names a refused URL by scheme and host, never its credentials.
+
+    A URL carries a credential in its userinfo, its query, or (a Slack webhook) its path.
+    """
+    set_flags(monkeypatch)
+    caplog.set_level(logging.WARNING)
+
+    post_signals_agent(
+        authenticated_admin_client, "https://user:s3cret@169.254.169.254/services/T000/B000/s3cret?token=s3cret"
+    )
+
+    admin_records = [r.getMessage() for r in caplog.records if r.name == "src.admin.utils.url_policy"]
+    assert admin_records == ["[SECURITY] Rejected Agent URL at ingest: https://169.254.169.254/..."]
 
 
 # ---------------------------------------------------------------------------
@@ -312,9 +347,9 @@ def test_create_tenant_refuses_blocked_webhook_url(field, label, management_api_
     )
 
     assert response.status_code == 400
-    assert response.get_json() == {"error": f"{label} is not allowed by outbound egress policy."}
+    assert response.get_json() == refused(label)
     assert [r.getMessage() for r in caplog.records if r.name == "src.admin.utils.url_policy"] == [
-        f"[SECURITY] Rejected {label} at ingest: {METADATA_URL!r}"
+        f"[SECURITY] Rejected {label} at ingest: https://169.254.169.254/..."
     ]
 
 
@@ -368,7 +403,7 @@ def test_update_tenant_refuses_blocked_webhook_url_and_stores_nothing(
     )
 
     assert response.status_code == 400
-    assert response.get_json() == {"error": "Slack webhook URL is not allowed by outbound egress policy."}
+    assert response.get_json() == refused("Slack webhook URL")
 
     session = seeded_tenant.get_session()
     session.rollback()
@@ -396,7 +431,7 @@ def test_update_tenant_accepts_a_url_egress_policy_admits(management_api_client,
 
 # ---------------------------------------------------------------------------
 # Three more form-shape ingest sites, previously ungraded: a refactor could
-# silently drop the ``redirect_if_url_blocked`` call from any of these and
+# silently drop the ``require_allowed_url`` call from any of these and
 # every other test in this suite would stay green.
 # ---------------------------------------------------------------------------
 
@@ -683,16 +718,15 @@ def test_register_webhook_refuses_a_hostname_that_resolves_into_a_private_range(
 ):
     """The deliberate security trade salesagent-pldmk.8 made, kept visible.
 
-    BEFORE pldmk.8 this route ran TWO gates: ``redirect_if_url_blocked``
-    (``principals.py`` → ``url_policy._is_allowed`` → ``outbound_http.validate_url``
+    BEFORE pldmk.8 this route ran TWO gates: the ``url_policy`` ingest check
+    (``principals.py`` → ``url_policy`` → ``outbound_http.validate_url``
     → ``EgressPolicy.resolve_for_dial``), which RESOLVES DNS, and then
     ``accept_push_notification_primitives`` → ``EgressPolicy.check_registration``,
     which is DNS-FREE by design. A hostname that is not a literal IP but resolves
     into a reserved range was therefore refused by the FIRST gate only.
 
     pldmk.8 deleted gate 1 at this call site (and ONLY at this call site —
-    ``url_policy.redirect_if_url_blocked`` has eight other callers, all
-    untouched). So this registration is now ACCEPTED and STORED. This test was
+    ``url_policy.require_allowed_url`` keeps its other callers). So this registration is now ACCEPTED and STORED. This test was
     INVERTED rather than deleted, so the trade stays visible in the tree.
 
     The trade is defensible and is why the inversion is the right fix, not a
@@ -780,11 +814,11 @@ def test_register_webhook_stores_the_hmac_secret_where_senders_read_it(
 
 
 def post_creative_agent_add(client, url: str):
-    """POST the creative-agent add form with *url* as the agent URL."""
-    return client.post(
+    """POST the creative-agent add form with *url* as the agent URL, from the add page."""
+    return post_form_from_page(
+        client,
         f"/tenant/{TENANT_ID}/creative-agents/add",
-        data={"agent_url": url, "name": "Ingest Policy Creative Agent", "priority": "10", "enabled": "on"},
-        follow_redirects=False,
+        {"agent_url": url, "name": "Ingest Policy Creative Agent", "priority": "10", "enabled": "on"},
     )
 
 
@@ -819,7 +853,7 @@ def test_creative_agent_add_refuses_and_stores_nothing(url, authenticated_admin_
 
     assert response.status_code == 302
     assert "/creative-agents/add" in response.headers["Location"]
-    assert flashes(authenticated_admin_client) == [("error", "Agent URL is not allowed by outbound egress policy.")]
+    assert flashes(authenticated_admin_client) == refusal_flashes("Agent URL")
     assert creative_agents_for(seeded_tenant) == []
 
 
@@ -849,10 +883,10 @@ def test_creative_agent_edit_refuses_and_leaves_the_stored_url_alone(
     agent = create_creative_agent_through_the_add_form(authenticated_admin_client, seeded_tenant, monkeypatch)
     set_flags(monkeypatch)
 
-    response = authenticated_admin_client.post(
+    response = post_form_from_page(
+        authenticated_admin_client,
         f"/tenant/{TENANT_ID}/creative-agents/{agent.id}/edit",
-        data={"agent_url": url, "name": "Ingest Policy Creative Agent", "priority": "10", "enabled": "on"},
-        follow_redirects=False,
+        {"agent_url": url, "name": "Ingest Policy Creative Agent", "priority": "10", "enabled": "on"},
     )
 
     assert response.status_code == 302
@@ -879,14 +913,14 @@ def test_update_slack_refuses_blocked_webhook_url_and_stores_nothing(
     """
     set_flags(monkeypatch)
 
-    response = authenticated_admin_client.post(
-        f"/tenant/{TENANT_ID}/settings/slack",
-        data={field: METADATA_URL},
-        follow_redirects=False,
+    integrations_page = f"/tenant/{TENANT_ID}/settings?section=integrations"
+    response = post_form_from_page(
+        authenticated_admin_client, f"/tenant/{TENANT_ID}/settings/slack", {field: METADATA_URL}, page=integrations_page
     )
 
     assert response.status_code == 302
-    assert flashes(authenticated_admin_client) == [("error", f"{label} is not allowed by outbound egress policy.")]
+    assert response.headers["Location"] == integrations_page
+    assert flashes(authenticated_admin_client) == refusal_flashes(label)
 
     session = seeded_tenant.get_session()
     session.rollback()

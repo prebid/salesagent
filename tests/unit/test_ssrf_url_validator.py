@@ -66,6 +66,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.admin.utils.url_policy import EgressUrlRefused
+
 
 class TestReservedTldPolicy:
     """The half of the retired ``url_validator`` that SURVIVED #1802 still refuses.
@@ -116,9 +118,13 @@ SAFE_PUBLIC_URL = "https://93.184.216.34/agent"
 
 # The URL both reject-path wiring tests submit. Named once so the seam-linkage
 # test below and the endpoint tests cannot drift onto different vectors — a
-# redirect proves the handler refused, not WHY, and the two only compose into
+# refusal proves the handler refused, not WHY, and the two only compose into
 # "the seam is what refused it" while they are the same URL.
 BLOCKED_INGEST_URL = "http://host.docker.internal:9999"
+
+# What the admin error handler answers a JSON caller (the test client sends no Accept)
+# for that URL: the refusal's text, and the refused field as its one detail.
+EGRESS_REFUSAL_BODY = {"success": False, "error": EgressUrlRefused.MESSAGE, "details": ["Agent URL"]}
 
 
 def _make_signals_agent_client():
@@ -158,11 +164,9 @@ class TestSignalsAgentEndpointSSRFWiring:
     """
 
     def test_the_seam_raises_on_the_url_the_endpoints_reject(self):
-        """The redirect assertions below are caused by the seam REFUSING, not by luck.
+        """The refusals below are caused by the seam REFUSING, not by luck.
 
-        A 302-back-to-the-form is what this handler does for any failure at all, so
-        on its own it grades "something went wrong", not "egress policy said no".
-        This pins the missing half: for the exact URL those tests submit, the seam
+        The endpoint tests read the handler's answer; this pins the missing half: for the exact URL those tests submit, the seam
         raises ``OutboundRequestBlocked`` — a raise, not a ``(bool, str)`` verdict,
         which is the contract change ``check_url_ssrf`` -> ``validate_url`` made.
 
@@ -188,11 +192,11 @@ class TestSignalsAgentEndpointSSRFWiring:
         assert validate_url(SAFE_PUBLIC_URL) is None
 
     def test_add_endpoint_rejects_docker_internal_url(self):
-        """POST /signals-agents/add with host.docker.internal URL must return a redirect with error flash."""
+        """POST /signals-agents/add with a host.docker.internal URL is refused, naming the field, and stores nothing."""
         client = _make_signals_agent_client()
 
         with patch("src.admin.blueprints.signals_agents.get_db_session") as mock_db:
-            _mock_db_for_signals_add(mock_db)
+            mock_session = _mock_db_for_signals_add(mock_db)
             with patch.dict(os.environ, {}):
                 response = client.post(
                     "/tenant/default/signals-agents/add",
@@ -205,9 +209,8 @@ class TestSignalsAgentEndpointSSRFWiring:
                     follow_redirects=False,
                 )
 
-        # Must redirect back to add form (not to list — which would mean success)
-        assert response.status_code == 302
-        assert "add" in response.headers.get("Location", "")
+        assert (response.status_code, response.get_json()) == (400, EGRESS_REFUSAL_BODY)
+        mock_session.add.assert_not_called()
 
     def test_add_endpoint_accepts_safe_public_url(self):
         """POST /signals-agents/add with a safe public URL must proceed past the SSRF check.
@@ -287,8 +290,6 @@ class TestSignalsAgentEndpointSSRFWiring:
                     follow_redirects=False,
                 )
 
-        # Must redirect back to edit form (not to list — which would mean success)
-        assert response.status_code == 302
-        assert "edit" in response.headers.get("Location", "")
+        assert (response.status_code, response.get_json()) == (400, EGRESS_REFUSAL_BODY)
         # Confirm the agent URL was NOT committed as the unsafe value
         mock_session.commit.assert_not_called()

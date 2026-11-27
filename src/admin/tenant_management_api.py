@@ -4,13 +4,13 @@ import logging
 import uuid
 from datetime import UTC, datetime
 
-from flask import Blueprint, Response, jsonify, request
+from flask import Blueprint, jsonify, request
 from pydantic import ValidationError
 from sqlalchemy import delete, func, select
 
 from src.admin.auth_helpers import require_api_key_auth
 from src.admin.form_validation import json_object_body
-from src.admin.utils.url_policy import json_error_if_url_blocked
+from src.admin.utils.url_policy import require_allowed_url
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
@@ -52,18 +52,16 @@ _WEBHOOK_URL_FIELDS = {
 }
 
 
-def _webhook_url_refusal(data: dict) -> tuple[Response, int] | None:
-    """A 400 for the first webhook URL in *data* that fails egress policy, else ``None``.
+def _require_allowed_webhook_urls(data: dict) -> None:
+    """Refuse the first webhook URL in *data* that fails egress policy.
 
     Absent and empty fields are skipped: on create they are simply not being
     set, and on update an empty value clears the webhook rather than pointing
     it somewhere.
     """
     for field_name, field_label in _WEBHOOK_URL_FIELDS.items():
-        url = data.get(field_name)
-        if url and (blocked := json_error_if_url_blocked(url, field_label)):
-            return blocked
-    return None
+        if url := data.get(field_name):
+            require_allowed_url(url, field_label)
 
 
 #: The key this API took the policy under before ``advertising_policy`` (GH #2697). Nothing
@@ -167,8 +165,7 @@ def create_tenant():
         # returns is the one the lookups below compare.
         data["virtual_host"] = validate_virtual_host(data["virtual_host"])
 
-        if blocked := _webhook_url_refusal(data):
-            return blocked
+        _require_allowed_webhook_urls(data)
         advertising_policy = _requested_advertising_policy(data)
 
         # Generate tenant ID
@@ -443,8 +440,7 @@ def update_tenant(tenant_id):
 
         data = request.get_json()
 
-        if blocked := _webhook_url_refusal(data):
-            return blocked
+        _require_allowed_webhook_urls(data)
         advertising_policy = _requested_advertising_policy(data)
 
         # Update fields based on provided data
