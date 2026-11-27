@@ -16,7 +16,7 @@ production must REFUSE to build (an Anthropic row with no model) fails a scenari
 built anyway: its call is answered like any other, instead of failing against the real
 vendor and letting the consumer fail open.
 
-SCRIPTS ARE KEYED BY THE API KEY THE CALL CARRIES (``x-goog-api-key`` / ``x-api-key``), because the key is
+SCRIPTS ARE KEYED BY THE API KEY THE CALL CARRIES (``x-goog-api-key`` / ``Authorization: Bearer``), because the key is
 what the seller configured, and so what decides whether the call ran on the SELLER's
 configuration at all. A call carrying any other key (the platform's ``GEMINI_API_KEY``, a
 key from another scenario) is refused the way the real API refuses an invalid key: HTTP 400,
@@ -44,7 +44,10 @@ A script entry per question is one of:
   arguments, which the agent then validates against its own output model;
 * ``{"fail_status": 503}`` -- answer with that HTTP status in the API's error shape;
 * ``{"drop_connection": true}`` -- close the connection without answering, as an
-  unreachable or crashing provider endpoint does.
+  unreachable or crashing provider endpoint does;
+* ``{"undecodable_body": true}`` -- answer 200 with a body labelled ``Content-Encoding: gzip``
+  that is not gzip, so the client's decoder fails on it (``httpx2.DecodingError``, which
+  google-genai and pydantic-ai leave unwrapped).
 
 and may carry ``"require_text": "..."`` -- answer only a call whose user prompt contains that
 text, or, for a list, every text in it; a call no entry matches is refused with 400. The
@@ -69,8 +72,9 @@ from typing import NamedTuple
 
 from tests.e2e._stdlib_json_http import JsonRequestHandler, run_origin, serve_until_killed
 
-#: The Gemini API route ``google-genai`` calls for a non-streaming generation.
-GENERATE_CONTENT_RE = re.compile(r"^/v1beta/models/[^/:]+:generateContent$")
+#: The Gemini API route ``google-genai`` calls for a non-streaming generation. 3.x defaults
+#: to API version ``v1`` (``GOOGLE_AI_API_DEFAULT_VERSION``); 1.x called ``v1beta``.
+GENERATE_CONTENT_RE = re.compile(r"^/v1/models/[^/:]+:generateContent$")
 
 #: The Anthropic Messages API route (pydantic-ai calls it through ``client.beta.messages``).
 ANTHROPIC_MESSAGES_PATH = "/v1/messages"
@@ -218,14 +222,18 @@ class _ApiShape(NamedTuple):
     """How one vendor's API carries the key, the question and the prompt, and how it answers."""
 
     key_header: str
+    #: What precedes the key in that header: anthropic 2.x sends ``Authorization: Bearer <key>``.
+    key_prefix: str
     question: Callable[[dict], str | None]
     user_text: Callable[[dict], str]
     answer: Callable[[dict, dict], dict]
     error: Callable[[int, str], dict]
 
 
-_GEMINI = _ApiShape("x-goog-api-key", _gemini_question, _gemini_user_text, _gemini_answer, _gemini_error)
-_ANTHROPIC = _ApiShape("x-api-key", _anthropic_question, _anthropic_user_text, _anthropic_answer, _anthropic_error)
+_GEMINI = _ApiShape("x-goog-api-key", "", _gemini_question, _gemini_user_text, _gemini_answer, _gemini_error)
+_ANTHROPIC = _ApiShape(
+    "authorization", "Bearer ", _anthropic_question, _anthropic_user_text, _anthropic_answer, _anthropic_error
+)
 
 
 def _api_shape(path: str) -> _ApiShape | None:
@@ -275,7 +283,7 @@ class _ScriptedLlmHandler(JsonRequestHandler):
             self._write_json(400, shape.error(400, f"request body is not valid JSON: {exc}"))
             return
         store: _ScriptStore = self.server.script_store  # type: ignore[attr-defined]
-        api_key = self.headers.get(shape.key_header) or ""
+        api_key = (self.headers.get(shape.key_header) or "").removeprefix(shape.key_prefix)
         if not store.knows(api_key):
             self._write_json(400, shape.error(400, "API key not valid. Please pass a valid API key."))
             return
@@ -293,6 +301,10 @@ class _ScriptedLlmHandler(JsonRequestHandler):
             # No status line at all: the client's read ends with the connection.
             self.close_connection = True
             self.connection.shutdown(socket.SHUT_RDWR)
+            return
+        if entry.get("undecodable_body"):
+            # A JSON body under a gzip label: the client's gzip decoder refuses it.
+            self._write_json(200, shape.answer({}, request), extra_headers={"Content-Encoding": "gzip"})
             return
         if "fail_status" in entry:
             status = int(entry["fail_status"])

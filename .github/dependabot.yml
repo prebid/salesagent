@@ -6,7 +6,7 @@ updates:
   # ──────────────────────────────────────────────────────────────────
   # Python runtime + dev deps (pyproject.toml, uv.lock)
   # ──────────────────────────────────────────────────────────────────
-  - package-ecosystem: "pip"
+  - package-ecosystem: "uv"
     directory: "/"
     schedule:
       interval: "weekly"
@@ -18,7 +18,7 @@ updates:
       - "dependencies"
       - "supply-chain"
     commit-message:
-      prefix: "chore(deps)"
+      prefix: "chore"
       include: "scope"
     pull-request-branch-name:
       separator: "/"
