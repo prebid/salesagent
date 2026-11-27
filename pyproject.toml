@@ -48,7 +48,7 @@ dependencies = [
     "freezegun>=1.5.5",
     "babel>=2.17.0",
     "logfire>=5.4.0",  # 5.x pulls opentelemetry-api>=1.45.1, which fixes the advisories against 1.39.1
-    "pydantic-ai-slim[google,openai,anthropic,cohere,mistral,groq]>=1.107.7,<2",  # PYSEC-2026-4283..4291 (fixed across 1.107.2-1.107.7); earlier CVE-2026-46678 / GHSA-cqp8-fcvh-x7r3 (1.99.0); use slim to avoid pydantic-ai meta-package pulling fastmcp>=3.3.0
+    "pydantic-ai-slim[google,openai,anthropic,cohere,mistral,groq]>=1.107.7",  # PYSEC-2026-4283..4291 (fixed across 1.107.2-1.107.7); earlier CVE-2026-46678 / GHSA-cqp8-fcvh-x7r3 (1.99.0); use slim to avoid pydantic-ai meta-package pulling fastmcp>=3.3.0
     # Security patches for transitive dependencies
     "mcp>=2.2.0",  # CVE-2026-59951 / GHSA-84m7-p3x7-pcfv, fixed in 2.2.0 on the 2.x line (via fastmcp); 2.0 floor required by adcp 9; earlier CVE-2026-59950
     "pyjwt>=2.15.0",  # GHSA-42vr-xj54-vc7v (fixed in 2.15.0) + 11 more fixed in 2.14.0, GHSA-w6j9-cwv2-h6wq et al.; earlier GHSA-752w-5fwx-jx9f
@@ -82,10 +82,10 @@ dependencies = [
 # (Playwright-based UI test infra, not part of the standard dev workflow).
 [project.optional-dependencies]
 ui-tests = [
-    "playwright==1.60.0",
+    "playwright==1.65.2",
     "pytest-playwright>=0.7.2",  # 0.6.x caps pytest<9.0.0; bump to allow pytest>=9.0.3 (GHSA-6w46-j5rx-g56g)
     "pytest-asyncio>=1.1.0",
-    "allure-pytest==2.16.0",
+    "allure-pytest==2.16.2",
 ]
 
 [project.urls]
@@ -108,7 +108,7 @@ dev = [
     # exemption in tests/ is written in the form the pinned version honours. A floor
     # would let CI resolve a version that silently un-suppresses all of them;
     # tests/unit/test_ast_grep_credential_header_ban.py grades the pin for that reason.
-    "ast-grep-cli==0.45.3",
+    "ast-grep-cli==0.51.3",
     "factory-boy>=3.3.0",
     "mypy>=1.18.2",
     "pytest>=9.0.3",  # GHSA-6w46-j5rx-g56g

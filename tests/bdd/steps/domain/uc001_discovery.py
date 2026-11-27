@@ -124,6 +124,9 @@ _RANKING_FAILURES: dict[str, Callable[[Any], None]] = {
     "the seller's AI provider drops the connection": _seller_model_fails(
         lambda env: env.set_ranking_connection_dropped()
     ),
+    "the seller's AI provider answers a body that does not decode": _seller_model_fails(
+        lambda env: env.set_ranking_body_undecodable()
+    ),
     "the seller's ai_config is one the model factory refuses to build": _ranking_on(
         "in an ai_config the model factory refuses to build"
     ),

@@ -111,9 +111,23 @@ def _http_503() -> Exception:
 
 
 def _connection_dropped() -> Exception:
-    # What the Gemini client raises when the origin closes the connection unanswered
-    # (tests/e2e/test_scripted_llm_origin_service.py pins it). No OSError.
-    return httpx.RemoteProtocolError("Server disconnected without sending a response.")
+    # What pydantic-ai's Gemini model raises when the origin closes the connection unanswered:
+    # its ModelConnectionError, caused by the client's httpx2.RemoteProtocolError
+    # (tests/e2e/test_scripted_llm_origin_service.py pins both). No OSError.
+    import httpx2
+    from pydantic_ai.exceptions import ModelConnectionError
+
+    error = ModelConnectionError(model_name="scripted", message="Server disconnected without sending a response.")
+    error.__cause__ = httpx2.RemoteProtocolError("Server disconnected without sending a response.")
+    return error
+
+
+def _undecodable_body() -> Exception:
+    # What the Gemini client raises, and pydantic-ai passes on unwrapped, when the response
+    # body does not decode (the test module above pins it).
+    import httpx2
+
+    return httpx2.DecodingError("Error -3 while decompressing data: incorrect header check")
 
 
 #: The provider answers HTTP 503.
@@ -121,6 +135,9 @@ MODEL_UNAVAILABLE = ScriptedFailure({"fail_status": 503}, _http_503)
 
 #: The provider's endpoint closes the connection without answering.
 CONNECTION_DROPPED = ScriptedFailure({"drop_connection": True}, _connection_dropped)
+
+#: The provider answers a body its client cannot decode.
+UNDECODABLE_BODY = ScriptedFailure({"undecodable_body": True}, _undecodable_body)
 
 
 def ranking_prompt_prefix(seller_prompt: str) -> str:
