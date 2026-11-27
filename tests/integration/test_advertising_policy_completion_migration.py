@@ -3,7 +3,7 @@
 ``tenants.advertising_policy`` is ``JSONType(model=AdvertisingPolicy)`` from this revision on
 (GH #2696), and the model has no defaults, so a row loads only when it holds every key. The
 rows stored before it are partial: the Settings form never writes ``require_manual_review``
-or ``description``. The revision adds each missing key with the value the old readers gave
+or ``description``. The revision adds each missing key with the value ``get_products`` gave
 its absence. This module is the revision's only grading: the integration suite builds its
 schema with ``Base.metadata.create_all``, so nothing else executes a migration's SQL.
 
@@ -163,8 +163,10 @@ class TestTheDowngradeRestoresThePartialShape:
     def test_a_completed_row_returns_to_what_was_stored(self, at_previous, before, after):
         """Each key the upgrade added holds its completion value, so dropping those keys restores the row.
 
-        The JSON-null case is left out on purpose: the upgrade drops a null list, which the
-        readers before this revision could not use, and the downgrade does not put it back.
+        ``enabled`` is the exception and always stays: the Settings page before this revision
+        reads a missing ``enabled`` as checks on. The JSON-null case is left out on purpose:
+        the upgrade drops a null list, which the readers before this revision could not use,
+        and the downgrade does not put it back.
         """
         engine, db_url = at_previous
         _store(engine, before)
@@ -172,5 +174,15 @@ class TestTheDowngradeRestoresThePartialShape:
 
         run_alembic_downgrade(db_url, _PREVIOUS)
 
-        expected = {key: value for key, value in before.items() if _BLANK.get(key, object()) != value}
+        expected = {key: value for key, value in after.items() if key == "enabled" or _BLANK[key] != value}
         assert _stored(engine) == expected
+
+    def test_a_disabled_policy_stays_disabled(self, at_previous):
+        """A non-empty policy with checks off keeps ``enabled: false``, so the next Settings save keeps them off."""
+        engine, db_url = at_previous
+        _store(engine, {"enabled": False, "prohibited_advertisers": ["rival.example"]})
+        run_alembic_upgrade(db_url, _REVISION)
+
+        run_alembic_downgrade(db_url, _PREVIOUS)
+
+        assert _stored(engine) == {"enabled": False, "prohibited_advertisers": ["rival.example"]}
