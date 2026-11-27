@@ -938,15 +938,12 @@ def _update_media_buy_impl(
     _refuse_unsupported_actions(req)
 
     # ── Workflow-step bookkeeping fence ──────────────────────────────────
-    # Hoist ``ctx_manager`` and ``step`` out of the try below so the
-    # AdCPSalesAgentError / Exception handlers at the function end can mark the step
-    # as ``failed``. Without this, a raise from any validation site
-    # (property_targeting, geo, budget, …) leaves the workflow step
-    # orphaned in ``in_progress`` forever, which suppresses the
-    # buyer-facing ``status="failed"`` push notification fired from
-    # ``context_manager.update_workflow_step``, which fires it through
-    # ``_send_push_notifications``.
-    # Mirrors ``media_buy_create``'s own workflow-step construction exactly.
+    # ``ctx_manager`` and ``step`` are bound before the fence below, which marks the step
+    # ``failed`` when any raise escapes it, so a refused request never leaves its step
+    # ``in_progress``. A refused update sends no push notification: its step has no object
+    # mapping, so ``_send_push_notifications`` skips it, as webhooks.mdx (v3.2.7) asks of an
+    # inline terminal response: "sellers MUST NOT synthesize a task webhook by inventing a
+    # `task_id` or replaying the inline result to `push_notification_config.url`".
     ctx_manager = get_context_manager()
     step = None
 
