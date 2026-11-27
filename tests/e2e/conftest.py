@@ -714,6 +714,23 @@ def live_server(docker_services_e2e):
     return urls
 
 
+def live_e2e_config(live_server: dict):
+    """The shared live server address, database and TLS trust configuration."""
+    from tests.harness.transport import E2EConfig
+
+    return E2EConfig(
+        base_url=live_server["a2a"],
+        postgres_url=live_server["postgres"],
+        tls_base_url=live_server.get("tls"),
+        ca_bundle=e2e_ca_bundle(),
+    )
+
+
+@pytest.fixture(name="live_e2e_config")
+def _live_e2e_config(live_server):
+    return live_e2e_config(live_server)
+
+
 @pytest.fixture
 def test_auth_token(live_server):
     """Create or get a test principal with auth token.

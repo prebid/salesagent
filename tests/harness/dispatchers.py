@@ -41,7 +41,6 @@ each arm DOES with it differs by transport and is stated on the arm itself.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from tests.harness.transport import (
@@ -88,43 +87,6 @@ if TYPE_CHECKING:
 #     below) does NOT change that declaration: ``replace()`` preserves the
 #     ``has_wire=False`` the shared unwrap declared, because a refusal caught as
 #     an exception still cannot prove bytes moved before it was raised.
-
-
-def _refusal_response(exc: Exception) -> Any | None:
-    """The raw HTTP response a JSON-RPC leg was refused with, if it was.
-
-    The ``/a2a`` and ``/mcp`` legs read an ENVELOPE, and an envelope is not the
-    whole refusal: ``WWW-Authenticate: Signature error="<code>"`` is a HEADER, and
-    the verifier's bodyless 401 has no envelope at all. Both harness carriers hold
-    the response for that reason — ``WireRefusal`` (no envelope existed) and
-    ``WireError`` (one did, on a response worth keeping). Every other exception
-    yields ``None``, which ``assert_signature_challenge`` reports as "no raw HTTP
-    response" rather than passing for want of evidence.
-
-    Matched on the CARRIER TYPES, not on ``getattr(exc, "response", None)``: a
-    duck-typed read would also pick up whatever an httpx or SDK exception happens to
-    hang off that name, and a response this harness never saw put on the wire is not
-    evidence of the refusal under test.
-    """
-    from tests.harness._base import WireError, WireRefusal
-
-    return exc.response if isinstance(exc, WireRefusal | WireError) else None
-
-
-def _carrying_refusal_response(result: TransportResult, exc: Exception) -> TransportResult:
-    """*result*, with the refusal's raw HTTP response re-attached when there is one.
-
-    The error unwraps live in ``client.py`` and are shared with
-    ``AdCPTestClient`` — they know about ENVELOPES, which is the right thing for
-    them to know. A signature refusal's challenge is not in the envelope, so its
-    evidence is the response the carrier holds; it is re-attached here
-    rather than inside the shared unwrap because it is a fact about the
-    EXCEPTION, not about the transport family. One helper, every error arm: a leg
-    that dropped the response would be graded "no wire to read" instead of as the
-    refusal — or the acceptance — it actually is.
-    """
-    response = _refusal_response(exc)
-    return result if response is None else replace(result, raw_response=response)
 
 
 def _refuse_signed_generic_client(signed: SignatureRealization, transport: Transport) -> None:
@@ -184,7 +146,7 @@ def a2a_transport_result(call: Callable[[], DeliverResult | Any]) -> TransportRe
     A2A error unwrap, shared with ``AdCPTestClient``, which owns wire-envelope
     recovery and the derived status — then re-attaches the refusal response.
     """
-    from tests.harness.client import unwrap_a2a_error
+    from tests.harness.client import unwrap_error
 
     try:
         delivered = call()
@@ -198,7 +160,7 @@ def a2a_transport_result(call: Callable[[], DeliverResult | Any]) -> TransportRe
         # ``has_wire=False`` at its own construction site, and re-attaching the
         # refusal response leaves that declaration alone: a catch-all cannot tell
         # whether bytes moved before the raise.
-        return _carrying_refusal_response(unwrap_a2a_error(exc, Transport.A2A), exc)
+        return unwrap_error(exc, Transport.A2A)
     if isinstance(delivered, DeliverResult):
         # Real A2A wire: the artifact DataPart dict, carried back on the SAME
         # return value as the payload. It used to be read off
@@ -266,7 +228,7 @@ class RestDispatcher:
     """
 
     def dispatch(self, env: BaseTestEnv, *, signed: SignatureRealization = False, **kwargs: Any) -> TransportResult:
-        from tests.harness.client import unwrap_rest_error, unwrap_rest_response
+        from tests.harness.client import unwrap_error, unwrap_rest_response
 
         try:
             endpoint = env.REST_ENDPOINT  # type: ignore[attr-defined]
@@ -277,7 +239,7 @@ class RestDispatcher:
             # because an exception here means no HTTP body, hence no AdCP
             # envelope, ever existed. Re-attaching the refusal response does not
             # revise that declaration.
-            return _carrying_refusal_response(unwrap_rest_error(exc, Transport.REST), exc)
+            return unwrap_error(exc, Transport.REST)
         # unwrap_rest_response owns the status-code branching, the envelope tag,
         # the #1417 pristine-wire deepcopy rule, the per-site has_wire declaration
         # (True on every branch it returns: a response — 2xx or >=400 — means
@@ -306,7 +268,7 @@ class McpDispatcher:
         try:
             delivered = env.deliver_mcp(**kwargs)
         except Exception as exc:
-            from tests.harness.client import unwrap_mcp_error
+            from tests.harness.client import unwrap_error
 
             # ONE MCP error unwrap for both dispatch paths (client.py) — it owns
             # the raw-ToolError unwrap, the REAL-wire-only envelope rule (never
@@ -316,7 +278,7 @@ class McpDispatcher:
             # delegation and not a copy. The refusal's raw response is
             # re-attached on top: a bodyless 401 leaves that unwrap no envelope
             # to recover.
-            return _carrying_refusal_response(unwrap_mcp_error(exc, Transport.MCP), exc)
+            return unwrap_error(exc, Transport.MCP)
         # Real MCP wire: the structured_content dict, carried back on the SAME
         # return value as the payload — see the A2A sibling above.
         return TransportResult(
@@ -508,17 +470,7 @@ class McpE2EDispatcher:
     ``env.e2e_config.base_url`` and unwraps the response identically to the
     in-process ``McpDispatcher`` above (design doc §5).
 
-    Unlike the other dispatchers on this legacy ``env.call_via(transport,
-    **kwargs)`` path, per-env subclasses hardcode their MCP tool name as a
-    string literal inside their dispatch override (e.g. ``ProductEnv`` calls
-    ``self._run_mcp_client("get_products", ...)``) — there is no attribute to
-    introspect it from generically, and unlike ``RestE2EDispatcher`` (which
-    reads ``env.REST_ENDPOINT``/``env.REST_METHOD``) no env exposes an MCP
-    equivalent. This dispatcher was a ``NotImplementedError`` placeholder with
-    zero callers (no env ever dispatched ``Transport.E2E_MCP`` through
-    ``call_via``), so this is not a breaking-change surface: callers must pass
-    ``tool_name=`` explicitly in kwargs, the same tool identity
-    ``AdCPTestClient.call()``'s first positional argument already requires.
+    The tool name is an explicit override or the env's declared ``MCP_TOOL``.
 
     ``signed`` is consumed and REFUSED — see ``_refuse_signed_generic_client``:
     this leg's delivery does not pass through ``wire_request``, so honoring a
@@ -532,13 +484,11 @@ class McpE2EDispatcher:
         if signed:
             _refuse_signed_generic_client(signed, Transport.E2E_MCP)
 
-        tool_name = kwargs.pop("tool_name", None)
-        if tool_name is None:
+        tool_name = kwargs.pop("tool_name", None) or getattr(env, "MCP_TOOL", None)
+        if not tool_name:
             raise MissingToolNameError(
-                "McpE2EDispatcher.dispatch requires tool_name= in kwargs (e.g. "
-                'env.call_via(Transport.E2E_MCP, tool_name="get_products", req=...)) — '
-                "there is no per-env attribute to derive it from generically. "
-                "Prefer AdCPTestClient(env).call(tool_name, payload, Transport.E2E_MCP) directly."
+                "McpE2EDispatcher needs tool_name= or env.MCP_TOOL; "
+                "use AdCPTestClient(env).call(tool, payload, Transport.E2E_MCP) for explicit dispatch."
             )
 
         credential = kwargs.pop("credential", NO_IDENTITY_OVERRIDE)

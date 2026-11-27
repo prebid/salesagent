@@ -181,7 +181,6 @@ def _seed_account_for_principal(ctx: dict, *, sandbox: bool) -> None:
     # default and the two must not disagree about how an account reference is spelled.
     if "request_kwargs" in ctx:
         ctx["request_kwargs"]["account"] = {"account_id": account.account_id}
-    ctx.setdefault("tenant_id", "sandbox_tenant" if sandbox else "prod_tenant")
 
 
 @given("the request targets a sandbox account")

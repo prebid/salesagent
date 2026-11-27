@@ -42,7 +42,7 @@ import httpx
 import pytest
 
 from src.core.http_utils import hostname_of
-from tests.e2e.conftest import e2e_ca_bundle, e2e_tls_base_url
+from tests.e2e.conftest import e2e_ca_bundle, e2e_tls_base_url, live_e2e_config
 from tests.e2e.utils import _LiveDBEnv, live_db_env, live_repo_session
 from tests.helpers.admin_session import authenticate_http_session, drop_stated_session_cookie
 from tests.helpers.credentials import credential_headers
@@ -228,13 +228,8 @@ def resolvable_signing_counterparty(live_server: dict, *, access_token: str) -> 
     from src.core.credentials import hash_token
     from src.core.database.models import Principal, Tenant
     from tests.harness.signing_capability import build_e2e_signing_capability, unique_run_id
-    from tests.harness.transport import E2EConfig
 
-    config = E2EConfig(
-        base_url=live_server["a2a"],
-        postgres_url=live_server["postgres"],
-        ca_bundle=ca_bundle(),
-    )
+    config = live_e2e_config(live_server)
     with live_repo_session(live_server) as db:
         session = db.get_session()
         # BY TOKEN HASH. ``Principal`` stores ``sha256(token)`` and a displayable prefix,

@@ -180,58 +180,24 @@ class WireError(Exception):
         super().__init__(f"wire error {code or '(no code)'}")
 
 
-def _mcp_wire_envelope(exc: Exception) -> dict | None:
-    """The two-layer envelope inside a FastMCP ``ToolError``, or ``None``.
-
-    The MCP boundary translator raises ``AdCPToolError`` (single-arg JSON envelope)
-    so FastMCP serializes ``str(exc)`` as the JSON-encoded envelope. This parses that
-    JSON and RETURNS IT. It does not rebuild an exception: the envelope is what the
-    buyer received, and it already carries code, message, recovery, suggestion, field
-    and details.
-
-    Falls back to the legacy tuple-string shape for any plain ``ToolError`` raised
-    outside the boundary translator; anything else carries no envelope.
-    """
-    import ast as _ast
+def _mcp_envelope_from_text(text: str) -> dict | None:
+    """Read a JSON error body unchanged; human and tuple text carry no envelope."""
     import json
 
-    from fastmcp.exceptions import ToolError
-
-    if not isinstance(exc, ToolError):
+    try:
+        return _wire_envelope(json.loads(text))
+    except (json.JSONDecodeError, TypeError):
         return None
 
-    error_str = str(exc)
 
-    try:
-        parsed = json.loads(error_str)
-        if isinstance(parsed, dict):
-            envelope = _wire_envelope(parsed)
-            if envelope is not None:
-                return envelope
-    except (json.JSONDecodeError, TypeError):
-        pass
+def _mcp_wire_envelope(exc: Exception) -> dict | None:
+    """Read received SDK JSON-RPC data or a legacy ToolError text body."""
+    from fastmcp.exceptions import ToolError
+    from mcp.shared.exceptions import MCPError
 
-    # Legacy shape (test fixtures that mock ToolError directly):
-    # tuple-stringified `('CODE', 'message', 'recovery', '{"details": ...}')`.
-    try:
-        tup = _ast.literal_eval(error_str)
-        if isinstance(tup, tuple) and len(tup) >= 2:
-            entry: dict = {"code": str(tup[0])}
-            if len(tup) > 3 and tup[3] is not None:
-                try:
-                    extra = json.loads(str(tup[3]))
-                    if isinstance(extra, dict):
-                        if extra.get("details") is not None:
-                            entry["details"] = extra["details"]
-                        if extra.get("field") is not None:
-                            entry["field"] = extra["field"]
-                except (json.JSONDecodeError, TypeError):
-                    pass
-            return {"adcp_error": dict(entry), "errors": [entry]}
-    except (ValueError, SyntaxError):
-        pass
-
-    return None
+    if isinstance(exc, MCPError):
+        return _wire_envelope(exc.error.data)
+    return _mcp_envelope_from_text(str(exc)) if isinstance(exc, ToolError) else None
 
 
 def _mcp_wire_error(exc: Exception, response: Any = None) -> Exception:
@@ -252,23 +218,25 @@ def _mcp_wire_error(exc: Exception, response: Any = None) -> Exception:
     return WireError(envelope, response) if envelope is not None else exc
 
 
-def _wire_envelope(envelope: dict) -> dict | None:
-    """The captured error body if it IS the two-layer envelope, else ``None``.
+def _wire_envelope(envelope: Any, *, transport_only: bool = False) -> dict | None:
+    """Retain a received transport or payload error body without filling either layer."""
+    import json
 
-    Returns what production sent, unchanged, or nothing. It reshapes no body and fills no
-    layer: ``AdcpErrorResponse.of`` (``src/core/schemas/_base.py``) "Carries the SAME error
-    object at both levels the wire expects -- ``adcp_error`` on the envelope and
-    ``errors[0]``", so a real failure response always arrives with both, and a body missing
-    one did not come from the boundary and is reported as no envelope.
-
-    Arming a fault needs a real typed exception; the adapter genuinely raises one. ASSERTING
-    an outcome never does: the envelope IS what the buyer received, so nothing here
-    reconstructs an exception from it.
-    """
     if not isinstance(envelope, dict):
         return None
-    if isinstance(envelope.get("errors"), list) and envelope["errors"]:
-        return envelope
+    payload_errors = envelope.get("errors")
+    errors = [envelope.get("adcp_error")]
+    if not transport_only and isinstance(payload_errors, list) and payload_errors:
+        errors.append(payload_errors[0])
+    for error in errors:
+        if isinstance(error, dict):
+            code = error.get("code")
+            if (
+                isinstance(code, str)
+                and 0 < len(code) <= 64
+                and len(json.dumps(error, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) <= 4096
+            ):
+                return envelope
     return None
 
 
@@ -460,8 +428,7 @@ def _a2a_jsonrpc_result(response: Any) -> dict[str, Any]:
     envelope = _jsonrpc_body(response, surface=_A2A_PATH)
     if "error" in envelope:
         error = envelope["error"]
-        data = error.get("data") if isinstance(error, dict) else None
-        wire = _wire_envelope(data) if isinstance(data, dict) else None
+        wire = _jsonrpc_error_envelope(envelope)
         if wire is not None:
             raise WireError(wire, response)
         raise WireRefusal(f"{_A2A_PATH} answered JSON-RPC error: {error!r}", response)
@@ -489,21 +456,65 @@ def _mcp_jsonrpc_request(request_id: int, method: str, params: dict[str, Any]) -
     return frame.model_dump(by_alias=True, mode="json", exclude_none=True)
 
 
-def _mcp_error_to_exception(payload: dict[str, Any]) -> Exception:
-    """The exception an MCP error frame stands for, in the shape the envelope reader takes.
+def _jsonrpc_error_envelope(frame: dict[str, Any]) -> dict | None:
+    """The error.data body shared by the MCP and A2A JSON-RPC bindings."""
+    error = frame.get("error")
+    return _wire_envelope(error.get("data")) if isinstance(error, dict) else None
 
-    :func:`_mcp_wire_envelope` reads the two-layer envelope out of the JSON FastMCP
-    puts in ``str(ToolError)``. Over HTTP that envelope arrives as the ``isError``
-    result's text content (or as a JSON-RPC ``error.message``), so it is re-wrapped in
-    a ``ToolError`` here and handed to the SAME reader the in-memory leg uses — one
-    parse, not two.
-    """
-    from fastmcp.exceptions import ToolError
 
-    for item in payload.get("content") or []:
-        if isinstance(item, dict) and isinstance(item.get("text"), str):
-            return ToolError(item["text"])
-    return ToolError(str(payload.get("message") or payload))
+def _mcp_frame_result(frame: Any, response: Any = None) -> dict[str, Any]:
+    """Read the pinned MCP detection paths in order, preserving the received body."""
+    if not isinstance(frame, dict):
+        raise WireRefusal(f"/mcp returned a non-object frame: {frame!r}", response)
+    result = frame.get("result") or {}
+    failed = isinstance(result, dict) and result.get("isError") is True
+    if "error" not in frame and not failed:
+        if not isinstance(result, dict):
+            raise WireRefusal(f"/mcp returned a non-object result: {result!r}", response)
+        return result
+
+    structured = result.get("structuredContent") if failed else None
+    # The transport discriminator has priority over the payload errors fallback.
+    wire = _wire_envelope(structured, transport_only=True)
+    if wire is None:
+        wire = _jsonrpc_error_envelope(frame)
+    text_payloads = []
+    if wire is None and failed:
+        for item in result.get("content") or []:
+            if isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str):
+                parsed = _mcp_envelope_from_text(item["text"])
+                wire = _wire_envelope(parsed, transport_only=True)
+                if wire is not None:
+                    break
+                if parsed is not None:
+                    text_payloads.append(parsed)
+    if wire is None and failed:
+        wire = _wire_envelope(structured) or _wire_envelope(result) or next(iter(text_payloads), None)
+    if wire is not None:
+        raise WireError(wire, response)
+    raise WireRefusal(f"/mcp answered without a structured AdCP error: {frame!r}", response)
+
+
+def _mcp_jsonrpc_result(response: Any) -> dict[str, Any]:
+    """Read one received HTTP frame through the shared MCP error reader."""
+    return _mcp_frame_result(_jsonrpc_body(response, surface="/mcp"), response)
+
+
+async def _call_mcp_tool(client: Any, name: str, arguments: dict[str, Any]) -> Any:
+    """Keep the SDK's structured error body before its exception mode discards it."""
+    result = await client.call_tool(name, arguments, raise_on_error=False)
+    # These are received SDK fields. The reader returns the original AdCP body,
+    # without constructing an error code or filling either error layer.
+    _mcp_frame_result(
+        {
+            "result": {
+                "isError": result.is_error,
+                "structuredContent": result.structured_content,
+                "content": [item.model_dump(mode="json", by_alias=True) for item in result.content],
+            }
+        }
+    )
+    return result
 
 
 class WireRefusal(AssertionError):
@@ -812,14 +823,20 @@ class BaseTestEnv:
 
     def __init__(
         self,
-        principal_id: str = "test_principal",
-        tenant_id: str = "test_tenant",
+        principal_id: str | None = None,
+        tenant_id: str | None = None,
         database_url: str | None = None,
         e2e_config: E2EConfig | None = None,
         **tenant_overrides: Any,
     ) -> None:
-        self._principal_id = principal_id
-        self._tenant_id = tenant_id
+        from uuid import uuid4
+
+        suffix = uuid4().hex if e2e_config else None
+        self._identity_suffix = suffix
+        self._principal_id = (
+            principal_id if principal_id is not None else f"principal_{suffix}" if suffix else "test_principal"
+        )
+        self._tenant_id = tenant_id if tenant_id is not None else f"tenant_{suffix}" if suffix else "test_tenant"
         # E2E mode: bind factories to the live server's DB so the HTTP-reached
         # server sees Given-step data. Explicit database_url wins; else the
         # e2e_config's postgres_url. None => normal cached/integration engine.
@@ -2209,7 +2226,7 @@ class BaseTestEnv:
         async def _call():
             with patch("fastmcp.server.dependencies.get_http_headers", return_value=dict(credential)) as patched:
                 async with Client(mcp) as client:
-                    result = await client.call_tool(tool_name, arguments)
+                    result = await _call_mcp_tool(client, tool_name, arguments)
                     assert patched.called, (
                         f"Auth chain not exercised for {tool_name} — get_http_headers was never called"
                     )
@@ -2221,9 +2238,9 @@ class BaseTestEnv:
         try:
             return asyncio.run(_call())
         except Exception as exc:
-            envelope = _mcp_wire_envelope(exc)
-            if envelope is not None:
-                raise WireError(envelope) from exc
+            wire_error = _mcp_wire_error(exc)
+            if wire_error is not exc:
+                raise wire_error from exc
             raise
 
     @staticmethod
@@ -2337,11 +2354,7 @@ class BaseTestEnv:
         # Both arms hand the RESPONSE to the error they raise. They used to raise the
         # reconstructed envelope alone, which strands the refusal's headers — and the
         # signature challenge lives there.
-        if "error" in envelope:
-            raise _mcp_wire_error(_mcp_error_to_exception(envelope["error"]), response)
-        result = envelope.get("result") or {}
-        if result.get("isError"):
-            raise _mcp_wire_error(_mcp_error_to_exception(result), response)
+        result = _mcp_jsonrpc_result(response)
         structured = result.get("structuredContent")
         if structured is None:
             raise AssertionError(f"MCP tools/call for {tool_name!r} returned no structuredContent: {result!r}")
@@ -3355,6 +3368,20 @@ class IntegrationEnv(BaseTestEnv):
             self._commit_factory_data()
         return tenant
 
+    def ensure_principal(self, tenant: Any, principal_id: str | None = None, **fields: Any) -> Any:
+        """Get or create one principal in the supplied tenant through the bound factories."""
+        from src.core.database.models import Principal
+        from tests.factories import PrincipalFactory
+        from tests.factories.core import get_or_create
+
+        principal_id = self._principal_id if principal_id is None else principal_id
+        return get_or_create(
+            self,
+            Principal,
+            {"tenant_id": tenant.tenant_id, "principal_id": principal_id},
+            lambda: PrincipalFactory(tenant=tenant, principal_id=principal_id, **fields),
+        )
+
     def setup_default_data(self, **tenant_kwargs: Any) -> tuple[Any, Any]:
         """Get-or-create this env's own tenant + principal: :meth:`setup_party` with the env's ids."""
         return self.setup_party(self._tenant_id, self._principal_id, **tenant_kwargs)
@@ -3382,16 +3409,11 @@ class IntegrationEnv(BaseTestEnv):
         from sqlalchemy import select
 
         from src.core.database.models import AdapterConfig as DBAdapterConfig
-        from src.core.database.models import Principal
-        from tests.factories import AdapterConfigFactory, PrincipalFactory
+        from tests.factories import AdapterConfigFactory
 
         tenant = self.ensure_tenant(tenant_id, **tenant_kwargs)
 
-        principal = self._session.scalars(
-            select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
-        ).first()
-        if principal is None:
-            principal = PrincipalFactory(tenant=tenant, principal_id=principal_id)
+        principal = self.ensure_principal(tenant, principal_id)
 
         # AN ``adapter_config`` ROW, because EVERY production tenant has one and a fixture
         # without one is state production cannot be in. Every creation path writes it --
@@ -3560,6 +3582,11 @@ class IntegrationEnv(BaseTestEnv):
         code it is grading.
         """
         return self._tenant_id
+
+    @property
+    def principal_id(self) -> str:
+        """The principal whose credential this environment presents."""
+        return self._principal_id
 
     def get_session(self) -> Session:
         """Return the env-bound SQLAlchemy session for read-back assertions.

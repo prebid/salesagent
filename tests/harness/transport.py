@@ -206,6 +206,47 @@ class E2EConfig:
     ca_bundle: str | None = None
     server_host: str | None = None
 
+    @classmethod
+    def from_environment(cls, *, per_worker: bool = False) -> E2EConfig | None:
+        """Read one stack configuration, refusing a configured stack that fails health."""
+        import os
+        import re
+        import ssl
+        from pathlib import Path
+
+        import httpx
+
+        base_url = os.environ.get("E2E_BASE_URL")
+        postgres_url = os.environ.get("E2E_POSTGRES_URL")
+        if not base_url:
+            return None
+        if not postgres_url:
+            raise RuntimeError("The configured E2E stack requires E2E_POSTGRES_URL")
+        ca_bundle = os.environ.get("E2E_CA_BUNDLE")
+        tls_base_url = os.environ.get("E2E_TLS_BASE_URL")
+        server_host = os.environ.get("E2E_SERVER_HOST")
+        worker = os.environ.get("PYTEST_XDIST_WORKER", "")
+        if per_worker and os.environ.get("E2E_PER_WORKER") == "1" and worker.startswith("gw"):
+            project = os.environ.get("COMPOSE_PROJECT_NAME", "")
+            prefix = f"{project}-" if project else ""
+            server_host = f"{prefix}server-{worker}"
+            base_url = f"http://{server_host}:8080"
+            postgres_url = re.sub(r"/[^/?]+(\?|$)", rf"/adcp_{worker}\1", postgres_url, count=1)
+            if tls_base_url:
+                tls_base_url = f"https://{prefix}tls-{worker}.adcp.test:8443"
+        verify = {}
+        if base_url.startswith("https://") and ca_bundle and Path(ca_bundle).is_file():
+            verify["verify"] = ssl.create_default_context(cafile=ca_bundle)
+        try:
+            httpx.get(f"{base_url}/health", timeout=5, **verify).raise_for_status()
+        except (httpx.TransportError, ssl.SSLError) as exc:
+            raise RuntimeError(
+                f"The configured E2E stack is unreachable at {base_url}/health (E2E_CA_BUNDLE={ca_bundle!r})"
+            ) from exc
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(f"The configured E2E stack failed health at {base_url}/health") from exc
+        return cls(base_url, postgres_url, tls_base_url, ca_bundle, server_host)
+
 
 # The two values TransportResult.envelope["status"] may take. A DERIVED enum,
 # never a synthesized HTTP status_code: fabricating an integer for MCP/A2A would
@@ -640,6 +681,29 @@ class TransportResult:
                     f"hint at the top level of the error object: {envelope}"
                 )
 
+    def _challenge_response(self, code: str) -> Any:
+        """Require a refused dispatch and the HTTP response that carries its challenge."""
+        assert self.is_error, f"Expected {code}, but the request succeeded"
+        response = self.raw_response
+        assert response is not None and hasattr(response, "status_code") and hasattr(response, "headers"), (
+            f"No raw HTTP response carries the {code} challenge"
+        )
+        return response
+
+    def assert_auth_challenge(self, code: str) -> None:
+        """Grade the real HTTP bearer refusal, including its supported scheme.
+
+        AdCP security storyboard probe_unauth requires a challenge on 401.
+        This seller uses Bearer and distinguishes an invalid token per RFC 6750.
+        """
+        expected = {"AUTH_MISSING": "Bearer", "AUTH_INVALID": 'Bearer error="invalid_token"'}
+        assert code in expected, f"Unsupported bearer refusal code: {code!r}"
+        response = self._challenge_response(code)
+        assert response.status_code == 401, f"Expected HTTP 401 for {code}, got {response.status_code}"
+        assert response.headers.get("WWW-Authenticate") == expected[code], (
+            f"Expected {expected[code]!r}, got {response.headers.get('WWW-Authenticate')!r}"
+        )
+
     def assert_signature_challenge(self, code: str, *, recovery: str) -> None:
         """Assert the VERIFIER refused this dispatch with ``WWW-Authenticate: Signature error="<code>"``.
 
@@ -693,30 +757,7 @@ class TransportResult:
             f"{', '.join(sorted(c for c in canonical if code.split('_')[-1] in c)) or 'see tests.helpers.signing.request_signature_codes'}?"
         )
 
-        response = self.raw_response
-
-        # Lead with the ACCEPTED case. A result that succeeded is not a missing wire —
-        # it is the finding: the seller waved through a request this scenario says it
-        # must refuse. Diagnosing that as "the env has no signing capability" sends the
-        # reader hunting a harness bug and past the defect, which is the failure mode
-        # this whole surface exists to end (a misdiagnosis of this exact shape survived green CI for that
-        # reason). Order matters: is_error is checkable on every transport, raw_response
-        # is not.
-        assert self.is_error, (
-            f"Expected the {code!r} signature challenge, but the request was ACCEPTED "
-            f"(is_error=False, payload={self.payload!r}). The seller did not refuse a request this "
-            "scenario requires it to refuse. If sibling transports DO refuse the same request, that "
-            "asymmetry is the finding — the operation never reached a graded posture bucket on this "
-            "one, so nothing forced a signature. Read it as a production defect until proven otherwise."
-        )
-
-        assert response is not None and hasattr(response, "status_code") and hasattr(response, "headers"), (
-            f"Expected the {code!r} signature challenge, and this result IS an error "
-            f"(error={self.error!r}) — but it carries no raw HTTP response to read WWW-Authenticate "
-            f"from (raw_response={response!r}). Either the env has no signing capability — call "
-            "env.enable_request_signing() so the leg dispatches over real HTTP instead of in-process — "
-            "or the dispatcher dropped the response. Refusing to grade the refusal on anything else."
-        )
+        response = self._challenge_response(code)
 
         actual = rejection_code(response)
         assert actual == code, (

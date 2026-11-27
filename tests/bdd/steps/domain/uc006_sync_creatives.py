@@ -506,35 +506,7 @@ def _action_str(action: object) -> str:
 
 
 def _ensure_tenant_principal_from_db(ctx: dict, env: object) -> None:
-    """Like _ensure_tenant_principal, but resolve existing DB rows first.
-
-    When a prior Given step (e.g., ``the Buyer is authenticated as principal "X"``)
-    triggers ``_ensure_default_data_for_auth``, the tenant and principal are
-    created in the DB but not stored in ctx. Calling ``setup_default_data()``
-    again would fail with a duplicate-key error. This helper checks the DB first.
-    """
-    if "tenant" in ctx:
-        return
-
-    session = env.get_session()
-    if session is not None:
-        from sqlalchemy import select
-
-        from src.core.database.models import Principal, Tenant
-
-        tenant = session.scalars(select(Tenant).filter_by(tenant_id=env._tenant_id)).first()
-        if tenant is not None:
-            principal = session.scalars(
-                select(Principal).filter_by(
-                    principal_id=env._principal_id,
-                    tenant_id=env._tenant_id,
-                )
-            ).first()
-            if principal is not None:
-                ctx["tenant"] = tenant
-                ctx["principal"] = principal
-                return
-
+    """The shared bootstrap reuses rows already seeded by authentication."""
     ensure_tenant_principal(ctx, env)
 
 
@@ -606,7 +578,7 @@ def then_proceed_with_resolved_account(ctx: dict) -> None:
 
     creative = env.get_one(
         CreativeModel,
-        tenant_id=ctx.get("tenant_id", "test_tenant"),
+        tenant_id=env.tenant_id,
         creative_id=creative_id,
     )
     assert creative is not None, (
@@ -4287,26 +4259,12 @@ def given_creative_exists_for_principal(ctx: dict, creative_id: str, principal_i
     principal may differ from the authenticated one (INV-2 seeds the OTHER
     principal's creative), so it gets its own get-or-create row.
     """
-    from src.core.database.models import Principal, Tenant
-    from tests.factories import CreativeFactory, PrincipalFactory, TenantFactory
-    from tests.factories.core import get_or_create
+    from tests.factories import CreativeFactory
 
     env = ctx["env"]
-    tenant = ctx.get("tenant")
-    if tenant is None:
-        tenant = get_or_create(
-            env,
-            Tenant,
-            {"tenant_id": env._tenant_id},
-            lambda: TenantFactory(tenant_id=env._tenant_id),
-        )
-        ctx["tenant"] = tenant
-    principal = get_or_create(
-        env,
-        Principal,
-        {"principal_id": principal_id, "tenant_id": tenant.tenant_id},
-        lambda: PrincipalFactory(tenant=tenant, principal_id=principal_id),
-    )
+    tenant = env.ensure_tenant()
+    ctx.setdefault("tenant", tenant)
+    principal = env.ensure_principal(tenant, principal_id)
     ctx.setdefault("principal", principal)
     creative = CreativeFactory(
         tenant=tenant,
@@ -5646,7 +5604,7 @@ def then_creative_has_generated_content(ctx: dict) -> None:
     db_creative = session.scalars(
         select(CreativeModel).filter_by(
             creative_id=creative_id,
-            tenant_id=env._tenant_id,
+            tenant_id=env.tenant_id,
         )
     ).first()
     assert db_creative is not None, f"Creative {creative_id} not found in DB"
@@ -5715,7 +5673,7 @@ def then_existing_data_preserved(ctx: dict) -> None:
     db_creative = session.scalars(
         select(CreativeModel).filter_by(
             creative_id=creative_id,
-            tenant_id=env._tenant_id,
+            tenant_id=env.tenant_id,
         )
     ).first()
     assert db_creative is not None, f"Creative {creative_id} not found in DB after update"
@@ -5745,7 +5703,7 @@ def _stored_assets_for_last_creative(ctx: dict) -> dict:
     creative_id = latest_creative_id(ctx)
     with _readback(ctx) as session:
         db_creative = session.scalars(
-            select(CreativeModel).filter_by(creative_id=creative_id, tenant_id=env._tenant_id)
+            select(CreativeModel).filter_by(creative_id=creative_id, tenant_id=env.tenant_id)
         ).first()
         assert db_creative is not None, f"Creative {creative_id} not found in DB"
         return (db_creative.data or {}).get("assets", {})
@@ -5976,17 +5934,7 @@ def when_sync_creative_as_principal(ctx: dict, creative_id: str, principal_id: s
     # (e.g. buyer-B) still needs a DB row — the pre-existing creative's Given
     # seeded only the OTHER principal. Without it the new creative's insert
     # violates the principals FK and the sync reports action='failed'.
-    from src.core.database.models import Principal
-    from tests.factories import PrincipalFactory
-    from tests.factories.core import get_or_create
-
-    tenant = ctx["tenant"]
-    get_or_create(
-        env,
-        Principal,
-        {"principal_id": principal_id, "tenant_id": tenant.tenant_id},
-        lambda: PrincipalFactory(tenant=tenant, principal_id=principal_id),
-    )
+    env.ensure_principal(ctx["tenant"], principal_id)
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id=creative_id,
         name=f"Synced creative {creative_id}",
@@ -6010,18 +5958,11 @@ def when_sync_cross_principal_assignment(ctx: dict) -> None:
     exists to grade, and the refusal it got instead read as a production bug.
     A spec-valid request is the only one that reaches the behavior under test.
     """
-    from src.core.database.models import Principal
-    from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory
-    from tests.factories.core import get_or_create
+    from tests.factories import MediaBuyFactory, MediaPackageFactory
 
     env = ctx["env"]
     tenant = ctx["tenant"]
-    authenticated = get_or_create(
-        env,
-        Principal,
-        {"principal_id": env._principal_id, "tenant_id": tenant.tenant_id},
-        lambda: PrincipalFactory(tenant=tenant, principal_id=env._principal_id),
-    )
+    authenticated = env.ensure_principal(tenant)
     media_buy = MediaBuyFactory(tenant=tenant, principal=authenticated)
     pkg = MediaPackageFactory(media_buy=media_buy)
     env._commit_factory_data()
@@ -6804,28 +6745,13 @@ def _preseed_creative_for_principal(ctx: dict, creative_id: str, principal_id: s
     in the DB under (tenant_id, principal_id, creative_id) so that the sync
     operation can find it (update) or not (create for a different principal).
     """
-    from sqlalchemy import select
-
-    from src.core.database.models import Principal, Tenant
     from tests.factories import CreativeFactory
 
     env = ctx["env"]
     _ensure_tenant_principal_from_db(ctx, env)
-
-    # Retrieve tenant from DB (created by auth step)
-    with db_session(ctx) as session:
-        tenant = session.scalars(select(Tenant).filter_by(tenant_id=env._tenant_id)).first()
-        assert tenant is not None, f"Tenant {env._tenant_id!r} not found — auth step should have created it"
-
-        # The principal owning the pre-existing creative may differ from the
-        # authenticated principal (cross-principal isolation tests).
-        owner_principal = session.scalars(
-            select(Principal).filter_by(principal_id=principal_id, tenant_id=env._tenant_id)
-        ).first()
-
-    if owner_principal is None:
-        owner_principal = PrincipalFactory(tenant=tenant, principal_id=principal_id)
-        env._commit_factory_data()
+    tenant = ctx["tenant"]
+    owner_principal = env.ensure_principal(tenant, principal_id)
+    env._commit_factory_data()
 
     CreativeFactory(
         tenant=tenant,
@@ -6933,7 +6859,7 @@ def then_new_creative_created_for_principal_scope(ctx: dict, principal_id: str) 
     with _readback(ctx) as session:
         creative = session.scalars(
             select(Creative).filter_by(
-                tenant_id=env._tenant_id,
+                tenant_id=env.tenant_id,
                 principal_id=principal_id,
                 creative_id=creative_id,
             )
