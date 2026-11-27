@@ -273,13 +273,13 @@ def run_nginx():
         print(f"[Nginx] Substituting SALES_AGENT_DOMAIN={sales_agent_domain}")
 
         # Read template, substitute variables, write to active config
-        with open(config_path) as f:
+        with open(config_path, encoding="utf-8") as f:
             config_content = f.read()
 
         # Simple string substitution for ${SALES_AGENT_DOMAIN}
         config_content = config_content.replace("${SALES_AGENT_DOMAIN}", sales_agent_domain)
 
-        with open("/etc/nginx/nginx.conf", "w") as f:
+        with open("/etc/nginx/nginx.conf", "w", encoding="utf-8") as f:
             f.write(config_content)
     else:
         config_path = "/etc/nginx/nginx-single-tenant.conf"

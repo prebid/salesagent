@@ -8,9 +8,10 @@ from adcp.types import PushNotificationConfig as LibraryPushNotificationConfig
 from adcp.types import ReportingWebhook as LibraryReportingWebhook
 from factory import LazyAttribute, Sequence, SubFactory
 
-from src.core.database.models import PushNotificationConfig
-from src.core.webhooks.delivery import WebhookTaskContext
+from src.core.database.models import PushNotificationConfig, WebhookDeliveryLog
+from src.core.webhooks.delivery import SCHEDULER_SEQUENCE_TASK_TYPE, WebhookTaskContext
 from tests.factories.core import TenantFactory
+from tests.factories.media_buy import MediaBuyFactory
 from tests.factories.principal import PrincipalFactory
 from tests.factories.request import _RequestFactory
 
@@ -35,6 +36,26 @@ class PushNotificationConfigFactory(factory.alchemy.SQLAlchemyModelFactory):
     # from the URL. Defaulted here so a fixture that omits it is not silently registering a
     # webhook no conformant body can be built for.
     operation_id = Sequence(lambda n: f"op_{n:04d}")
+
+
+class WebhookDeliveryLogFactory(factory.alchemy.SQLAlchemyModelFactory):
+    class Meta:
+        model = WebhookDeliveryLog
+        sqlalchemy_session = None
+        sqlalchemy_session_persistence = "flush"
+
+    media_buy = SubFactory(MediaBuyFactory)
+    tenant = LazyAttribute(lambda o: o.media_buy.tenant)
+    principal = LazyAttribute(lambda o: o.media_buy.principal)
+    id = Sequence(lambda n: f"webhook_log_{n:04d}")
+    tenant_id = LazyAttribute(lambda o: o.media_buy.tenant_id)
+    principal_id = LazyAttribute(lambda o: o.media_buy.principal_id)
+    media_buy_id = LazyAttribute(lambda o: o.media_buy.media_buy_id)
+    webhook_url = "https://buyer.example/report"
+    task_type = SCHEDULER_SEQUENCE_TASK_TYPE
+    sequence_number = 1
+    status = "success"
+    attempt_count = 1
 
 
 class WebhookTaskContextFactory(factory.Factory):

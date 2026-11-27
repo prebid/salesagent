@@ -78,9 +78,9 @@
                 </td>
                 <td>
                     <div style="display: flex; gap: 0.5rem;">
-                        <button onclick="testAgent({{ agent.id }}, '{{ agent.name }}')" class="btn btn-secondary btn-sm">Test</button>
+                        <button onclick="testAgent({{ agent.id|tojson|forceescape }}, {{ agent.name|tojson|forceescape }})" class="btn btn-secondary btn-sm">Test</button>
                         <a href="{{ url_for('signals_agents.edit_signals_agent', tenant_id=tenant_id, agent_id=agent.id) }}" class="btn btn-secondary btn-sm">Edit</a>
-                        <button onclick="deleteAgent({{ agent.id }}, '{{ agent.name }}')" class="btn btn-danger btn-sm" style="background: #dc3545; border-color: #dc3545;">Delete</button>
+                        <button onclick="deleteAgent({{ agent.id|tojson|forceescape }}, {{ agent.name|tojson|forceescape }})" class="btn btn-danger btn-sm" style="background: #dc3545; border-color: #dc3545;">Delete</button>
                     </div>
                 </td>
             </tr>
@@ -165,7 +165,7 @@ function testAgent(agentId, agentName) {
     btn.disabled = true;
     btn.textContent = 'Testing...';
 
-    fetch(`{{ script_name }}/tenant/{{ tenant_id }}/signals-agents/${agentId}/test`, {
+    fetch(`${scriptRoot}/tenant/${ {{ tenant_id|tojson }} }/signals-agents/${agentId}/test`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
@@ -179,7 +179,7 @@ function testAgent(agentId, agentName) {
         if (data.success) {
             alert(`✅ Connection Successful!\n\nAgent: ${agentName}\nSignals Found: ${data.signal_count}\n\n${data.message}`);
         } else {
-            alert(`❌ Connection Failed\n\n${data.error}`);
+            alert(`❌ ${adminErrorText(data)}`);
         }
     })
     .catch(error => {
@@ -191,7 +191,7 @@ function testAgent(agentId, agentName) {
 
 function deleteAgent(agentId, agentName) {
     if (confirm(`Are you sure you want to delete "${agentName}"?\n\nThis will remove signal-enhanced product recommendations from this agent.`)) {
-        fetch(`{{ script_name }}/tenant/{{ tenant_id }}/signals-agents/${agentId}/delete`, {
+        fetch(`${scriptRoot}/tenant/${ {{ tenant_id|tojson }} }/signals-agents/${agentId}/delete`, {
             method: 'DELETE',
             headers: {
                 'Content-Type': 'application/json'
@@ -202,7 +202,7 @@ function deleteAgent(agentId, agentName) {
                 window.location.reload();
             } else {
                 return response.json().then(err => {
-                    alert(err.error || 'Could not delete signals agent');
+                    alert(adminErrorText(err));
                     return Promise.reject(err);
                 });
             }

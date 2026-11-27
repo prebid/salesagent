@@ -288,12 +288,12 @@ async function updateReports() {
     });
 
     try {
-        const response = await fetch(`{{ script_name }}/api/tenant/{{ tenant.tenant_id }}/gam/reporting?date_range=${dateRange}&timezone=${timezone}`, {
+        const response = await fetch(`${scriptRoot}/api/tenant/${ {{ tenant.tenant_id|tojson }} }/gam/reporting?date_range=${dateRange}&timezone=${timezone}`, {
             credentials: 'same-origin'
         });
 
         if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+            throw new Error(adminErrorText(await response.json()));
         }
 
         const result = await response.json();
@@ -423,7 +423,7 @@ function updateTableView(aggregation) {
     // Create header
     tableHeader.innerHTML = `
         <tr>
-            <th>${aggregation.charAt(0).toUpperCase() + aggregation.slice(1).replace('_', ' ')}</th>
+            <th>${escapeHtml(aggregation.charAt(0).toUpperCase() + aggregation.slice(1).replace('_', ' '))}</th>
             <th>Impressions</th>
             <th>Clicks</th>
             <th>CTR</th>
@@ -445,12 +445,12 @@ function updateTableView(aggregation) {
         // Display name based on available fields
         const displayName = row.line_item_name || row.order_name || row.advertiser_name || row.name || 'Unknown';
         tr.innerHTML = `
-            <td>${displayName}</td>
-            <td>${row.impressions.toLocaleString()}</td>
-            <td>${row.clicks.toLocaleString()}</td>
-            <td>${row.ctr.toFixed(2)}%</td>
-            <td>$${row.spend.toFixed(2)}</td>
-            <td>$${row.cpm.toFixed(2)}</td>
+            <td>${escapeHtml(displayName)}</td>
+            <td>${escapeHtml(row.impressions.toLocaleString())}</td>
+            <td>${escapeHtml(row.clicks.toLocaleString())}</td>
+            <td>${escapeHtml(row.ctr.toFixed(2))}%</td>
+            <td>$${escapeHtml(row.spend.toFixed(2))}</td>
+            <td>$${escapeHtml(row.cpm.toFixed(2))}</td>
         `;
         tableBody.appendChild(tr);
     });
@@ -611,12 +611,12 @@ async function updateCountryHeatmap() {
         if (adUnitId) params += `&ad_unit_id=${adUnitId}`;
 
         // Fetch country breakdown data
-        const response = await fetch(`{{ script_name }}/api/tenant/{{ tenant.tenant_id }}/gam/reporting/countries?${params}`, {
+        const response = await fetch(`${scriptRoot}/api/tenant/${ {{ tenant.tenant_id|tojson }} }/gam/reporting/countries?${params}`, {
             credentials: 'same-origin'
         });
 
         if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+            throw new Error(adminErrorText(await response.json()));
         }
 
         const result = await response.json();
@@ -640,11 +640,11 @@ async function updateCountryHeatmap() {
             countries.slice(0, 20).forEach(country => {
                 const row = tbody.insertRow();
                 row.innerHTML = `
-                    <td>${country.country || 'Unknown'}</td>
-                    <td>${country.impressions.toLocaleString()}</td>
-                    <td>$${country.spend.toFixed(2)}</td>
-                    <td>$${country.avg_cpm.toFixed(2)}</td>
-                    <td>${country.ctr.toFixed(2)}%</td>
+                    <td>${escapeHtml(country.country || 'Unknown')}</td>
+                    <td>${escapeHtml(country.impressions.toLocaleString())}</td>
+                    <td>$${escapeHtml(country.spend.toFixed(2))}</td>
+                    <td>$${escapeHtml(country.avg_cpm.toFixed(2))}</td>
+                    <td>${escapeHtml(country.ctr.toFixed(2))}%</td>
                 `;
             });
         }
@@ -726,11 +726,11 @@ function updateMapMarkers(map, countryData) {
             }).addTo(map);
 
             marker.bindPopup(`
-                <strong>${country.country}</strong><br>
-                Impressions: ${country.impressions.toLocaleString()}<br>
-                CPM: $${country.avg_cpm.toFixed(2)}<br>
-                Spend: $${country.spend.toFixed(2)}<br>
-                CTR: ${country.ctr.toFixed(2)}%
+                <strong>${escapeHtml(country.country)}</strong><br>
+                Impressions: ${escapeHtml(country.impressions.toLocaleString())}<br>
+                CPM: $${escapeHtml(country.avg_cpm.toFixed(2))}<br>
+                Spend: $${escapeHtml(country.spend.toFixed(2))}<br>
+                CTR: ${escapeHtml(country.ctr.toFixed(2))}%
             `);
         }
     });
@@ -785,15 +785,15 @@ function addMapLegend(map, minCPM, maxCPM) {
             <div style="font-weight: bold; margin-bottom: 5px;">CPM Range</div>
             <div style="display: flex; align-items: center; margin-bottom: 3px;">
                 <div style="width: 20px; height: 10px; background: rgb(255, 0, 0); margin-right: 5px; border: 1px solid #ccc;"></div>
-                <span>$${minCPM.toFixed(2)} (Low)</span>
+                <span>$${escapeHtml(minCPM.toFixed(2))} (Low)</span>
             </div>
             <div style="display: flex; align-items: center; margin-bottom: 3px;">
                 <div style="width: 20px; height: 10px; background: rgb(255, 255, 0); margin-right: 5px; border: 1px solid #ccc;"></div>
-                <span>$${midCPM.toFixed(2)}</span>
+                <span>$${escapeHtml(midCPM.toFixed(2))}</span>
             </div>
             <div style="display: flex; align-items: center;">
                 <div style="width: 20px; height: 10px; background: rgb(0, 255, 0); margin-right: 5px; border: 1px solid #ccc;"></div>
-                <span>$${maxCPM.toFixed(2)} (High)</span>
+                <span>$${escapeHtml(maxCPM.toFixed(2))} (High)</span>
             </div>
         `;
 
@@ -901,12 +901,12 @@ async function updateAdUnitAnalysis() {
         if (advertiserId) params += `&advertiser_id=${advertiserId}`;
 
         // Fetch ad unit breakdown data
-        const response = await fetch(`{{ script_name }}/api/tenant/{{ tenant.tenant_id }}/gam/reporting/ad-units?${params}`, {
+        const response = await fetch(`${scriptRoot}/api/tenant/${ {{ tenant.tenant_id|tojson }} }/gam/reporting/ad-units?${params}`, {
             credentials: 'same-origin'
         });
 
         if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+            throw new Error(adminErrorText(await response.json()));
         }
 
         const result = await response.json();
@@ -930,11 +930,11 @@ async function updateAdUnitAnalysis() {
                 const fillRate = adUnit.impressions > 0 ? '100%' : '0%'; // Simplified fill rate
                 const row = tbody.insertRow();
                 row.innerHTML = `
-                    <td title="${adUnit.ad_unit_id}">${adUnit.ad_unit_name || adUnit.ad_unit_id || 'Unknown'}</td>
-                    <td>${adUnit.impressions.toLocaleString()}</td>
-                    <td>$${adUnit.spend.toFixed(2)}</td>
-                    <td>$${adUnit.avg_cpm.toFixed(2)}</td>
-                    <td>${fillRate}</td>
+                    <td title="${escapeHtml(adUnit.ad_unit_id)}">${escapeHtml(adUnit.ad_unit_name || adUnit.ad_unit_id || 'Unknown')}</td>
+                    <td>${escapeHtml(adUnit.impressions.toLocaleString())}</td>
+                    <td>$${escapeHtml(adUnit.spend.toFixed(2))}</td>
+                    <td>$${escapeHtml(adUnit.avg_cpm.toFixed(2))}</td>
+                    <td>${escapeHtml(fillRate)}</td>
                 `;
             });
         }
@@ -1181,7 +1181,7 @@ async function populateAllFilters() {
 
     try {
         // Fetch base report to get advertisers
-        const baseResponse = await fetch(`{{ script_name }}/api/tenant/{{ tenant.tenant_id }}/gam/reporting?date_range=${dateRange}&timezone=${timezone}`, {
+        const baseResponse = await fetch(`${scriptRoot}/api/tenant/${ {{ tenant.tenant_id|tojson }} }/gam/reporting?date_range=${dateRange}&timezone=${timezone}`, {
             credentials: 'same-origin'
         });
 
@@ -1216,7 +1216,7 @@ async function populateAllFilters() {
         }
 
         // Fetch country data to populate country filter
-        const countryResponse = await fetch(`{{ script_name }}/api/tenant/{{ tenant.tenant_id }}/gam/reporting/countries?date_range=${dateRange}&timezone=${timezone}`, {
+        const countryResponse = await fetch(`${scriptRoot}/api/tenant/${ {{ tenant.tenant_id|tojson }} }/gam/reporting/countries?date_range=${dateRange}&timezone=${timezone}`, {
             credentials: 'same-origin'
         });
 
@@ -1239,7 +1239,7 @@ async function populateAllFilters() {
         }
 
         // Fetch ad unit data to populate ad unit filter
-        const adUnitResponse = await fetch(`{{ script_name }}/api/tenant/{{ tenant.tenant_id }}/gam/reporting/ad-units?date_range=${dateRange}&timezone=${timezone}`, {
+        const adUnitResponse = await fetch(`${scriptRoot}/api/tenant/${ {{ tenant.tenant_id|tojson }} }/gam/reporting/ad-units?date_range=${dateRange}&timezone=${timezone}`, {
             credentials: 'same-origin'
         });
 

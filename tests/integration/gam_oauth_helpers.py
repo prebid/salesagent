@@ -6,26 +6,30 @@ flow and comes back with the state it was issued" is written once. Since #2205 t
 callback denies anything else before it exchanges the code, so every test that
 wants to reach the exchange has to arrive this way.
 
-``log_in`` sets only ``session["user"]`` — none of the ``test_user`` /
-``test_tenant_id`` keys that ``require_tenant_access`` accepts in test mode — so a
-request that passes did so on membership.
+``log_in`` sets only ``session["user"]``. It sets neither ``test_user`` nor
+``test_tenant_id``, which ``require_tenant_access`` accepts in test mode. A request
+that passes did so on membership.
 """
 
 from __future__ import annotations
 
 from urllib.parse import parse_qs, urlsplit
 
+from tests.harness.admin_client import BROWSER_PAGE_HEADERS
+from tests.helpers.admin_session import tenant_user_session
+
 AUTH_CODE = "4/single-use-authorization-code"
 
 
 def log_in(client, user) -> None:
     """Authenticate *client* as *user* with a plain session and no test-mode keys."""
-    with client.session_transaction() as sess:
-        sess["user"] = {"email": user.email}
+    tenant_user_session(client, user.email)
 
 
 def authorize(client, tenant_id: str, *, script_root: str = ""):
-    return client.get(f"/auth/gam/authorize/{tenant_id}", environ_overrides={"SCRIPT_NAME": script_root})
+    return client.get(
+        f"/auth/gam/authorize/{tenant_id}", headers=BROWSER_PAGE_HEADERS, environ_overrides={"SCRIPT_NAME": script_root}
+    )
 
 
 def start_flow(client, tenant_id: str, *, script_root: str = "") -> str:
@@ -41,6 +45,7 @@ def callback(client, state: str, *, script_root: str = ""):
     return client.get(
         "/auth/gam/callback",
         query_string={"code": AUTH_CODE, "state": state},
+        headers=BROWSER_PAGE_HEADERS,
         environ_overrides={"SCRIPT_NAME": script_root},
     )
 

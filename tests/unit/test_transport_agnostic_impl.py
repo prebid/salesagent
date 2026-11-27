@@ -33,7 +33,7 @@ def _find_impl_functions(file_path: Path) -> list[tuple[str, ast.FunctionDef]]:
     ``_impl`` for any caller to reach.
     """
     try:
-        source = file_path.read_text()
+        source = file_path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return []
     tree = ast.parse(source, filename=str(file_path))

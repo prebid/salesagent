@@ -186,15 +186,9 @@ console.log('GAM Line Item Viewer script loaded');
 let currentLineItemData = null;
 let customTargetingMappings = null;
 
-// HTML escaping function to prevent XSS
-function escapeHtml(unsafe) {
-    if (unsafe === null || unsafe === undefined) return 'N/A';
-    return String(unsafe)
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
+// A missing value reads "N/A" on this page. Escaping is the shared escapeHtml() (static/js/escape_html.js).
+function orNA(value) {
+    return value === null || value === undefined ? 'N/A' : value;
 }
 
 // Format number with thousand separators
@@ -207,7 +201,7 @@ function formatNumber(num) {
 function parseCustomTargeting(customTargeting) {
     if (!customTargeting) return null;
 
-    let html = '';
+    let treeHtml = '';
 
     function parseNode(node, depth = 0) {
         const indent = depth * 20;
@@ -215,14 +209,14 @@ function parseCustomTargeting(customTargeting) {
 
         if (node.logicalOperator) {
             // This is a group node
-            nodeHtml += `<div style="margin-left: ${indent}px; margin-bottom: 10px;">`;
-            nodeHtml += `<span class="badge bg-primary">${escapeHtml(node.logicalOperator)}</span>`;
+            nodeHtml += `<div style="margin-left: ${escapeHtml(indent)}px; margin-bottom: 10px;">`;
+            nodeHtml += `<span class="badge bg-primary">${escapeHtml(orNA(node.logicalOperator))}</span>`;
 
             if (node.children && node.children.length > 0) {
                 nodeHtml += '<div class="mt-2">';
                 node.children.forEach((child, index) => {
                     if (index > 0 && !child.logicalOperator) {
-                        nodeHtml += `<div style="margin-left: ${indent + 20}px; margin-bottom: 5px;"><span class="text-muted">${escapeHtml(node.logicalOperator)}</span></div>`;
+                        nodeHtml += `<div style="margin-left: ${escapeHtml(indent + 20)}px; margin-bottom: 5px;"><span class="text-muted">${escapeHtml(orNA(node.logicalOperator))}</span></div>`;
                     }
                     nodeHtml += parseNode(child, depth + 1);
                 });
@@ -231,18 +225,18 @@ function parseCustomTargeting(customTargeting) {
             nodeHtml += '</div>';
         } else if (node.keyId !== undefined) {
             // This is a key-value node
-            nodeHtml += `<div style="margin-left: ${indent}px; margin-bottom: 8px;" class="key-value-item">`;
+            nodeHtml += `<div style="margin-left: ${escapeHtml(indent)}px; margin-bottom: 8px;" class="key-value-item">`;
             nodeHtml += '<div class="d-flex align-items-center">';
 
             // Key - try to get name from mappings
             const keyId = String(node.keyId);
             const keyInfo = customTargetingMappings?.keys?.[keyId];
             const keyDisplay = keyInfo ? `${keyInfo.name} (${keyInfo.displayName})` : `Key ID: ${keyId}`;
-            nodeHtml += `<span class="badge bg-secondary me-2">${escapeHtml(keyDisplay)}</span>`;
+            nodeHtml += `<span class="badge bg-secondary me-2">${escapeHtml(orNA(keyDisplay))}</span>`;
 
             // Operator
             const operatorDisplay = node.operator === 'IS_NOT' ? 'IS NOT' : (node.operator || 'IS');
-            nodeHtml += `<span class="badge bg-info me-2">${escapeHtml(operatorDisplay)}</span>`;
+            nodeHtml += `<span class="badge bg-info me-2">${escapeHtml(orNA(operatorDisplay))}</span>`;
 
             // Values - try to get names from mappings
             if (node.valueIds && node.valueIds.length > 0) {
@@ -252,11 +246,11 @@ function parseCustomTargeting(customTargeting) {
                     return valueInfo ? valueInfo.displayName || valueInfo.name : valueId;
                 });
                 nodeHtml += '<span class="badge bg-success">';
-                nodeHtml += valueDisplays.map(v => escapeHtml(v)).join(', ');
+                nodeHtml += valueDisplays.map(v => escapeHtml(orNA(v))).join(', ');
                 nodeHtml += '</span>';
             } else if (node.values && node.values.length > 0) {
                 nodeHtml += '<span class="badge bg-success">Values: ';
-                nodeHtml += node.values.map(v => escapeHtml(v.name || v)).join(', ');
+                nodeHtml += node.values.map(v => escapeHtml(orNA(v.name || v))).join(', ');
                 nodeHtml += '</span>';
             }
 
@@ -268,9 +262,9 @@ function parseCustomTargeting(customTargeting) {
     }
 
     // Start parsing from the root
-    html = parseNode(customTargeting);
+    treeHtml = parseNode(customTargeting);
 
-    return html || null;
+    return treeHtml || null;
 }
 
 // Load line item if ID is provided in URL
@@ -301,7 +295,7 @@ window.addEventListener('DOMContentLoaded', function() {
 
 async function fetchCustomTargetingMappings() {
     try {
-        const response = await fetch('{{ script_name }}/api/tenant/{{ tenant_id }}/gam/custom-targeting-keys', {
+        const response = await fetch(scriptRoot + '/api/tenant/' + {{ tenant_id|tojson }} + '/gam/custom-targeting-keys', {
             method: 'GET',
             credentials: 'include',
             headers: {
@@ -329,7 +323,7 @@ async function loadLineItem() {
     }
 
     // Update URL
-    window.history.pushState({}, '', `{{ request.script_root }}/tenant/{{ tenant_id }}/gam/line-item/${lineItemId}`);
+    window.history.pushState({}, '', `${scriptRoot}/tenant/${ {{ tenant_id|tojson }} }/gam/line-item/${lineItemId}`);
 
     // Show loading
     document.getElementById('loading').style.display = 'block';
@@ -343,7 +337,7 @@ async function loadLineItem() {
 
     try {
         console.log('Fetching line item from API...');
-        const response = await fetch(`{{ script_name }}/api/tenant/{{ tenant_id }}/gam/line-item/${lineItemId}`, {
+        const response = await fetch(`${scriptRoot}/api/tenant/${ {{ tenant_id|tojson }} }/gam/line-item/${lineItemId}`, {
             method: 'GET',
             credentials: 'include',
             headers: {
@@ -364,15 +358,7 @@ async function loadLineItem() {
         }
 
         if (!response.ok) {
-            let errorMsg = 'Failed to fetch line item';
-            try {
-                const error = await response.json();
-                errorMsg = error.error || errorMsg;
-            } catch (e) {
-                // Response wasn't JSON
-                errorMsg = `HTTP ${response.status}: ${response.statusText}`;
-            }
-            throw new Error(errorMsg);
+            throw new Error(adminErrorText(await response.json()));
         }
 
         currentLineItemData = await response.json();
@@ -453,12 +439,12 @@ function displayLineItemData(data) {
 function displayBasicInfo(lineItem) {
     const tbody = document.getElementById('basicInfo');
     tbody.innerHTML = `
-        <tr><td><strong>Line Item ID:</strong></td><td>${escapeHtml(lineItem.id)}</td></tr>
-        <tr><td><strong>Name:</strong></td><td>${escapeHtml(lineItem.name)}</td></tr>
-        <tr><td><strong>Type:</strong></td><td>${escapeHtml(lineItem.lineItemType)}</td></tr>
-        <tr><td><strong>Status:</strong></td><td><span class="badge bg-${getStatusBadgeClass(lineItem.status)}">${escapeHtml(lineItem.status)}</span></td></tr>
-        <tr><td><strong>Priority:</strong></td><td>${escapeHtml(lineItem.priority)}</td></tr>
-        <tr><td><strong>External ID:</strong></td><td>${escapeHtml(lineItem.externalId)}</td></tr>
+        <tr><td><strong>Line Item ID:</strong></td><td>${escapeHtml(orNA(lineItem.id))}</td></tr>
+        <tr><td><strong>Name:</strong></td><td>${escapeHtml(orNA(lineItem.name))}</td></tr>
+        <tr><td><strong>Type:</strong></td><td>${escapeHtml(orNA(lineItem.lineItemType))}</td></tr>
+        <tr><td><strong>Status:</strong></td><td><span class="badge bg-${escapeHtml(getStatusBadgeClass(lineItem.status))}">${escapeHtml(orNA(lineItem.status))}</span></td></tr>
+        <tr><td><strong>Priority:</strong></td><td>${escapeHtml(orNA(lineItem.priority))}</td></tr>
+        <tr><td><strong>External ID:</strong></td><td>${escapeHtml(orNA(lineItem.externalId))}</td></tr>
     `;
 }
 
@@ -470,11 +456,11 @@ function displayOrderInfo(order) {
     }
 
     tbody.innerHTML = `
-        <tr><td><strong>Order ID:</strong></td><td>${escapeHtml(order.id)}</td></tr>
-        <tr><td><strong>Order Name:</strong></td><td>${escapeHtml(order.name)}</td></tr>
-        <tr><td><strong>Advertiser:</strong></td><td>${escapeHtml(order.advertiserId)}</td></tr>
-        <tr><td><strong>Trafficker:</strong></td><td>${escapeHtml(order.traffickerId)}</td></tr>
-        <tr><td><strong>Status:</strong></td><td><span class="badge bg-${getStatusBadgeClass(order.status)}">${escapeHtml(order.status)}</span></td></tr>
+        <tr><td><strong>Order ID:</strong></td><td>${escapeHtml(orNA(order.id))}</td></tr>
+        <tr><td><strong>Order Name:</strong></td><td>${escapeHtml(orNA(order.name))}</td></tr>
+        <tr><td><strong>Advertiser:</strong></td><td>${escapeHtml(orNA(order.advertiserId))}</td></tr>
+        <tr><td><strong>Trafficker:</strong></td><td>${escapeHtml(orNA(order.traffickerId))}</td></tr>
+        <tr><td><strong>Status:</strong></td><td><span class="badge bg-${escapeHtml(getStatusBadgeClass(order.status))}">${escapeHtml(orNA(order.status))}</span></td></tr>
     `;
 }
 
@@ -498,15 +484,15 @@ function displayPricingInfo(lineItem) {
     const deliveryPercentage = goal > 0 ? (impressionsDelivered / goal * 100).toFixed(1) : 0;
 
     tbody.innerHTML = `
-        <tr><td><strong>Cost Type:</strong></td><td>${lineItem.costType}</td></tr>
-        <tr><td><strong>CPM:</strong></td><td>$${cpm.toFixed(2)}</td></tr>
-        <tr><td><strong>Units Bought (Goal):</strong></td><td>${goal.toLocaleString()}</td></tr>
-        <tr><td><strong>Impressions Delivered:</strong></td><td>${impressionsDelivered.toLocaleString()} (${deliveryPercentage}%)</td></tr>
-        <tr><td><strong>Clicks Delivered:</strong></td><td>${clicksDelivered.toLocaleString()}</td></tr>
-        <tr><td><strong>Total Budget:</strong></td><td>$${((goal) * cpm / 1000).toFixed(2)}</td></tr>
-        <tr><td><strong>Spent (Est.):</strong></td><td>$${((impressionsDelivered) * cpm / 1000).toFixed(2)}</td></tr>
-        <tr><td><strong>Discount:</strong></td><td>${lineItem.discount || 0}%</td></tr>
-        <tr><td><strong>Value Cost Per Unit:</strong></td><td>${lineItem.valueCostPerUnit ? `$${(lineItem.valueCostPerUnit.microAmount / 1000000).toFixed(2)}` : 'N/A'}</td></tr>
+        <tr><td><strong>Cost Type:</strong></td><td>${escapeHtml(lineItem.costType)}</td></tr>
+        <tr><td><strong>CPM:</strong></td><td>$${escapeHtml(cpm.toFixed(2))}</td></tr>
+        <tr><td><strong>Units Bought (Goal):</strong></td><td>${escapeHtml(goal.toLocaleString())}</td></tr>
+        <tr><td><strong>Impressions Delivered:</strong></td><td>${escapeHtml(impressionsDelivered.toLocaleString())} (${escapeHtml(deliveryPercentage)}%)</td></tr>
+        <tr><td><strong>Clicks Delivered:</strong></td><td>${escapeHtml(clicksDelivered.toLocaleString())}</td></tr>
+        <tr><td><strong>Total Budget:</strong></td><td>$${escapeHtml(((goal) * cpm / 1000).toFixed(2))}</td></tr>
+        <tr><td><strong>Spent (Est.):</strong></td><td>$${escapeHtml(((impressionsDelivered) * cpm / 1000).toFixed(2))}</td></tr>
+        <tr><td><strong>Discount:</strong></td><td>${escapeHtml(lineItem.discount || 0)}%</td></tr>
+        <tr><td><strong>Value Cost Per Unit:</strong></td><td>${lineItem.valueCostPerUnit ? `$${escapeHtml((lineItem.valueCostPerUnit.microAmount / 1000000).toFixed(2))}` : 'N/A'}</td></tr>
     `;
 }
 
@@ -534,11 +520,11 @@ function displayScheduleInfo(lineItem) {
     }
 
     tbody.innerHTML = `
-        <tr><td><strong>Start Date:</strong></td><td>${formatDateTime(lineItem.startDateTime)}</td></tr>
-        <tr><td><strong>End Date:</strong></td><td>${formatDateTime(lineItem.endDateTime)}</td></tr>
-        <tr><td><strong>Delivery Rate Type:</strong></td><td>${lineItem.deliveryRateType}</td></tr>
-        <tr><td><strong>Creation Date:</strong></td><td>${formatDateTime(lineItem.creationDateTime)}</td></tr>
-        <tr><td><strong>Last Modified:</strong></td><td>${formatDateTime(lineItem.lastModifiedDateTime)}</td></tr>
+        <tr><td><strong>Start Date:</strong></td><td>${escapeHtml(formatDateTime(lineItem.startDateTime))}</td></tr>
+        <tr><td><strong>End Date:</strong></td><td>${escapeHtml(formatDateTime(lineItem.endDateTime))}</td></tr>
+        <tr><td><strong>Delivery Rate Type:</strong></td><td>${escapeHtml(lineItem.deliveryRateType)}</td></tr>
+        <tr><td><strong>Creation Date:</strong></td><td>${escapeHtml(formatDateTime(lineItem.creationDateTime))}</td></tr>
+        <tr><td><strong>Last Modified:</strong></td><td>${escapeHtml(formatDateTime(lineItem.lastModifiedDateTime))}</td></tr>
     `;
 }
 
@@ -556,210 +542,210 @@ function displayTargeting(targeting, inventoryDetails) {
         return;
     }
 
-    let html = '<div class="row">';
+    let targetingHtml = '<div class="row">';
 
     // Inventory targeting - MOVED TO TOP AND ENHANCED
     if (targeting.inventoryTargeting) {
-        html += '<div class="col-md-12 mb-4">';
-        html += '<div class="card">';
-        html += '<div class="card-header bg-primary text-white">';
-        html += '<h5 class="mb-0">Inventory Targeting (Ad Units & Placements)</h5>';
-        html += '</div>';
-        html += '<div class="card-body">';
+        targetingHtml += '<div class="col-md-12 mb-4">';
+        targetingHtml += '<div class="card">';
+        targetingHtml += '<div class="card-header bg-primary text-white">';
+        targetingHtml += '<h5 class="mb-0">Inventory Targeting (Ad Units & Placements)</h5>';
+        targetingHtml += '</div>';
+        targetingHtml += '<div class="card-body">';
 
         // Placements section
         if (targeting.inventoryTargeting.targetedPlacementIds && targeting.inventoryTargeting.targetedPlacementIds.length > 0) {
-            html += '<div class="mb-3">';
-            html += '<h6><i class="bi bi-folder2-open"></i> Targeted Placements</h6>';
-            html += '<div class="table-responsive">';
-            html += '<table class="table table-sm table-hover">';
-            html += '<thead><tr><th>Placement Name</th><th>ID</th><th>Status</th><th>Ad Units in Placement</th></tr></thead>';
-            html += '<tbody>';
+            targetingHtml += '<div class="mb-3">';
+            targetingHtml += '<h6><i class="bi bi-folder2-open"></i> Targeted Placements</h6>';
+            targetingHtml += '<div class="table-responsive">';
+            targetingHtml += '<table class="table table-sm table-hover">';
+            targetingHtml += '<thead><tr><th>Placement Name</th><th>ID</th><th>Status</th><th>Ad Units in Placement</th></tr></thead>';
+            targetingHtml += '<tbody>';
 
             targeting.inventoryTargeting.targetedPlacementIds.forEach(placementId => {
                 const placement = inventoryDetails?.placements?.[placementId];
                 if (placement) {
-                    html += '<tr>';
-                    html += `<td><strong>${escapeHtml(placement.name)}</strong>`;
+                    targetingHtml += '<tr>';
+                    targetingHtml += `<td><strong>${escapeHtml(orNA(placement.name))}</strong>`;
                     if (placement.description) {
-                        html += `<br><small class="text-muted">${escapeHtml(placement.description)}</small>`;
+                        targetingHtml += `<br><small class="text-muted">${escapeHtml(orNA(placement.description))}</small>`;
                     }
-                    html += '</td>';
-                    html += `<td><code>${escapeHtml(placementId)}</code></td>`;
-                    html += `<td><span class="badge bg-${placement.status === 'ACTIVE' ? 'success' : 'secondary'}">${escapeHtml(placement.status)}</span></td>`;
-                    html += '<td>';
+                    targetingHtml += '</td>';
+                    targetingHtml += `<td><code>${escapeHtml(orNA(placementId))}</code></td>`;
+                    targetingHtml += `<td><span class="badge bg-${placement.status === 'ACTIVE' ? 'success' : 'secondary'}">${escapeHtml(orNA(placement.status))}</span></td>`;
+                    targetingHtml += '<td>';
                     if (placement.targetedAdUnitIds && placement.targetedAdUnitIds.length > 0) {
-                        html += `<small>${placement.targetedAdUnitIds.length} ad unit(s)</small>`;
+                        targetingHtml += `<small>${escapeHtml(placement.targetedAdUnitIds.length)} ad unit(s)</small>`;
                     } else {
-                        html += '<small class="text-muted">No specific ad units</small>';
+                        targetingHtml += '<small class="text-muted">No specific ad units</small>';
                     }
-                    html += '</td>';
-                    html += '</tr>';
+                    targetingHtml += '</td>';
+                    targetingHtml += '</tr>';
                 } else {
-                    html += '<tr>';
-                    html += `<td colspan="4">Placement ID: <code>${escapeHtml(placementId)}</code> <small class="text-muted">(Details not available)</small></td>`;
-                    html += '</tr>';
+                    targetingHtml += '<tr>';
+                    targetingHtml += `<td colspan="4">Placement ID: <code>${escapeHtml(orNA(placementId))}</code> <small class="text-muted">(Details not available)</small></td>`;
+                    targetingHtml += '</tr>';
                 }
             });
 
-            html += '</tbody></table>';
-            html += '</div>';
-            html += '</div>';
+            targetingHtml += '</tbody></table>';
+            targetingHtml += '</div>';
+            targetingHtml += '</div>';
         }
 
         // Ad Units section with hierarchy
         if (targeting.inventoryTargeting.targetedAdUnits && targeting.inventoryTargeting.targetedAdUnits.length > 0) {
-            html += '<div class="mb-3">';
-            html += '<h6><i class="bi bi-diagram-3"></i> Targeted Ad Units</h6>';
-            html += '<div class="table-responsive">';
-            html += '<table class="table table-sm table-hover">';
-            html += '<thead><tr><th>Ad Unit Hierarchy</th><th>ID</th><th>Code</th><th>Include Descendants</th><th>Status</th></tr></thead>';
-            html += '<tbody>';
+            targetingHtml += '<div class="mb-3">';
+            targetingHtml += '<h6><i class="bi bi-diagram-3"></i> Targeted Ad Units</h6>';
+            targetingHtml += '<div class="table-responsive">';
+            targetingHtml += '<table class="table table-sm table-hover">';
+            targetingHtml += '<thead><tr><th>Ad Unit Hierarchy</th><th>ID</th><th>Code</th><th>Include Descendants</th><th>Status</th></tr></thead>';
+            targetingHtml += '<tbody>';
 
             targeting.inventoryTargeting.targetedAdUnits.forEach(targetedUnit => {
                 const adUnit = inventoryDetails?.ad_units?.[targetedUnit.adUnitId];
                 if (adUnit) {
-                    html += '<tr>';
-                    html += '<td>';
-                    html += `<div class="d-flex align-items-center">`;
+                    targetingHtml += '<tr>';
+                    targetingHtml += '<td>';
+                    targetingHtml += `<div class="d-flex align-items-center">`;
                     // Show hierarchy with indentation
                     const pathParts = adUnit.fullPath.split(' > ');
                     const indent = (pathParts.length - 1) * 20;
-                    html += `<div style="margin-left: ${indent}px;">`;
-                    html += `<i class="bi bi-folder me-1"></i>`;
-                    html += `<strong>${escapeHtml(adUnit.name)}</strong>`;
+                    targetingHtml += `<div style="margin-left: ${escapeHtml(indent)}px;">`;
+                    targetingHtml += `<i class="bi bi-folder me-1"></i>`;
+                    targetingHtml += `<strong>${escapeHtml(orNA(adUnit.name))}</strong>`;
                     if (pathParts.length > 1) {
-                        html += `<br><small class="text-muted" style="margin-left: 20px;">Path: ${escapeHtml(adUnit.fullPath)}</small>`;
+                        targetingHtml += `<br><small class="text-muted" style="margin-left: 20px;">Path: ${escapeHtml(orNA(adUnit.fullPath))}</small>`;
                     }
-                    html += '</div>';
-                    html += '</div>';
-                    html += '</td>';
-                    html += `<td><code>${escapeHtml(targetedUnit.adUnitId)}</code></td>`;
-                    html += `<td><code>${escapeHtml(adUnit.adUnitCode || 'N/A')}</code></td>`;
-                    html += `<td>${targetedUnit.includeDescendants ? '<span class="badge bg-info">Yes</span>' : '<span class="badge bg-secondary">No</span>'}</td>`;
-                    html += `<td><span class="badge bg-${adUnit.status === 'ACTIVE' ? 'success' : 'secondary'}">${escapeHtml(adUnit.status)}</span></td>`;
-                    html += '</tr>';
+                    targetingHtml += '</div>';
+                    targetingHtml += '</div>';
+                    targetingHtml += '</td>';
+                    targetingHtml += `<td><code>${escapeHtml(orNA(targetedUnit.adUnitId))}</code></td>`;
+                    targetingHtml += `<td><code>${escapeHtml(orNA(adUnit.adUnitCode || 'N/A'))}</code></td>`;
+                    targetingHtml += `<td>${targetedUnit.includeDescendants ? '<span class="badge bg-info">Yes</span>' : '<span class="badge bg-secondary">No</span>'}</td>`;
+                    targetingHtml += `<td><span class="badge bg-${adUnit.status === 'ACTIVE' ? 'success' : 'secondary'}">${escapeHtml(orNA(adUnit.status))}</span></td>`;
+                    targetingHtml += '</tr>';
                 } else {
-                    html += '<tr>';
-                    html += `<td colspan="5">Ad Unit ID: <code>${escapeHtml(targetedUnit.adUnitId)}</code> ${targetedUnit.includeDescendants ? '(+ descendants)' : ''} <small class="text-muted">(Details not available)</small></td>`;
-                    html += '</tr>';
+                    targetingHtml += '<tr>';
+                    targetingHtml += `<td colspan="5">Ad Unit ID: <code>${escapeHtml(orNA(targetedUnit.adUnitId))}</code> ${targetedUnit.includeDescendants ? '(+ descendants)' : ''} <small class="text-muted">(Details not available)</small></td>`;
+                    targetingHtml += '</tr>';
                 }
             });
 
-            html += '</tbody></table>';
-            html += '</div>';
-            html += '</div>';
+            targetingHtml += '</tbody></table>';
+            targetingHtml += '</div>';
+            targetingHtml += '</div>';
         }
 
         // If neither placements nor ad units are targeted
         if ((!targeting.inventoryTargeting.targetedAdUnits || targeting.inventoryTargeting.targetedAdUnits.length === 0) &&
             (!targeting.inventoryTargeting.targetedPlacementIds || targeting.inventoryTargeting.targetedPlacementIds.length === 0)) {
-            html += '<p class="text-muted">No specific inventory targeted (Run of Network)</p>';
+            targetingHtml += '<p class="text-muted">No specific inventory targeted (Run of Network)</p>';
         }
 
-        html += '</div>'; // card-body
-        html += '</div>'; // card
-        html += '</div>'; // col-md-12
+        targetingHtml += '</div>'; // card-body
+        targetingHtml += '</div>'; // card
+        targetingHtml += '</div>'; // col-md-12
     }
 
     // Geographic targeting
     if (targeting.geoTargeting) {
-        html += '<div class="col-md-6 mb-3">';
-        html += '<h6>Geographic Targeting</h6>';
-        html += '<ul class="list-unstyled">';
+        targetingHtml += '<div class="col-md-6 mb-3">';
+        targetingHtml += '<h6>Geographic Targeting</h6>';
+        targetingHtml += '<ul class="list-unstyled">';
 
         if (targeting.geoTargeting.targetedLocations && targeting.geoTargeting.targetedLocations.length > 0) {
-            html += '<li><strong>Included:</strong><ul>';
+            targetingHtml += '<li><strong>Included:</strong><ul>';
             targeting.geoTargeting.targetedLocations.forEach(loc => {
-                html += `<li>${escapeHtml(loc.displayName || loc.id)} (${escapeHtml(loc.type)})</li>`;
+                targetingHtml += `<li>${escapeHtml(orNA(loc.displayName || loc.id))} (${escapeHtml(orNA(loc.type))})</li>`;
             });
-            html += '</ul></li>';
+            targetingHtml += '</ul></li>';
         }
 
         if (targeting.geoTargeting.excludedLocations && targeting.geoTargeting.excludedLocations.length > 0) {
-            html += '<li><strong>Excluded:</strong><ul>';
+            targetingHtml += '<li><strong>Excluded:</strong><ul>';
             targeting.geoTargeting.excludedLocations.forEach(loc => {
-                html += `<li>${escapeHtml(loc.displayName || loc.id)} (${escapeHtml(loc.type)})</li>`;
+                targetingHtml += `<li>${escapeHtml(orNA(loc.displayName || loc.id))} (${escapeHtml(orNA(loc.type))})</li>`;
             });
-            html += '</ul></li>';
+            targetingHtml += '</ul></li>';
         }
 
-        html += '</ul></div>';
+        targetingHtml += '</ul></div>';
     }
 
     // Technology targeting
     if (targeting.technologyTargeting) {
-        html += '<div class="col-md-6 mb-3">';
-        html += '<h6>Technology Targeting</h6>';
-        html += '<ul class="list-unstyled">';
+        targetingHtml += '<div class="col-md-6 mb-3">';
+        targetingHtml += '<h6>Technology Targeting</h6>';
+        targetingHtml += '<ul class="list-unstyled">';
 
         const tech = targeting.technologyTargeting;
         if (tech.deviceCategoryTargeting) {
-            html += '<li><strong>Device Categories:</strong><ul>';
+            targetingHtml += '<li><strong>Device Categories:</strong><ul>';
             (tech.deviceCategoryTargeting.targetedDeviceCategories || []).forEach(device => {
-                html += `<li>${escapeHtml(device.name || device.id)}</li>`;
+                targetingHtml += `<li>${escapeHtml(orNA(device.name || device.id))}</li>`;
             });
-            html += '</ul></li>';
+            targetingHtml += '</ul></li>';
         }
 
         if (tech.browserTargeting) {
-            html += '<li><strong>Browsers:</strong><ul>';
+            targetingHtml += '<li><strong>Browsers:</strong><ul>';
             (tech.browserTargeting.browsers || []).forEach(browser => {
-                html += `<li>${escapeHtml(browser.name || browser.id)}</li>`;
+                targetingHtml += `<li>${escapeHtml(orNA(browser.name || browser.id))}</li>`;
             });
-            html += '</ul></li>';
+            targetingHtml += '</ul></li>';
         }
 
-        html += '</ul></div>';
+        targetingHtml += '</ul></div>';
     }
 
     // Custom targeting (Key-Value Pairs)
     if (targeting.customTargeting) {
-        html += '<div class="col-md-12 mb-3">';
-        html += '<h6>Custom Targeting (Key-Value Pairs)</h6>';
-        html += '<div class="card">';
-        html += '<div class="card-body">';
+        targetingHtml += '<div class="col-md-12 mb-3">';
+        targetingHtml += '<h6>Custom Targeting (Key-Value Pairs)</h6>';
+        targetingHtml += '<div class="card">';
+        targetingHtml += '<div class="card-body">';
 
         // Parse and display the custom targeting tree
         const customTargetingHtml = parseCustomTargeting(targeting.customTargeting);
         if (customTargetingHtml) {
-            html += customTargetingHtml;
+            targetingHtml += customTargetingHtml;
         } else {
-            html += '<p class="text-muted">No key-value pairs configured</p>';
+            targetingHtml += '<p class="text-muted">No key-value pairs configured</p>';
         }
 
         // Also show the raw structure in a collapsible section
-        html += '<details class="mt-3">';
-        html += '<summary class="text-muted" style="cursor: pointer;">View Raw Structure</summary>';
-        html += '<pre class="bg-light p-2 mt-2" style="font-size: 0.85em;">' + JSON.stringify(targeting.customTargeting, null, 2) + '</pre>';
-        html += '</details>';
+        targetingHtml += '<details class="mt-3">';
+        targetingHtml += '<summary class="text-muted" style="cursor: pointer;">View Raw Structure</summary>';
+        targetingHtml += '<pre class="bg-light p-2 mt-2" style="font-size: 0.85em;">' + escapeHtml(JSON.stringify(targeting.customTargeting, null, 2)) + '</pre>';
+        targetingHtml += '</details>';
 
-        html += '</div>';
-        html += '</div>';
-        html += '</div>';
+        targetingHtml += '</div>';
+        targetingHtml += '</div>';
+        targetingHtml += '</div>';
     }
 
     // Day part targeting
     if (targeting.dayPartTargeting) {
-        html += '<div class="col-md-6 mb-3">';
-        html += '<h6>Daypart Targeting</h6>';
-        html += '<ul class="list-unstyled">';
-        html += `<li><strong>Timezone:</strong> ${escapeHtml(targeting.dayPartTargeting.timeZone)}</li>`;
+        targetingHtml += '<div class="col-md-6 mb-3">';
+        targetingHtml += '<h6>Daypart Targeting</h6>';
+        targetingHtml += '<ul class="list-unstyled">';
+        targetingHtml += `<li><strong>Timezone:</strong> ${escapeHtml(orNA(targeting.dayPartTargeting.timeZone))}</li>`;
 
         if (targeting.dayPartTargeting.dayParts) {
-            html += '<li><strong>Schedule:</strong><ul>';
+            targetingHtml += '<li><strong>Schedule:</strong><ul>';
             targeting.dayPartTargeting.dayParts.forEach(dp => {
                 const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-                html += `<li>${escapeHtml(days[dp.dayOfWeek - 1])}: ${escapeHtml(dp.startTime.hour)}:00 - ${escapeHtml(dp.endTime.hour)}:00</li>`;
+                targetingHtml += `<li>${escapeHtml(orNA(days[dp.dayOfWeek - 1]))}: ${escapeHtml(orNA(dp.startTime.hour))}:00 - ${escapeHtml(orNA(dp.endTime.hour))}:00</li>`;
             });
-            html += '</ul></li>';
+            targetingHtml += '</ul></li>';
         }
 
-        html += '</ul></div>';
+        targetingHtml += '</ul></div>';
     }
 
-    html += '</div>';
-    container.innerHTML = html;
+    targetingHtml += '</div>';
+    container.innerHTML = targetingHtml;
 }
 
 function displayCreatives(creatives, associations) {
@@ -776,24 +762,24 @@ function displayCreatives(creatives, associations) {
         return;
     }
 
-    let html = '<div class="table-responsive"><table class="table table-sm">';
-    html += '<thead><tr><th>Creative ID</th><th>Name</th><th>Type</th><th>Size</th><th>Status</th></tr></thead><tbody>';
+    let creativesHtml = '<div class="table-responsive"><table class="table table-sm">';
+    creativesHtml += '<thead><tr><th>Creative ID</th><th>Name</th><th>Type</th><th>Size</th><th>Status</th></tr></thead><tbody>';
 
     creatives.forEach(creative => {
-        const size = creative.size ? `${escapeHtml(creative.size.width)}x${escapeHtml(creative.size.height)}` : 'N/A';
-        const previewLink = creative.previewUrl ?
-            `<a href="${escapeHtml(creative.previewUrl)}" target="_blank">Preview</a>` : 'N/A';
-        html += `<tr>`;
-        html += `<td>${escapeHtml(creative.id)}</td>`;
-        html += `<td>${escapeHtml(creative.name)}</td>`;
-        html += `<td>${escapeHtml(creative['Creative.Type'] || 'Unknown')}</td>`;
-        html += `<td>${size}</td>`;
-        html += `<td>${previewLink}</td>`;
-        html += `</tr>`;
+        const sizeHtml = creative.size ? `${escapeHtml(orNA(creative.size.width))}x${escapeHtml(orNA(creative.size.height))}` : 'N/A';
+        const previewLinkHtml = creative.previewUrl ?
+            `<a href="${safeUrl(creative.previewUrl)}" target="_blank" rel="noopener noreferrer">Preview</a>` : 'N/A';
+        creativesHtml += `<tr>`;
+        creativesHtml += `<td>${escapeHtml(orNA(creative.id))}</td>`;
+        creativesHtml += `<td>${escapeHtml(orNA(creative.name))}</td>`;
+        creativesHtml += `<td>${escapeHtml(orNA(creative['Creative.Type'] || 'Unknown'))}</td>`;
+        creativesHtml += `<td>${sizeHtml}</td>`;
+        creativesHtml += `<td>${previewLinkHtml}</td>`;
+        creativesHtml += `</tr>`;
     });
 
-    html += '</tbody></table></div>';
-    container.innerHTML = html;
+    creativesHtml += '</tbody></table></div>';
+    container.innerHTML = creativesHtml;
 }
 
 function displayDeliverySettings(lineItem) {
@@ -805,55 +791,55 @@ function displayDeliverySettings(lineItem) {
         return;
     }
 
-    let html = '<div class="row">';
+    let settingsHtml = '<div class="row">';
 
     // Delivery settings
-    html += '<div class="col-md-6">';
-    html += '<h6>Delivery Configuration</h6>';
-    html += '<ul class="list-unstyled">';
-    html += `<li><strong>Delivery Rate Type:</strong> ${lineItem.deliveryRateType}</li>`;
-    html += `<li><strong>Roadblocking Type:</strong> ${lineItem.roadblockingType || 'NONE'}</li>`;
-    html += `<li><strong>Skip Inventory Check:</strong> ${lineItem.skipInventoryCheck ? 'Yes' : 'No'}</li>`;
-    html += `<li><strong>Allow Overbook:</strong> ${lineItem.allowOverbook ? 'Yes' : 'No'}</li>`;
-    html += `<li><strong>Reserve Inventory:</strong> ${lineItem.reserveAtCreation ? 'Yes' : 'No'}</li>`;
-    html += '</ul>';
-    html += '</div>';
+    settingsHtml += '<div class="col-md-6">';
+    settingsHtml += '<h6>Delivery Configuration</h6>';
+    settingsHtml += '<ul class="list-unstyled">';
+    settingsHtml += `<li><strong>Delivery Rate Type:</strong> ${escapeHtml(lineItem.deliveryRateType)}</li>`;
+    settingsHtml += `<li><strong>Roadblocking Type:</strong> ${escapeHtml(lineItem.roadblockingType || 'NONE')}</li>`;
+    settingsHtml += `<li><strong>Skip Inventory Check:</strong> ${lineItem.skipInventoryCheck ? 'Yes' : 'No'}</li>`;
+    settingsHtml += `<li><strong>Allow Overbook:</strong> ${lineItem.allowOverbook ? 'Yes' : 'No'}</li>`;
+    settingsHtml += `<li><strong>Reserve Inventory:</strong> ${lineItem.reserveAtCreation ? 'Yes' : 'No'}</li>`;
+    settingsHtml += '</ul>';
+    settingsHtml += '</div>';
 
     // Frequency caps
     if (lineItem.frequencyCaps && lineItem.frequencyCaps.length > 0) {
-        html += '<div class="col-md-6">';
-        html += '<h6>Frequency Caps</h6>';
-        html += '<ul class="list-unstyled">';
+        settingsHtml += '<div class="col-md-6">';
+        settingsHtml += '<h6>Frequency Caps</h6>';
+        settingsHtml += '<ul class="list-unstyled">';
         lineItem.frequencyCaps.forEach(cap => {
-            html += `<li>${cap.maxImpressions} impressions per ${cap.numTimeUnits} ${cap.timeUnit}</li>`;
+            settingsHtml += `<li>${escapeHtml(cap.maxImpressions)} impressions per ${escapeHtml(cap.numTimeUnits)} ${escapeHtml(cap.timeUnit)}</li>`;
         });
-        html += '</ul>';
-        html += '</div>';
+        settingsHtml += '</ul>';
+        settingsHtml += '</div>';
     }
 
     // Creative placeholders
     if (lineItem.creativePlaceholders && lineItem.creativePlaceholders.length > 0) {
-        html += '<div class="col-md-12">';
-        html += '<h6>Creative Placeholders</h6>';
-        html += '<table class="table table-sm">';
-        html += '<thead><tr><th>Size</th><th>Expected Count</th><th>Companions</th></tr></thead><tbody>';
+        settingsHtml += '<div class="col-md-12">';
+        settingsHtml += '<h6>Creative Placeholders</h6>';
+        settingsHtml += '<table class="table table-sm">';
+        settingsHtml += '<thead><tr><th>Size</th><th>Expected Count</th><th>Companions</th></tr></thead><tbody>';
 
         lineItem.creativePlaceholders.forEach(placeholder => {
             const size = placeholder.size ? `${placeholder.size.width}x${placeholder.size.height}` : 'Flexible';
             const companions = placeholder.companions ? placeholder.companions.map(c => `${c.size.width}x${c.size.height}`).join(', ') : 'None';
-            html += `<tr>`;
-            html += `<td>${size}</td>`;
-            html += `<td>${placeholder.expectedCreativeCount || 1}</td>`;
-            html += `<td>${companions}</td>`;
-            html += `</tr>`;
+            settingsHtml += `<tr>`;
+            settingsHtml += `<td>${escapeHtml(size)}</td>`;
+            settingsHtml += `<td>${escapeHtml(placeholder.expectedCreativeCount || 1)}</td>`;
+            settingsHtml += `<td>${escapeHtml(companions)}</td>`;
+            settingsHtml += `</tr>`;
         });
 
-        html += '</tbody></table>';
-        html += '</div>';
+        settingsHtml += '</tbody></table>';
+        settingsHtml += '</div>';
     }
 
-    html += '</div>';
-    container.innerHTML = html;
+    settingsHtml += '</div>';
+    container.innerHTML = settingsHtml;
 }
 
 function getStatusBadgeClass(status) {

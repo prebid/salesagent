@@ -11,8 +11,16 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant, TenantAuthConfig
+from src.core.operator_errors import OperatorRefusal
 
 logger = logging.getLogger(__name__)
+
+
+class DiscoveryUrlRequired(OperatorRefusal):
+    """A provider outside ``OIDC_PROVIDERS`` was saved without a discovery URL."""
+
+    MESSAGE = "Discovery URL is required for custom OIDC providers"
+
 
 #: A tenant's auth config is unique on tenant_id twice over — the column's own
 #: UNIQUE constraint and the unique index the migration adds beside it. An INSERT
@@ -105,7 +113,7 @@ def save_oidc_config(
         discovery_url = OIDC_PROVIDERS[provider]
 
     if not discovery_url:
-        raise ValueError("Discovery URL is required for custom OIDC providers")
+        raise DiscoveryUrlRequired(DiscoveryUrlRequired.MESSAGE)
 
     # Auto-set logout URL for known providers
     if not logout_url and provider in OIDC_LOGOUT_URLS:

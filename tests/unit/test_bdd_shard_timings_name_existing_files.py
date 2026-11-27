@@ -11,6 +11,6 @@ _ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_every_recorded_timing_names_an_existing_module():
-    timings = json.loads((_ROOT / "scripts/ci/bdd_shard_timings.json").read_text())
+    timings = json.loads((_ROOT / "scripts/ci/bdd_shard_timings.json").read_text(encoding="utf-8"))
 
     assert [path for path in timings if not (_ROOT / path).is_file()] == []

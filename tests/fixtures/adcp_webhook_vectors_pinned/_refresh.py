@@ -81,7 +81,7 @@ def _read_github() -> str:
 
 def main() -> None:
     body = _read_local() or _read_github()
-    OUT_FILE.write_text(json.dumps(json.loads(body), indent=2) + "\n")
+    OUT_FILE.write_text(json.dumps(json.loads(body), indent=2) + "\n", encoding="utf-8")
     print(f"vendored {SRC_PATH} from {REPO}@{PINNED_SHA[:9]} into {OUT_FILE}")
 
 

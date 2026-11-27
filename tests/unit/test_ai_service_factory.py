@@ -23,6 +23,7 @@ from src.services.ai.config import (
     uses_legacy_gemini_api_key,
 )
 from src.services.ai.factory import PROVIDER_MODELS, AIProviderError, ResolvedAIConfig, run_agent
+from tests.helpers.environ import isolated_environ
 from tests.helpers.settings_injection import PlatformAICredential
 
 
@@ -54,7 +55,6 @@ class TestTenantAIConfig:
         assert config.provider is None
         assert config.model is None
         assert config.api_key is None
-        assert config.logfire_token is None
         assert config.settings.temperature == 0.3
         assert config.settings.timeout == 30
 
@@ -368,7 +368,7 @@ class TestGetPlatformDefaults:
 
     def test_defaults_fallback(self):
         """Defaults fall back to gemini when env vars not set."""
-        with patch.dict(os.environ, {}, clear=True):
+        with isolated_environ():
             defaults = get_platform_defaults()
             assert defaults["provider"] == "gemini"
             assert defaults["model"] == "gemini-2.0-flash"
@@ -402,12 +402,12 @@ class TestGetPlatformDefaults:
         PYDANTIC_AI_PROVIDER=anthropic got a platform default pair that cannot work.
         None is the honest answer: we do not know a model for that vendor.
         """
-        with patch.dict(os.environ, {"PYDANTIC_AI_PROVIDER": "anthropic"}, clear=True):
+        with isolated_environ({"PYDANTIC_AI_PROVIDER": "anthropic"}):
             defaults = get_platform_defaults()
             assert defaults["provider"] == "anthropic"
             assert defaults["model"] is None
 
-        with patch.dict(os.environ, {"PYDANTIC_AI_PROVIDER": "google-gla"}, clear=True):
+        with isolated_environ({"PYDANTIC_AI_PROVIDER": "google-gla"}):
             load_settings()  # the settings are cached; this block changed the environment
             assert get_platform_defaults()["model"] == DEFAULT_GOOGLE_MODEL
 
@@ -458,7 +458,7 @@ class TestAIServiceFactory:
         """A Google config with no key of its own takes the platform's Google key: same vendor."""
         from pydantic_ai.models.google import GoogleModel
 
-        with patch.dict(os.environ, {"GEMINI_API_KEY": "platform-gemini-key"}, clear=True):
+        with isolated_environ({"GEMINI_API_KEY": "platform-gemini-key"}):
             model = AIServiceFactory().build(TenantAIConfig(provider="google", model="gemini-2.0-flash"))
 
         assert isinstance(model, GoogleModel)
@@ -466,7 +466,7 @@ class TestAIServiceFactory:
 
     def test_no_resolved_api_key_builds_nothing(self):
         """No tenant or platform key builds no model, rather than leaving pydantic-ai to find one."""
-        with patch.dict(os.environ, {}, clear=True):
+        with isolated_environ():
             factory = AIServiceFactory()
 
             assert factory.build(TenantAIConfig(provider="google", model="gemini-2.0-flash")) is None
@@ -535,15 +535,13 @@ class TestAIServiceFactory:
         anonymous buyer's brief was enough to trigger it. With no Anthropic key of the
         tenant's own, nothing is built at all.
         """
-        with patch.dict(
-            os.environ,
+        with isolated_environ(
             {
                 "PYDANTIC_AI_PROVIDER": "gemini",
                 "PYDANTIC_AI_MODEL": "gemini-2.0-flash",
                 "GEMINI_API_KEY": "PLATFORM-GEMINI-SECRET",
                 "ANTHROPIC_API_KEY": "PLATFORM-ANTHROPIC-KEY",
-            },
-            clear=True,
+            }
         ):
             factory = AIServiceFactory()
             tenant = TenantAIConfig(provider="anthropic", model="claude-sonnet-4-20250514")
@@ -561,10 +559,8 @@ class TestAIServiceFactory:
         Filling it from PYDANTIC_AI_MODEL handed "gemini-2.0-flash" to an Anthropic
         client, and every call 404'd.
         """
-        with patch.dict(
-            os.environ,
-            {"PYDANTIC_AI_PROVIDER": "gemini", "PYDANTIC_AI_MODEL": "gemini-2.0-flash", "GEMINI_API_KEY": "SECRET"},
-            clear=True,
+        with isolated_environ(
+            {"PYDANTIC_AI_PROVIDER": "gemini", "PYDANTIC_AI_MODEL": "gemini-2.0-flash", "GEMINI_API_KEY": "SECRET"}
         ):
             factory = AIServiceFactory()
             keyed_but_modelless = TenantAIConfig(provider="anthropic", api_key="sk-ant-tenant")
@@ -617,7 +613,7 @@ class TestAIServiceFactory:
 
         config = TenantAIConfig(provider=provider, model="model-x", api_key=f"key-{provider}")
 
-        with patch.dict(os.environ, {}, clear=True):
+        with isolated_environ():
             factory = AIServiceFactory()
             resolved = factory.resolve(config)
             model = factory.build(config)
@@ -636,7 +632,7 @@ class TestAIServiceFactory:
         seller configured.
         """
         assert provider not in PROVIDER_MODELS
-        with patch.dict(os.environ, {"GEMINI_API_KEY": "platform-key"}, clear=True):
+        with isolated_environ({"GEMINI_API_KEY": "platform-key"}):
             factory = AIServiceFactory()
             config = TenantAIConfig(provider=provider, model="claude-x", api_key="sk-tenant")
 
@@ -647,7 +643,7 @@ class TestAIServiceFactory:
         """Factory passes API key directly via Provider, not environment variables."""
         from pydantic_ai.models.openai import OpenAIChatModel
 
-        with patch.dict(os.environ, {}, clear=True):
+        with isolated_environ():
             model = AIServiceFactory().build(
                 TenantAIConfig(provider="openai", model="gpt-4o", api_key="tenant-openai-key")
             )

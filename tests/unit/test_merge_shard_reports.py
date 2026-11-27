@@ -75,7 +75,7 @@ def test_main_publishes_one_suite_and_removes_the_parts(tmp_path: Path) -> None:
 
     assert sorted(p.name for p in tmp_path.glob("*.json")) == ["bdd_inprocess.json"]
     assert sorted(p.name for p in (tmp_path / "payloads").glob("*.json")) == ["bdd_inprocess.json"]
-    assert json.loads((tmp_path / "bdd_inprocess.json").read_text())["summary"]["total"] == 2 * _SHARDS
+    assert json.loads((tmp_path / "bdd_inprocess.json").read_text(encoding="utf-8"))["summary"]["total"] == 2 * _SHARDS
 
 
 @pytest.mark.parametrize("published", [{"reports": 1}, {"payloads": 1}])

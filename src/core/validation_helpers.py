@@ -151,39 +151,6 @@ def run_async_in_sync_context(coroutine):
         loop.close()
 
 
-def safe_parse_json_field(field_value, field_name="field", default=None):
-    """
-    Safely parse a database field that might be a JSON string or already-deserialized dict (JSONB).
-
-    Args:
-        field_value: The field value from database (could be str, dict, None, etc.)
-        field_name: Name of the field for logging purposes
-        default: Default value to return on parse failure (default: None)
-
-    Returns:
-        Parsed dict/list or default value
-    """
-    if not field_value:
-        return default if default is not None else {}
-
-    if isinstance(field_value, str):
-        try:
-            parsed = json.loads(field_value)
-            # Validate the parsed result is the expected type
-            if default is not None and not isinstance(parsed, type(default)):
-                logger.warning(f"Parsed {field_name} has unexpected type: {type(parsed)}, expected {type(default)}")
-                return default
-            return parsed
-        except (json.JSONDecodeError, TypeError) as e:
-            logger.warning(f"Invalid JSON in {field_name}: {e}")
-            return default if default is not None else {}
-    elif isinstance(field_value, dict | list):
-        return field_value
-    else:
-        logger.warning(f"Unexpected type for {field_name}: {type(field_value)}")
-        return default if default is not None else {}
-
-
 #: The array parameter itself, for a failure that is about the COLLECTION rather
 #: than one entry (e.g. a total-budget check across all packages). Naming the array
 #: is what the spec asks for when no single element is at fault.

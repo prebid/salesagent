@@ -85,7 +85,7 @@ import ast
 
 import pytest
 
-from tests.unit._architecture_helpers import format_failure, iter_call_expressions, parse_module, repo_root
+from tests.unit._architecture_helpers import format_failure, iter_call_expressions, parse_module, rel, repo_root
 
 RECEIVER_NAME = "run_webhook_capture_server"
 
@@ -108,9 +108,9 @@ _DEFAULTED = "<omitted>"
 _UNREADABLE = "<not a literal>"
 
 
-def _dotted(rel: str) -> str:
+def _dotted(rel_path: str) -> str:
     """``tests/e2e/_webhook_capture.py`` -> ``tests.e2e._webhook_capture``."""
-    return rel.removesuffix(".py").replace("/", ".")
+    return rel_path.removesuffix(".py").replace("/", ".")
 
 
 LOOPBACK_DOTTED = _dotted(LOOPBACK_MODULE)
@@ -130,7 +130,7 @@ def _dotted_expr(node: ast.expr) -> str | None:
     return ".".join(reversed(parts))
 
 
-def _receiver_bindings(tree: ast.Module, rel: str) -> tuple[dict[str, str], dict[str, str]]:
+def _receiver_bindings(tree: ast.Module, rel_path: str) -> tuple[dict[str, str], dict[str, str]]:
     """Resolve, for one file, what the name ``run_webhook_capture_server`` refers to.
 
     Returns ``(name_bindings, module_aliases)``:
@@ -154,7 +154,7 @@ def _receiver_bindings(tree: ast.Module, rel: str) -> tuple[dict[str, str], dict
                 module_aliases[alias.asname or alias.name] = alias.name
     for node in tree.body:
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == RECEIVER_NAME:
-            name_bindings[node.name] = _dotted(rel)
+            name_bindings[node.name] = _dotted(rel_path)
     return name_bindings, module_aliases
 
 
@@ -208,11 +208,11 @@ def _loopback_call_sites() -> tuple[list[tuple[str, int, str]], list[tuple[str, 
     unattributed: list[tuple[str, int, str]] = []
 
     for path in sorted((repo / "tests").rglob("*.py")):
-        rel = str(path.relative_to(repo))
+        rel_path = rel(path, repo)
         tree = parse_module(path)
         if tree is None:
             continue
-        name_bindings, module_aliases = _receiver_bindings(tree, rel)
+        name_bindings, module_aliases = _receiver_bindings(tree, rel_path)
 
         for node in iter_call_expressions(tree, RECEIVER_NAME):
             if isinstance(node.func, ast.Name):
@@ -228,10 +228,10 @@ def _loopback_call_sites() -> tuple[list[tuple[str, int, str]], list[tuple[str, 
                 # construction. This is where callers are supposed to end up.
                 continue
             if origin != LOOPBACK_DOTTED:
-                unattributed.append((rel, node.lineno, str(origin)))
+                unattributed.append((rel_path, node.lineno, str(origin)))
                 continue
 
-            loopback.append((rel, node.lineno, _call_host(node, host_index)))
+            loopback.append((rel_path, node.lineno, _call_host(node, host_index)))
 
     return loopback, unattributed
 
@@ -260,11 +260,13 @@ def test_loopback_receiver_is_only_pointed_at_loopback() -> None:
     """
     sites, unattributed = _loopback_call_sites()
     offenders = [
-        f"{rel}:{line}: host={host!r}" for rel, line, host in sites if host != _DEFAULTED and host not in LOOPBACK_HOSTS
+        f"{rel_path}:{line}: host={host!r}"
+        for rel_path, line, host in sites
+        if host != _DEFAULTED and host not in LOOPBACK_HOSTS
     ]
     offenders += [
-        f"{rel}:{line}: {RECEIVER_NAME} resolves to {origin!r}, neither {LOOPBACK_DOTTED} nor {COMPOSE_DOTTED}"
-        for rel, line, origin in unattributed
+        f"{rel_path}:{line}: {RECEIVER_NAME} resolves to {origin!r}, neither {LOOPBACK_DOTTED} nor {COMPOSE_DOTTED}"
+        for rel_path, line, origin in unattributed
     ]
     assert not offenders, format_failure(
         summary="e2e suites still capture webhooks on an in-process receiver instead of the TLS capture origin",

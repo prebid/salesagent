@@ -204,7 +204,7 @@ class TestNoBarePydanticBaseModel:
         """Every class inheriting BaseModel/RootModel must set model_config or be allowlisted."""
         violations = []
         for schema_file in _scanned_files():
-            source = schema_file.read_text()
+            source = schema_file.read_text(encoding="utf-8")
             filename = schema_file.name
 
             for found_file, class_name in _find_violations(source, filename):
@@ -235,7 +235,7 @@ class TestNoBarePydanticBaseModel:
         """
         still_violations: set[tuple[str, str]] = set()
         for schema_file in _scanned_files():
-            source = schema_file.read_text()
+            source = schema_file.read_text(encoding="utf-8")
             still_violations.update(_find_violations(source, schema_file.name))
 
         assert_violations_match_allowlist(

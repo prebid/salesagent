@@ -10,7 +10,6 @@ NOT raw audit logs of every API call.
 """
 
 import json
-import logging
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
@@ -18,8 +17,7 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AuditLog
 from src.core.database.repositories.principal import PrincipalRepository
-
-logger = logging.getLogger(__name__)
+from src.core.operator_errors import best_effort
 
 
 def get_business_activities(tenant_id: str, limit: int = 50) -> list[dict]:
@@ -44,7 +42,9 @@ def get_business_activities(tenant_id: str, limit: int = 50) -> list[dict]:
     """
     activities = []
 
-    try:
+    # The dashboard's activity feed: a row that cannot be read ends the feed there rather
+    # than failing the dashboard.
+    with best_effort(f"Could not load the activity feed for tenant {tenant_id}"):
         with get_db_session() as db:
             # Get ALL recent audit logs (last 7 days) - no filtering by operation
             week_ago = datetime.now(UTC) - timedelta(days=7)
@@ -236,10 +236,6 @@ def get_business_activities(tenant_id: str, limit: int = 50) -> list[dict]:
                         "links": links,
                     }
                 )
-
-    except Exception as e:
-        logger.error(f"Error getting business activities for tenant {tenant_id}: {e}", exc_info=True)
-        return []
 
     # Sort all activities by timestamp (newest first)
     from typing import cast

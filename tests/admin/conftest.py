@@ -15,43 +15,21 @@ from tests.conftest_db import factory_session, integration_db  # noqa: F401
 
 
 @pytest.fixture
-def admin_client(monkeypatch):
+def admin_client():
     """Flask test client against the REAL admin app (no DB mocking, CSRF off).
 
-    Canonical client for blueprint integration tests; enables the global test
-    auth mode so ``require_tenant_access`` accepts the ``admin_auth_session``
-    populated session (``tests.helpers.admin_auth_session``). Older blueprint
-    test modules still build their own module-level app + client copies
-    (pre-existing duplication debt); new modules must use this fixture.
+    Canonical client for blueprint integration tests. The app is ``admin_test_app()``
+    (``tests/helpers/admin_session.py``), the one composition every admin harness uses,
+    so a setting a test patched holds in the app. Older blueprint test modules still
+    build their own module-level app + client copies (pre-existing duplication debt);
+    new modules must use this fixture.
     """
-    from src.admin.app import create_app
+    from tests.helpers.admin_session import admin_test_app
 
-    app = create_app()
-    app.config["TESTING"] = True
-    app.config["WTF_CSRF_ENABLED"] = False
+    app = admin_test_app()
     app.config["SESSION_COOKIE_PATH"] = "/"
     with app.test_client() as client:
         yield client
-
-
-@pytest.fixture
-def test_users():
-    """Provide test user credentials."""
-    return {
-        "super_admin": {"email": "test_super_admin@example.com", "password": "test123", "role": "super_admin"},
-        "tenant_admin": {
-            "email": "test_tenant_admin@example.com",
-            "password": "test123",
-            "role": "tenant_admin",
-            "tenant_id": "test_tenant",
-        },
-        "tenant_user": {
-            "email": "test_tenant_user@example.com",
-            "password": "test123",
-            "role": "tenant_user",
-            "tenant_id": "test_tenant",
-        },
-    }
 
 
 @pytest.fixture

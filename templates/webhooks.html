@@ -155,7 +155,7 @@
                                     </td>
                                     <td>
                                         <button class="btn btn-sm btn-outline-primary"
-                                                onclick="showWebhookDetails('{{ log.audit_log_id }}')">
+                                                onclick="showWebhookDetails({{ log.audit_log_id|string|tojson|forceescape }})">
                                             <i class="fas fa-eye"></i> Details
                                         </button>
                                     </td>
@@ -200,7 +200,7 @@
 <script>
 function showWebhookDetails(auditLogId) {
     // Find the log in the data
-    const logs = {{ webhook_logs | tojson | safe }};
+    const logs = {{ webhook_logs|tojson }};
     const log = logs.find(l => l.audit_log_id == auditLogId);
 
     if (log) {

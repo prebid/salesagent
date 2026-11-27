@@ -38,7 +38,7 @@ def parse_feature_files() -> list[dict]:
         uc = f"UC-{uc_match.group(1)}" if uc_match else "unknown"
 
         current_tags: set[str] = set()
-        for line in ff.read_text().splitlines():
+        for line in ff.read_text(encoding="utf-8").splitlines():
             stripped = line.strip()
             if stripped.startswith("@"):
                 current_tags = {t.lstrip("@") for t in stripped.split() if t.startswith("@")}
@@ -68,7 +68,7 @@ def load_test_results(json_path: str | None) -> dict[str, dict]:
         else:
             return {}
 
-    data = json.loads(Path(json_path).read_text())
+    data = json.loads(Path(json_path).read_text(encoding="utf-8"))
     index: dict[str, dict] = defaultdict(lambda: {"transports": set(), "outcomes": {}})
 
     for t in data["tests"]:

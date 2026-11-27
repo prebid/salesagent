@@ -12,16 +12,27 @@ stack") and AdminAccountEnv implements both, but ``pytest_generate_tests``
 returns early for ``T-ADMIN-*`` so ``ctx`` is never parametrized: all 13
 scenarios grade one transport and the feature's claim of two is not true.
 
-Both halves below are collection-shaped, so both run on the host with no Docker
-stack — the e2e leg's *parametrization* is decided at collection time by
-``BDD_E2E_ENABLED`` alone (the stack is only needed later, when the ``ctx``
-fixture resolves ``e2e_stack``).
+BR-ADMIN-TENANT-SCOPING.feature (#2203) had the next half of the same defect:
+its ten scenarios were collected under ``e2e_admin``, but their env builder
+ignored ``e2e_config`` and always returned the in-process env, so a run over the
+stack reported Flask test_client results under an e2e node id.
 
-  1. ``pytest_generate_tests`` must parametrize every BR-ADMIN-ACCOUNTS
-     scenario over ``admin_integration`` (always) plus ``e2e_admin`` (when
-     ``BDD_E2E_ENABLED=true``) — the same condition the AdCP branch uses for
-     ``e2e_rest``.
-  2. ``_harness_env`` must never pin a branch's DB scope with a hardcoded
+Everything below runs on the host with no Docker stack — the e2e leg's
+*parametrization* is decided at collection time by ``BDD_E2E_ENABLED`` alone
+(the stack is only needed later, when the ``ctx`` fixture resolves
+``e2e_stack``), and a route's builder is checked on the env it constructs, which
+is never entered.
+
+  1. ``pytest_generate_tests`` must parametrize every admin scenario (every
+     feature carrying a ``T-ADMIN-`` tag) over ``admin_integration`` (always)
+     plus ``e2e_admin`` (when ``BDD_E2E_ENABLED=true``) — the same condition the
+     AdCP branch uses for ``e2e_rest``.
+  2. Every ``ENV_ROUTES`` row an admin scenario resolves to, and that builds an
+     ``AdminAccountEnv``, must build the env the parametrized transport names:
+     the live-stack env at ``e2e_config.base_url`` when handed an ``e2e_config``,
+     the in-process env when handed ``None``. The builder is taken from the row,
+     so a row that names a builder of its own is graded like the rest.
+  3. ``_harness_env`` must never pin a branch's DB scope with a hardcoded
      ``getfixturevalue("integration_db")``. ``_db_scope_for`` is the single
      primitive that turns the parametrized transport into a DB scope (per-test
      DB in process, live server DB over e2e); a branch that calls
@@ -42,10 +53,18 @@ from types import SimpleNamespace
 
 import pytest
 
-from tests.bdd.conftest import pytest_generate_tests
+from scripts.audit import storyboard_spec
+from tests.bdd.conftest import ENV_ROUTES, pytest_generate_tests
+from tests.harness.admin_accounts import AdminAccountEnv
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_FEATURE_FILE = _REPO_ROOT / "tests" / "bdd" / "features" / "BR-ADMIN-ACCOUNTS.feature"
+_FEATURES_DIR = _REPO_ROOT / "tests" / "bdd" / "features"
+# Admin features are found by tag, the way pytest_generate_tests finds admin
+# scenarios, not by file name, so a new admin feature is graded the day it is
+# authored.
+_ADMIN_FEATURES = sorted(
+    p.name for p in _FEATURES_DIR.glob("*.feature") if "@T-ADMIN-" in p.read_text(encoding="utf-8")
+)
 _BDD_CONFTEST = _REPO_ROOT / "tests" / "bdd" / "conftest.py"
 
 # The two admin transports the feature file itself declares. Ids are the pytest
@@ -54,13 +73,15 @@ _INTEGRATION_ID = "admin_integration"
 _E2E_ID = "e2e_admin"
 
 
-def _admin_scenario_tag_sets() -> list[tuple[str, frozenset[str]]]:
-    """Return (scenario tag, marker names) for every BR-ADMIN-ACCOUNTS scenario.
+def _admin_scenario_tag_sets(feature: str) -> list[tuple[str, frozenset[str]]]:
+    """Return (scenario tag, marker names) for every T-ADMIN-* scenario in *feature*.
 
-    Read from the feature file rather than hardcoded, so a 14th scenario is
+    Read from the feature file rather than hardcoded, so a new scenario is
     graded by this guard the day it is authored.
     """
-    tag_lines = re.findall(r"^\s*(@T-ADMIN-[\w@\- ]+)$", _FEATURE_FILE.read_text(), re.MULTILINE)
+    tag_lines = re.findall(
+        r"^\s*(@T-ADMIN-[\w@\- ]+)$", (_FEATURES_DIR / feature).read_text(encoding="utf-8"), re.MULTILINE
+    )
     scenarios = []
     for line in tag_lines:
         names = frozenset(tag.lstrip("@") for tag in line.split())
@@ -69,7 +90,28 @@ def _admin_scenario_tag_sets() -> list[tuple[str, frozenset[str]]]:
     return scenarios
 
 
-_ADMIN_SCENARIOS = _admin_scenario_tag_sets()
+_ADMIN_SCENARIOS = [scenario for feature in _ADMIN_FEATURES for scenario in _admin_scenario_tag_sets(feature)]
+
+
+def _declared_scenario_count(feature: str) -> int:
+    """How many scenarios *feature* declares, counted from its ``Scenario:`` / ``Scenario Outline:`` lines."""
+    text = (_FEATURES_DIR / feature).read_text(encoding="utf-8")
+    return len(re.findall(r"^\s*Scenario(?: Outline)?:", text, re.MULTILINE))
+
+
+def _admin_routes() -> list:
+    """Every ``ENV_ROUTES`` row an admin scenario resolves to, once each.
+
+    Resolved through the same ``storyboard_spec.resolve_env_route`` call
+    ``_harness_env`` makes, so a future admin feature's own row is graded as
+    soon as the feature exists.
+    """
+    routes: dict[str, object] = {}
+    for scenario_tag, marker_names in _ADMIN_SCENARIOS:
+        route = storyboard_spec.resolve_env_route(marker_names, ENV_ROUTES)
+        assert route is not None, f"{scenario_tag}: no ENV_ROUTES row claims this admin scenario"
+        routes.setdefault(route.tag, route)
+    return list(routes.values())
 
 
 class _StubMetafunc:
@@ -117,11 +159,17 @@ def _sole_call(metafunc: _StubMetafunc, scenario_tag: str) -> SimpleNamespace:
     return call
 
 
-def test_feature_file_declares_thirteen_admin_scenarios() -> None:
-    """Anchor: the guard below must cover every scenario in the feature."""
-    assert len(_ADMIN_SCENARIOS) == 13, (
-        f"BR-ADMIN-ACCOUNTS.feature has {len(_ADMIN_SCENARIOS)} T-ADMIN-* scenarios, expected 13"
-    )
+def test_the_tag_regex_sees_every_scenario_of_every_admin_feature() -> None:
+    """Anchor: the guards below cover each admin feature's scenarios, counted from the file itself.
+
+    A scenario whose tag line the regex does not match would be graded by nothing here. The
+    feature's own ``Scenario`` lines say how many there are, so a miss shows as a difference.
+    """
+    assert _ADMIN_FEATURES, "no feature file carries a @T-ADMIN- tag"
+    found = {feature: len(_admin_scenario_tag_sets(feature)) for feature in _ADMIN_FEATURES}
+    declared = {feature: _declared_scenario_count(feature) for feature in _ADMIN_FEATURES}
+
+    assert found == declared, f"T-ADMIN-* scenarios the regex found {found} vs scenarios declared {declared}"
 
 
 @pytest.mark.parametrize(("scenario_tag", "marker_names"), _ADMIN_SCENARIOS, ids=[s[0] for s in _ADMIN_SCENARIOS])
@@ -189,9 +237,35 @@ def test_admin_transport_values_satisfy_the_ctx_fixture_contract(monkeypatch: py
         )
 
 
+def test_admin_rows_build_the_env_their_transport_names() -> None:
+    """Handed an ``e2e_config`` a row's env drives the stack at its address; handed ``None`` it runs in process.
+
+    An in-process env under an ``e2e_config`` is the defect this guards: the node id says
+    ``e2e_admin``, the stack is up, and the scenario runs on the Flask test_client. The
+    builder comes from the ``ENV_ROUTES`` row each admin scenario resolves to. A row that
+    builds an env of another family (an ``IntegrationEnv`` taking ``e2e_config`` whole) has
+    no mode to check and is left to that family's own tests.
+    """
+    e2e_config = SimpleNamespace(base_url="http://stack-under-test:8080")
+    graded = []
+    for route in _admin_routes():
+        in_process = route.env_builder(None)
+        if not isinstance(in_process, AdminAccountEnv):
+            continue
+        on_the_stack = route.env_builder(e2e_config)
+        assert in_process.mode == "integration", f"{route.tag}: without an e2e_config the env must run in process"
+        assert (on_the_stack.mode, on_the_stack._base_url) == ("e2e", e2e_config.base_url), (
+            f"{route.tag}: handed an e2e_config, the builder built a {on_the_stack.mode!r} env at "
+            f"{on_the_stack._base_url!r}, so every e2e_admin node of this row runs somewhere else"
+        )
+        graded.append(route.tag)
+
+    assert graded, "no admin scenario resolves to a row that builds an AdminAccountEnv"
+
+
 def _pinned_db_scope_calls() -> list[int]:
     """Line numbers of ``getfixturevalue("integration_db")`` inside ``_harness_env``."""
-    tree = ast.parse(_BDD_CONFTEST.read_text(), filename=str(_BDD_CONFTEST))
+    tree = ast.parse(_BDD_CONFTEST.read_text(encoding="utf-8"), filename=str(_BDD_CONFTEST))
     harness_env = next(
         node
         for node in ast.walk(tree)
@@ -213,7 +287,8 @@ def test_harness_env_never_pins_its_db_scope() -> None:
     """Every ``_harness_env`` branch must derive its DB scope from the transport.
 
     ``_db_scope_for(request, e2e_config)`` is that derivation: ``integration_db``
-    in process, ``_production_db_pointed_at(e2e_config.postgres_url)`` over e2e.
+    in process, ``production_db_pointed_at(e2e_config.postgres_url)``
+    (``tests/utils/database_helpers.py``) over e2e.
     A branch calling ``getfixturevalue("integration_db")`` directly hardcodes the
     in-process answer, so over an e2e transport production reads an empty
     per-test DB while the env writes to the live server DB.

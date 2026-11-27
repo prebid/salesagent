@@ -62,7 +62,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_call_expressions
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_call_expressions, rel
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
@@ -213,10 +213,10 @@ def _dynamic_post_sites(tree_root: Path = SRC, *, relative_to: Path = ROOT) -> l
     """
     sites: list[tuple[str, str, int]] = []
     for path in sorted(tree_root.rglob("*.py")):
-        rel = path.relative_to(relative_to).as_posix()
-        if "/tests/" in f"/{rel}" or rel == BOUNDARY_MODULE:
+        relpath = rel(path, relative_to)
+        if "/tests/" in f"/{relpath}" or relpath == BOUNDARY_MODULE:
             continue
-        tree = ast.parse(path.read_text(encoding="utf-8"), rel)
+        tree = ast.parse(path.read_text(encoding="utf-8"), relpath)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
                 continue
@@ -225,7 +225,7 @@ def _dynamic_post_sites(tree_root: Path = SRC, *, relative_to: Path = ROOT) -> l
             destination = _destination(node)
             if destination is None or isinstance(destination, (ast.Constant, ast.JoinedStr)):
                 continue
-            sites.append((rel, ast.unparse(destination), node.lineno))
+            sites.append((relpath, ast.unparse(destination), node.lineno))
     return sites
 
 
@@ -261,11 +261,11 @@ class TestOutboundWebhookSenderBoundary:
         webhook sender is a build failure the moment it is written, whether or not
         anyone remembers this file exists.
         """
-        unclassified = sorted({(rel, expr) for rel, expr, _ in _dynamic_post_sites()} - CLASSIFIED)
+        unclassified = sorted({(relpath, expr) for relpath, expr, _ in _dynamic_post_sites()} - CLASSIFIED)
 
         assert not unclassified, (
             "Unclassified outbound POST to a caller-supplied URL:\n"
-            + "\n".join(f"  {rel}  ->  {expr}" for rel, expr in unclassified)
+            + "\n".join(f"  {relpath}  ->  {expr}" for relpath, expr in unclassified)
             + "\n\nAdd it to exactly one table in this file: AD_SERVER_AND_API_CALLS (a third-party "
             "API this agent calls), NON_ADCP_RECEIVERS (an outbound webhook to a non-AdCP receiver, "
             "e.g. Slack), or ADCP_WEBHOOK_SENDERS (a webhook to a URL a buyer registered — which must "
@@ -282,7 +282,7 @@ class TestOutboundWebhookSenderBoundary:
         the same equality, so they are asserted by the shared helper rather than by
         two hand-rolled set diffs.
         """
-        discovered = {(rel, expr) for rel, expr, _ in _dynamic_post_sites()}
+        discovered = {(relpath, expr) for relpath, expr, _ in _dynamic_post_sites()}
 
         assert_violations_match_allowlist(
             discovered & ADCP_WEBHOOK_SENDERS,
@@ -363,14 +363,14 @@ class TestOutboundWebhookSenderBoundary:
         resolve for outside contributors.
         """
         missing = [
-            (rel, expr, lineno)
-            for rel, expr, lineno in _dynamic_post_sites()
-            if (rel, expr) in ALLOWED_UNROUTED and FIXME_MARKER not in _enclosing_function_source(rel, lineno)
+            (relpath, expr, lineno)
+            for relpath, expr, lineno in _dynamic_post_sites()
+            if (relpath, expr) in ALLOWED_UNROUTED and FIXME_MARKER not in _enclosing_function_source(relpath, lineno)
         ]
 
         assert not missing, (
             f"Allowlisted webhook senders with no {FIXME_MARKER} comment in the sending function:\n"
-            + "\n".join(f"  {rel}:{lineno}  ->  {expr}" for rel, expr, lineno in missing)
+            + "\n".join(f"  {relpath}:{lineno}  ->  {expr}" for relpath, expr, lineno in missing)
         )
 
 

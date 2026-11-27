@@ -1626,9 +1626,10 @@ class BaseTestEnv:
         it selects are this env's own. That is the same property the e2e branch has
         always relied on.
         """
-        from tests.helpers.signing import VERIFIED_METRIC, samples_with
+        from tests.helpers.metrics import counter_total
+        from tests.helpers.signing import VERIFIED_METRIC
 
-        return int(sum(samples_with(VERIFIED_METRIC, keyid=self.signing.key_id).values()))
+        return int(counter_total(VERIFIED_METRIC, keyid=self.signing.key_id))
 
     def _realize_e2e_signature_failure_counts(self) -> dict[str, float]:
         """The same claim and the SAME EVENT, read across a process boundary.
@@ -1663,7 +1664,8 @@ class BaseTestEnv:
         (``src/core/metrics.py:325``): a failure is recorded before any key is resolved,
         so the code is the only label that says WHICH rule refused.
         """
-        from tests.helpers.signing import FAILED_METRIC, counter_samples
+        from tests.helpers.metrics import counter_samples
+        from tests.helpers.signing import FAILED_METRIC
 
         return _by_signature_code(counter_samples(FAILED_METRIC))
 
@@ -3327,8 +3329,9 @@ class IntegrationEnv(BaseTestEnv):
     #: opt-out is scoped to exactly the scenario that calls it.
     REST_RAISE_SERVER_EXCEPTIONS: bool = True
 
-    def ensure_tenant(self, **tenant_kwargs: Any) -> Any:
-        """Get-or-create this env's tenant row alone, with *tenant_kwargs* applied either way.
+    def ensure_tenant(self, tenant_id: str | None = None, **tenant_kwargs: Any) -> Any:
+        """Get-or-create a tenant row alone (this env's, unless *tenant_id* names another),
+        with *tenant_kwargs* applied either way.
 
         The tenant half of :meth:`setup_default_data`, for a setup that configures the
         SELLER and must not seed a principal: the factory derives a principal's token from
@@ -3342,9 +3345,10 @@ class IntegrationEnv(BaseTestEnv):
         from src.core.database.models import Tenant
         from tests.factories import TenantFactory
 
-        tenant = self._session.scalars(select(Tenant).filter_by(tenant_id=self._tenant_id)).first()
+        tenant_id = self._tenant_id if tenant_id is None else tenant_id
+        tenant = self._session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
         if tenant is None:
-            return TenantFactory(tenant_id=self._tenant_id, **tenant_kwargs)
+            return TenantFactory(tenant_id=tenant_id, **tenant_kwargs)
         if tenant_kwargs:
             for column, value in tenant_kwargs.items():
                 setattr(tenant, column, value)
@@ -3352,13 +3356,19 @@ class IntegrationEnv(BaseTestEnv):
         return tenant
 
     def setup_default_data(self, **tenant_kwargs: Any) -> tuple[Any, Any]:
-        """Get-or-create default tenant + principal via factories.
+        """Get-or-create this env's own tenant + principal: :meth:`setup_party` with the env's ids."""
+        return self.setup_party(self._tenant_id, self._principal_id, **tenant_kwargs)
+
+    def setup_party(self, tenant_id: str, principal_id: str, **tenant_kwargs: Any) -> tuple[Any, Any]:
+        """Get-or-create a tenant + principal via factories, shaped the way production shapes them.
+
+        A scenario with several tenants calls this once per tenant rather than
+        building rows itself, so every tenant carries the rows production guarantees.
 
         Must be called inside the ``with env:`` block (factories are bound
         to the session during ``__enter__``).
 
-        Returns (tenant, principal) ORM instances. Uses self._tenant_id
-        and self._principal_id from constructor. Idempotent: reuses existing
+        Returns (tenant, principal) ORM instances. Idempotent: reuses existing
         rows rather than re-creating, so it is safe to call after the e2e
         ``__enter__`` auto-seed (``_seed_identity``) already created them.
 
@@ -3375,13 +3385,13 @@ class IntegrationEnv(BaseTestEnv):
         from src.core.database.models import Principal
         from tests.factories import AdapterConfigFactory, PrincipalFactory
 
-        tenant = self.ensure_tenant(**tenant_kwargs)
+        tenant = self.ensure_tenant(tenant_id, **tenant_kwargs)
 
         principal = self._session.scalars(
-            select(Principal).filter_by(tenant_id=self._tenant_id, principal_id=self._principal_id)
+            select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
         ).first()
         if principal is None:
-            principal = PrincipalFactory(tenant=tenant, principal_id=self._principal_id)
+            principal = PrincipalFactory(tenant=tenant, principal_id=principal_id)
 
         # AN ``adapter_config`` ROW, because EVERY production tenant has one and a fixture
         # without one is state production cannot be in. Every creation path writes it --
@@ -3396,7 +3406,7 @@ class IntegrationEnv(BaseTestEnv):
         # not see it (salesagent-6d07f, salesagent-8mynh). The posture column is left at its
         # own server default (``false``); this seeds the ROW's existence, which is the fact
         # production guarantees, and states no policy a scenario did not ask for.
-        adapter_config = self._session.scalars(select(DBAdapterConfig).filter_by(tenant_id=self._tenant_id)).first()
+        adapter_config = self._session.scalars(select(DBAdapterConfig).filter_by(tenant_id=tenant_id)).first()
         if adapter_config is None:
             AdapterConfigFactory(tenant=tenant, adapter_type="mock")
             self._commit_factory_data()

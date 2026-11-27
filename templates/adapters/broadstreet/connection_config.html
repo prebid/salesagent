@@ -74,8 +74,7 @@ Expected context variables:
 
 <script>
 function saveBroadstreetConfig() {
-    const scriptRoot = '{{ request.script_root }}' || '';
-    const tenantId = '{{ tenant_id }}';
+    const tenantId = {{ tenant_id|tojson }};
     const config = {
         network_id: document.getElementById('broadstreet_network_id').value,
         api_key: document.getElementById('broadstreet_api_key').value,
@@ -105,7 +104,7 @@ function saveBroadstreetConfig() {
         if (data.success) {
             showNotification('Configuration saved successfully', 'success');
         } else {
-            showNotification('Failed to save: ' + (data.error || 'Unknown error'), 'error');
+            showNotification('Failed to save: ' + adminErrorText(data), 'error');
         }
     })
     .catch(error => {
@@ -114,8 +113,7 @@ function saveBroadstreetConfig() {
 }
 
 function testBroadstreetConnection() {
-    const scriptRoot = '{{ request.script_root }}' || '';
-    const tenantId = '{{ tenant_id }}';
+    const tenantId = {{ tenant_id|tojson }};
     const statusEl = document.getElementById('broadstreet-connection-status');
     const networkId = document.getElementById('broadstreet_network_id').value;
     const apiKey = document.getElementById('broadstreet_api_key').value;
@@ -141,13 +139,14 @@ function testBroadstreetConnection() {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            statusEl.innerHTML = '<span style="color: #10b981;">✓ Connected to ' + (data.network_name || 'Broadstreet') + '</span>';
+            statusEl.innerHTML = '<span style="color: #10b981;">✓ Connected to ' + escapeHtml(data.network_name || 'Broadstreet') + '</span>';
         } else {
-            statusEl.innerHTML = '<span style="color: #ef4444;">✗ ' + (data.error || 'Connection failed') + '</span>';
+            statusEl.innerHTML = '<span style="color: #ef4444;"></span>';
+            statusEl.firstChild.textContent = '✗ ' + adminErrorText(data);
         }
     })
     .catch(error => {
-        statusEl.innerHTML = '<span style="color: #ef4444;">✗ Error: ' + error.message + '</span>';
+        statusEl.innerHTML = '<span style="color: #ef4444;">✗ Error: ' + escapeHtml(error.message) + '</span>';
     });
 }
 </script>

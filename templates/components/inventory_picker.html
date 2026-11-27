@@ -63,16 +63,15 @@ Then in your template, add browse buttons:
 
     // Configuration from Jinja2 context
     const config = {
-        tenantId: '{{ picker_config.tenant_id if picker_config else tenant_id }}',
-        adUnitFieldId: '{{ picker_config.ad_unit_field_id if picker_config else "targeted_ad_unit_ids" }}',
-        placementFieldId: '{{ picker_config.placement_field_id if picker_config else "targeted_placement_ids" }}',
-        adUnitDisplayId: '{{ picker_config.ad_unit_display_id if picker_config else "selected-ad-units" }}',
-        placementDisplayId: '{{ picker_config.placement_display_id if picker_config else "selected-placements" }}',
-        scriptRoot: '{{ request.script_root }}'  // Base path for URLs (e.g., '/admin' or '')
+        tenantId: {{ (picker_config.tenant_id if picker_config else tenant_id)|tojson }},
+        adUnitFieldId: {{ (picker_config.ad_unit_field_id if picker_config else "targeted_ad_unit_ids")|tojson }},
+        placementFieldId: {{ (picker_config.placement_field_id if picker_config else "targeted_placement_ids")|tojson }},
+        adUnitDisplayId: {{ (picker_config.ad_unit_display_id if picker_config else "selected-ad-units")|tojson }},
+        placementDisplayId: {{ (picker_config.placement_display_id if picker_config else "selected-placements")|tojson }},
     };
 
     // Tree API URL for ad units
-    const treeApiUrl = `${config.scriptRoot}/api/tenant/${config.tenantId}/inventory/tree`;
+    const treeApiUrl = `${scriptRoot}/api/tenant/${config.tenantId}/inventory/tree`;
 
     // State
     let currentPickerType = null;
@@ -170,13 +169,13 @@ Then in your template, add browse buttons:
 
     function loadPlacementsList(search = '') {
         const list = document.getElementById('inventory-picker-list');
-        const url = `${config.scriptRoot}/api/tenant/${config.tenantId}/inventory-list?type=placement${search ? '&search=' + encodeURIComponent(search) : ''}`;
+        const url = `${scriptRoot}/api/tenant/${config.tenantId}/inventory-list?type=placement${search ? '&search=' + encodeURIComponent(search) : ''}`;
 
         fetch(url, { credentials: 'same-origin' })
             .then(response => {
                 // Handle authentication errors (401) by redirecting to login
                 if (response.status === 401) {
-                    const loginUrl = config.scriptRoot + '/login?redirect=' + encodeURIComponent(window.location.pathname);
+                    const loginUrl = scriptRoot + '/login?redirect=' + encodeURIComponent(window.location.pathname);
                     window.location.href = loginUrl;
                     return Promise.reject(new Error('Session expired'));
                 }
@@ -184,7 +183,8 @@ Then in your template, add browse buttons:
             })
             .then(data => {
                 if (data.error) {
-                    list.innerHTML = `<div style="padding: 2rem; text-align: center; color: #dc3545;">${data.error}</div>`;
+                    list.innerHTML = `<div style="padding: 2rem; text-align: center; color: #dc3545;"></div>`;
+                    list.firstChild.textContent = adminErrorText(data);
                     return;
                 }
 
@@ -205,12 +205,12 @@ Then in your template, add browse buttons:
                 list.innerHTML = data.items.map(item => `
                     <label class="inventory-item" style="display: flex; align-items: center; padding: 0.75rem; border-bottom: 1px solid #eee; cursor: pointer;">
                         <input type="checkbox"
-                               value="${item.id}"
+                               value="${escapeHtml(item.id)}"
                                ${selectedIds.has(item.id) ? 'checked' : ''}
                                style="margin-right: 0.75rem;">
                         <div style="flex: 1;">
-                            <strong>${item.name}</strong> <small style="color: #666;">(${item.id})</small>
-                            ${item.path && item.path.length > 1 ? `<br><small style="color: #666;">${item.path.join(' > ')}</small>` : ''}
+                            <strong>${escapeHtml(item.name)}</strong> <small style="color: #666;">(${escapeHtml(item.id)})</small>
+                            ${item.path && item.path.length > 1 ? `<br><small style="color: #666;">${escapeHtml(item.path.join(' > '))}</small>` : ''}
                         </div>
                     </label>
                 `).join('');
@@ -218,7 +218,7 @@ Then in your template, add browse buttons:
             .catch(error => {
                 // Don't show error for session expired (we're redirecting)
                 if (error.message !== 'Session expired') {
-                    list.innerHTML = `<div style="padding: 2rem; text-align: center; color: #dc3545;">Error: ${error.message}</div>`;
+                    list.innerHTML = `<div style="padding: 2rem; text-align: center; color: #dc3545;">Error: ${escapeHtml(error.message)}</div>`;
                 }
             });
     }
@@ -253,7 +253,7 @@ Then in your template, add browse buttons:
                         return item ? item.name : id;
                     });
                     display.innerHTML = names.map((name, idx) =>
-                        `<span class="badge bg-primary me-1 mb-1" title="${selectedIds[idx]}">${name}</span>`
+                        `<span class="badge bg-primary me-1 mb-1" title="${escapeHtml(selectedIds[idx])}">${escapeHtml(name)}</span>`
                     ).join('');
                 }
             }
@@ -276,7 +276,7 @@ Then in your template, add browse buttons:
                         return item ? item.name : id;
                     });
                     display.innerHTML = names.map((name, idx) =>
-                        `<span class="badge bg-success me-1 mb-1" title="${selectedIds[idx]}">${name}</span>`
+                        `<span class="badge bg-success me-1 mb-1" title="${escapeHtml(selectedIds[idx])}">${escapeHtml(name)}</span>`
                     ).join('');
                 }
             }

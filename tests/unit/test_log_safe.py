@@ -12,13 +12,17 @@ import pytest
 
 from src.core.logging_config import log_safe
 
+# Every character ``str.splitlines()`` treats as a line boundary, built from code
+# points so this file carries none of them literally. One list for every test here.
+_ALL_BREAKS = "".join(chr(c) for c in (0x0A, 0x0D, 0x0B, 0x0C, 0x1C, 0x1D, 0x1E, 0x85, 0x2028, 0x2029))
+
 
 class TestLogSafe:
     """log_safe escapes every character that can start a new log line."""
 
     @pytest.mark.parametrize(
         "char",
-        ["\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", " ", " "],
+        list(_ALL_BREAKS),
         ids=["lf", "cr", "vt", "ff", "fs", "gs", "rs", "nel", "ls", "ps"],
     )
     def test_line_breaking_characters_are_escaped(self, char):
@@ -42,6 +46,13 @@ class TestLogSafe:
         assert log_safe(ValueError("bad\nvalue")) == "bad\\nvalue"
         assert log_safe(None) == "None"
         assert log_safe(42) == "42"
+
+    def test_output_matches_a_unicode_escape_of_each_line_break(self):
+        """The ``.replace`` chain produces what the earlier ``str.translate`` table did."""
+        breaks = _ALL_BREAKS
+        table = str.maketrans({c: c.encode("unicode_escape").decode("ascii") for c in breaks})
+        sample = "a" + "b".join(breaks) + "\\n\r\n" + "z" + breaks[::-1]
+        assert log_safe(sample) == sample.translate(table)
 
     def test_ordinary_text_is_unchanged(self):
         assert log_safe("tenant_blick") == "tenant_blick"
@@ -108,3 +119,95 @@ class TestCallSites:
         assert len(records) == 1, f"expected one WARNING, got {[r.getMessage() for r in records]}"
         message = records[0].getMessage()
         assert len(message.splitlines()) == 1, f"a non-str __repr__ forged a line: {message!r}"
+
+
+def _all_loggers() -> list[logging.Logger]:
+    manager = logging.root.manager
+    return [logging.root, *(lg for lg in manager.loggerDict.values() if isinstance(lg, logging.Logger))]
+
+
+@pytest.fixture
+def configured_logging(monkeypatch):
+    """Run the real logging setup in one mode, and put every logger back after.
+
+    The setup includes uvicorn's own logging step, run with the arguments both server
+    entry points pass. Every logger's handlers, filters, level and propagation are
+    restored; a logger created during the test is reset to a fresh one's state.
+    """
+    from unittest.mock import PropertyMock
+
+    import fastmcp  # noqa: F401 - imported by the setup; its import-time handlers belong to the snapshot
+    import uvicorn
+
+    import src.core.audit_logger  # noqa: F401 - attaches the adcp.audit file handlers
+    from src.core.config import get_settings
+    from src.core.logging_config import setup_oauth_logging, setup_structured_logging, uvicorn_logging_kwargs
+
+    saved = {lg: (lg.handlers[:], lg.filters[:], lg.propagate, lg.level, lg.disabled) for lg in _all_loggers()}
+
+    def configure(structured: bool) -> None:
+        monkeypatch.setattr(type(get_settings()), "structured_logging", PropertyMock(return_value=structured))
+        setup_structured_logging()
+        setup_oauth_logging()
+        uvicorn.Config("src.app:app", **uvicorn_logging_kwargs())  # runs uvicorn's logging step
+
+    yield configure
+
+    for lg in _all_loggers():
+        handlers, filters, propagate, level, disabled = saved.get(lg, ([], [], True, logging.NOTSET, False))
+        lg.handlers = handlers
+        lg.filters = filters
+        lg.propagate = propagate
+        lg.setLevel(level)
+        lg.disabled = disabled
+
+
+def _record(name: str) -> logging.LogRecord:
+    try:
+        raise RuntimeError(f"remote said{_ALL_BREAKS}FORGED")
+    except RuntimeError as exc:
+        return logging.LogRecord(
+            name,
+            logging.ERROR,
+            __file__,
+            1,
+            f"op{_ALL_BREAKS}%s",
+            (f"arg{_ALL_BREAKS}FORGED",),
+            (type(exc), exc, None),
+        )
+
+
+def _writes_to_console(handler: logging.Handler) -> bool:
+    return not isinstance(handler, logging.FileHandler | logging.NullHandler)
+
+
+@pytest.mark.parametrize("structured", [True, False], ids=["production", "development"])
+class TestEveryHandlerWritesOneLinePerRecord:
+    """After the real setup, in both modes, every handler on every logger writes one line.
+
+    The population is every logger the process has, not a list kept here, so a handler
+    a library or a later change attaches is checked without editing this file.
+    """
+
+    def test_a_record_with_every_line_break_renders_as_one_line(self, configured_logging, structured):
+        configured_logging(structured)
+        handlers = [
+            (lg.name, h) for lg in _all_loggers() for h in lg.handlers if not isinstance(h, logging.NullHandler)
+        ]
+        assert any(name == "root" for name, _ in handlers), "the root handler is in the population"
+
+        for name, handler in handlers:
+            rendered = handler.format(_record(name))
+            assert len(rendered.splitlines()) == 1, (name, handler, rendered)
+            assert "FORGED" in rendered, "escaped, not dropped"
+
+    def test_no_logger_reaches_two_console_handlers(self, configured_logging, structured):
+        """The root handler owns the console; a second one on the path prints each record twice."""
+        configured_logging(structured)
+        for logger in _all_loggers():
+            console: list[logging.Handler] = []
+            current: logging.Logger | None = logger
+            while current is not None:
+                console += [h for h in current.handlers if _writes_to_console(h)]
+                current = current.parent if current.propagate else None
+            assert len(console) <= 1, (logger.name, console)

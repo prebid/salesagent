@@ -1,3 +1,7 @@
+# Check text files out with LF on every platform: Git for Windows defaults to
+# core.autocrlf=true, and the shell scripts and the guards that read tracked
+# files expect the LF bytes that are in the index.
+* text=auto eol=lf
 
 # Use bd merge for beads JSONL files
 .beads/issues.jsonl merge=beads

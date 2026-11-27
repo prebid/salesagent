@@ -20,6 +20,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from tests.unit._architecture_helpers import rel
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TESTS_DIR = REPO_ROOT / "tests"
 
@@ -58,22 +60,22 @@ def _testclient_raise_server_exceptions_false(node: ast.Call) -> bool:
     return False
 
 
-def _scan_source_text(rel: str, text: str) -> list[tuple[str, int]]:
+def _scan_source_text(rel_path: str, text: str) -> list[tuple[str, int]]:
     tree = ast.parse(text)
     if not _imports_harness(tree):
         return []
     hits: list[tuple[str, int]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Call) and _testclient_raise_server_exceptions_false(node):
-            hits.append((rel, node.lineno))
+            hits.append((rel_path, node.lineno))
     return hits
 
 
 def _scan() -> list[tuple[str, int]]:
     hits: list[tuple[str, int]] = []
     for path in sorted(TESTS_DIR.rglob("*.py")):
-        rel = str(path.relative_to(REPO_ROOT))
-        hits.extend(_scan_source_text(rel, path.read_text()))
+        rel_path = rel(path, REPO_ROOT)
+        hits.extend(_scan_source_text(rel_path, path.read_text(encoding="utf-8")))
     return hits
 
 

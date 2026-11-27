@@ -33,8 +33,8 @@ Add one as the first `Then`, with the previous first `Then` becoming an `And`
 beneath it. Name the TOOL, never a schema file: a filename in a feature file is
 a second spelling of which tool the scenario exercises, and the two drift.
 
-Read the branch words from `branch_names(tool)`
-(`tests/helpers/response_schemas.py:80`), which reads the pinned schema's own
+Read the branch words from `branch_names(tool)` in
+`tests/helpers/response_schemas.py`, which reads the pinned schema's own
 `oneOf` titles, rather than from memory.
 
 A `Scenario Outline` whose outcome is an `Examples` column takes the general
@@ -45,12 +45,11 @@ both valid and invalid rows and runs its single `Then` against both.
 
 The authority is `tests/bdd/steps/generic/then_schema.py`. Each step's docstring
 states what it grades, why the form exists, and what it measured.
-`_assert_compliant` (line 54) is outcome-aware, so it grades a refused call
-against the error contract instead of failing it as a missing success body.
-`then_response_compliant` (line 256) and `then_response_compliant_branch`
-(line 286) carry the general-versus-branch rule. `then_error_compliant`
-(line 115) and `then_webhook_payload_compliant` (line 157) carry the two
-tool-independent lines.
+`_assert_compliant` is outcome-aware, so it grades a refused call against the
+error contract instead of failing it as a missing success body.
+`then_response_compliant` and `then_response_compliant_branch` carry the
+general-versus-branch rule. `then_error_compliant` and
+`then_webhook_payload_compliant` carry the two tool-independent lines.
 
 ## What still has no compliance sentence
 

@@ -169,6 +169,10 @@ WORKFLOW_PRINCIPAL_SCOPE_EXEMPT: dict[str, str] = {
         "Admin workflow dashboard only (src/admin/blueprints/workflows.py) -- a "
         "tenant-wide publisher view by definition."
     ),
+    "_pending_policy_reviews": (
+        "Admin policy review queue only (src/admin/blueprints/policy.py, via "
+        "list/get/settle_pending_policy_review) -- the publisher reviewing its tenant's queue."
+    ),
 }
 
 

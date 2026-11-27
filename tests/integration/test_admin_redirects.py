@@ -3,6 +3,7 @@
 import pytest
 
 from tests.harness._base import BareIntegrationEnv
+from tests.harness.admin_client import BROWSER_PAGE_HEADERS
 from tests.helpers.admin_session import admin_auth_session
 from tests.integration.gam_oauth_helpers import (
     authorize,
@@ -13,6 +14,15 @@ from tests.integration.gam_oauth_helpers import (
     start_flow,
 )
 from tests.integration.property_list_helpers import allow_local_origin
+
+BEFORE = ("Before", "before")
+AFTER = ("After", "after")
+
+
+def saved(env, tenant) -> tuple[str, str]:
+    """Read the tenant state after the form request commits."""
+    env.get_session().refresh(tenant)
+    return tenant.name, tenant.subdomain
 
 
 def assert_redirects_to(client, response, path, script_root):
@@ -32,7 +42,7 @@ def admin_env(integration_db, monkeypatch, admin_client):
 
     monkeypatch.setattr(get_settings().runtime, "adcp_multi_tenant", True)
     with BareIntegrationEnv() as env:
-        tenant, _ = env.setup_default_data(name="Before", subdomain="before")
+        tenant, _ = env.setup_default_data(name=BEFORE[0], subdomain=BEFORE[1])
         admin_auth_session(admin_client, tenant.tenant_id)
         yield env, admin_client, tenant
 
@@ -45,12 +55,11 @@ def test_tenant_save_redirect_and_persistence(admin_env, script_root, valid):
     tenant_id = tenant.tenant_id
     response = client.post(
         f"/tenant/{tenant_id}/update",
-        data={"name": "After" if valid else "", "subdomain": "after"},
+        data={"name": AFTER[0] if valid else "", "subdomain": AFTER[1]},
         base_url="https://localhost",
         environ_overrides={"SCRIPT_NAME": script_root},
     )
-    env._session.refresh(tenant)
-    assert (tenant.name, tenant.subdomain) == (("After", "after") if valid else ("Before", "before"))
+    assert saved(env, tenant) == (AFTER if valid else BEFORE)
     assert_redirects_to(client, response, f"/tenant/{tenant_id}/settings", script_root)
 
 
@@ -59,11 +68,14 @@ def test_anonymous_save_cannot_write(admin_env):
     env, client, tenant = admin_env
     with client.session_transaction() as session:
         session.clear()
-    response = client.post(f"/tenant/{tenant.tenant_id}/update", data={"name": "After", "subdomain": "after"})
+    response = client.post(
+        f"/tenant/{tenant.tenant_id}/update",
+        data={"name": AFTER[0], "subdomain": AFTER[1]},
+        headers=BROWSER_PAGE_HEADERS,
+    )
     assert response.status_code == 302
     assert "/login" in response.headers["Location"]
-    env._session.refresh(tenant)
-    assert (tenant.name, tenant.subdomain) == ("Before", "before")
+    assert saved(env, tenant) == BEFORE
 
 
 @pytest.mark.requires_db
@@ -142,9 +154,8 @@ def test_member_cannot_save_another_tenant(admin_env):
     log_in(client, user)
     response = client.post(
         f"/tenant/{tenant.tenant_id}/update",
-        data={"name": "After", "subdomain": "after"},
+        data={"name": AFTER[0], "subdomain": AFTER[1]},
         base_url="https://localhost",
     )
     assert response.status_code == 403
-    env._session.refresh(tenant)
-    assert (tenant.name, tenant.subdomain) == ("Before", "before")
+    assert saved(env, tenant) == BEFORE
