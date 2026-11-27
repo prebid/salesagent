@@ -561,15 +561,19 @@ def _adapter_refusal(
     The adapter's check, or core's html5 bundle fetch (:func:`_with_html5_bundles`), classifies
     (each problem names its creative and the package it was refused on); core builds the error,
     through the one selection the gate uses, and points it where the request named the creative.
+    "First" is in the request's order, whatever order the problems came in: the carriers they
+    were classified over follow the order the creatives were read in.
     """
     index_of = {package.package_id: index for index, package in enumerate(named_packages)}
-    refused = next(
-        (p for p in problems if p.subject_type == "creative" and p.subject_id and p.package_id in index_of), None
-    )
+    named_at = [
+        (index, _creative_position(named_packages[index], p.subject_id), p.subject_id)
+        for p in problems
+        if p.subject_type == "creative" and p.subject_id and (index := index_of.get(p.package_id or "")) is not None
+    ]
     field = None
-    if refused is not None:
-        assert refused.subject_id is not None and refused.package_id is not None
-        field = _creative_path(named_packages, index_of[refused.package_id], refused.subject_id)
+    if named_at:
+        index, _position, creative_id = min(named_at)
+        field = _creative_path(named_packages, index, creative_id)
     return problems_refusal(problems, field=field)
 
 
