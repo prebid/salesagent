@@ -403,16 +403,20 @@ def wrapped_failure(exc: BaseException) -> WrappedFailure | None:
 
 
 def is_transport_failure(exc: BaseException) -> bool:
-    """True when *exc* is an ``_httpx.HTTPError`` raised by a vendor SDK's own httpx stack.
+    """True when *exc* is an ``HTTPError`` of either httpx generation, raised by a vendor SDK's own stack.
 
     For the fixed-destination SDKs that dial outside this seam (the pydantic-ai providers,
-    see docs/security/outbound-egress.md). google-genai raises ``httpx.ConnectError``
-    unwrapped for an unreachable endpoint and ``httpx.RemoteProtocolError`` for a dropped
-    connection, so a caller that degrades on a provider failure has to recognise both. Like
-    :func:`wrapped_failure`, this answers the question without handing the httpx type across
-    the import ban.
+    see docs/security/outbound-egress.md). The installs carry both generations:
+    google-genai, anthropic, openai and pydantic-ai dial through ``httpx2``, while groq,
+    mistralai and cohere still dial through ``httpx``, and ``httpx2.HTTPError`` is not a
+    subclass of ``httpx.HTTPError``. pydantic-ai wraps a transport failure
+    (``TransportError``) in its own ``ModelConnectionError``, but google-genai lets the
+    other ``RequestError`` subclasses through bare, such as ``httpx2.DecodingError`` for a
+    response body that does not decode. A caller that degrades on a provider failure has to
+    recognise both generations. Like :func:`wrapped_failure`, this answers the question
+    without handing an httpx type across the import ban.
     """
-    return isinstance(exc, _httpx.HTTPError)
+    return isinstance(exc, _httpx.HTTPError | _httpx2.HTTPError)
 
 
 def find_wrapped[Wrapped: BaseException](exc: BaseException, exc_type: type[Wrapped]) -> Wrapped | None:

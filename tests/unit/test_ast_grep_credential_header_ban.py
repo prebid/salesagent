@@ -83,7 +83,7 @@ RULE_FILE = f".ast-grep/rules/{RULE_ID}.yml"
 
 # The version the suppression cases below were measured against, and the version
 # pyproject pins. See TestExemptionForm for why an upgrade cannot be silent.
-_MEASURED_VERSION = "0.45.3"
+_MEASURED_VERSION = "0.51.3"
 
 # Synthetic probes are written at a real path under a STAGED project root
 # (``stage_ast_grep_root`` copies sgconfig.yml and the rules next to it), because

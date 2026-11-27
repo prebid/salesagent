@@ -199,11 +199,12 @@ async def run_agent[OutputT](agent: "Agent[None, OutputT]", prompt: str) -> "Age
     The one place a provider failure is told apart from everything else. pydantic-ai wraps
     most provider failures in ``AgentRunError`` (``ModelHTTPError``, ``ModelAPIError``,
     ``UnexpectedModelBehavior``, ``UsageLimitExceeded``, ...) and reports a model it cannot
-    use as ``UserError``. It does not wrap every SDK's transport: google-genai raises
-    ``httpx.ConnectError`` unwrapped for an unreachable endpoint and
-    ``httpx.RemoteProtocolError`` for a dropped connection, which ``is_transport_failure``
-    recognises without importing httpx outside the egress seam. Anything else is not the
-    provider and propagates unchanged.
+    use as ``UserError``, and a dropped or refused connection as ``ModelConnectionError``.
+    It does not wrap every HTTP failure: google-genai raises ``httpx2.DecodingError``
+    unwrapped for a response body that does not decode, and an SDK on either httpx
+    generation can raise that generation's ``HTTPError`` bare. ``is_transport_failure`` recognises both generations
+    without importing httpx outside the egress seam. Anything else is not the provider and
+    propagates unchanged.
     """
     try:
         return await agent.run(prompt)
