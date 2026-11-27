@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -38,6 +38,8 @@ from src.core.schemas import (
     PushNotificationConfig,
     ReportingPeriod,
 )
+from src.core.stored_package import StoredPackage
+from src.core.traffic_carrier import AdapterCreativeAsset, CreativesByPackage
 from src.core.validation_helpers import package_field_path
 
 # Return type of AdServerAdapter._require_config — preserves the caller's value type.
@@ -522,12 +524,23 @@ class AdServerAdapter(ABC):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
+        *,
+        creatives_by_package: CreativesByPackage,
     ) -> list[ErrorProblem]:
-        """Pre-validate a media buy request without creating anything.
+        """Pre-validate a media buy request without creating anything: the one pre-booking seam.
 
-        Called before adapter execution to catch
-        adapter-specific constraint violations early. Override in
+        Called once, before the adapter books anything, on the direct create and on the
+        approval replay alike (``_execute_adapter_media_buy_creation``). Override in
         subclasses to add adapter-specific validation.
+
+        *creatives_by_package* maps a package id to the creatives the buy names on it, each as
+        core's gate read it for that package. An adapter refuses here a creative it cannot
+        traffic on its package, as a problem whose subject is the creative and whose
+        ``package_id`` is the package; core builds the error and points it at the request
+        (``exceptions.problems_refusal``). An adapter constructs no error for it. A typed
+        error (``AdCPSalesAgentError``) the check raises instead is treated by core as a
+        refusal before booking all the same: the check writes nothing, so on approval the
+        buy stays ``pending_approval``.
 
         Default implementation validates pricing model compatibility.
         Subclasses can override to add adapter-specific checks (e.g., impressions limits).
@@ -578,6 +591,8 @@ class AdServerAdapter(ABC):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
+        *,
+        creatives_by_package: CreativesByPackage | None = None,
     ) -> AdapterCreateResult:
         """Creates a new media buy on the ad server from selected packages.
 
@@ -588,6 +603,9 @@ class AdServerAdapter(ABC):
             end_time: Campaign end time
             package_pricing_info: Optional validated pricing information per package (AdCP PR #88)
                 Maps package_id → {pricing_model, rate, currency, is_fixed, bid_price}
+            creatives_by_package: The value ``validate_media_buy_request`` was handed, so an
+                adapter that sizes its line items from the creatives sizes them from the
+                carriers its check planned. ``None`` when the caller names no creatives.
 
         Returns:
             AdapterCreateResult with the ad server's ids. Failures are raised as
@@ -597,7 +615,7 @@ class AdServerAdapter(ABC):
 
     @abstractmethod
     def add_creative_assets(
-        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
+        self, media_buy_id: str, assets: list[AdapterCreativeAsset], today: datetime
     ) -> list[AssetStatus]:
         """Adds creative assets to an existing media buy."""
         pass
@@ -654,8 +672,16 @@ class AdServerAdapter(ABC):
         package_id: str | None,
         budget: int | None,
         today: datetime,
+        *,
+        packages: Sequence[StoredPackage],
     ) -> AdapterUpdateResult:
         """Updates a media buy with a specific action.
+
+        *packages* is every package of the buy as the seller stores it, read by the caller
+        inside its unit of work: an adapter reads what it needs from them and opens no
+        session. The caller writes the seller's own record of the change (the package's
+        ``budget`` and ``paused``) once the ad server accepts; an adapter changes only the
+        ad server.
 
         Failures are raised as AdCPSalesAgentError subclasses, never returned.
         """

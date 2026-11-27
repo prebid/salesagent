@@ -183,30 +183,17 @@ def _resolve_tenant_id_and_fallback_adapter(tenant: TenantLike) -> tuple[str, st
 def resolve_tenant_adapter_type(tenant: TenantLike) -> str:
     """Resolve the authoritative ad-server adapter type for a tenant.
 
-    Single source of truth for adapter-TYPE resolution: ``AdapterConfig.adapter_type``
-    (via ``AdapterConfigRepository``) wins when a row exists, falling back to
-    ``tenant.ad_server``/``tenant["ad_server"]`` otherwise. ``get_adapter()`` and the
-    principal-free ``get_adapter_class_for_tenant()`` read path both route through
-    this function so the two can never diverge (salesagent-dn2s: divergent
-    tenant-adapter-type resolution copies would only half-close INV-4).
+    ``AdapterConfig.adapter_type`` wins when a row exists, falling back to
+    ``tenant.ad_server``/``tenant["ad_server"]`` otherwise. The rule is
+    :func:`adapter_context_of`'s, which ``get_adapter()`` (through ``build_adapter``) and the
+    principal-free ``get_adapter_class_for_tenant()`` read path both apply, so the two can
+    never diverge (salesagent-dn2s: divergent tenant-adapter-type resolution copies would
+    only half-close INV-4).
 
     Args:
         tenant: Tenant context (dict or ORM model).
     """
-    logger = logging.getLogger(__name__)
-
-    resolved_tenant = tenant
-    tenant_id, selected_adapter = _resolve_tenant_id_and_fallback_adapter(resolved_tenant)
-    logger.info(f"[ADAPTER_SELECT] Initial selected_adapter from tenant.ad_server: {selected_adapter}")
-
-    from src.core.database.repositories.adapter_config import read_adapter_config
-
-    config_row = read_adapter_config(tenant_id)
-    if config_row and config_row.adapter_type:
-        selected_adapter = config_row.adapter_type
-        logger.info(f"[ADAPTER_SELECT] Using AdapterConfig.adapter_type: {selected_adapter}")
-
-    return selected_adapter or "mock"
+    return resolve_adapter_context(tenant).adapter_type
 
 
 @dataclass(frozen=True)
@@ -226,11 +213,29 @@ class AdapterContext:
 
 
 def resolve_adapter_context(tenant: TenantLike) -> AdapterContext:
-    """The ONE resolve every adapter helper starts from (#1721 Lane B, step 4.1)."""
-    resolved_tenant = tenant
-    adapter_type = resolve_tenant_adapter_type(resolved_tenant)
-    tenant_id, _ = _resolve_tenant_id_and_fallback_adapter(resolved_tenant)
-    return AdapterContext(tenant=resolved_tenant, adapter_type=adapter_type, tenant_id=tenant_id)
+    """The ONE resolve every adapter helper starts from (#1721 Lane B, step 4.1).
+
+    Reads the tenant's ``adapter_config`` row in a session of its own; a caller that holds the
+    row already calls :func:`adapter_context_of`.
+    """
+    from src.core.database.repositories.adapter_config import read_adapter_config
+
+    tenant_id, _fallback = _resolve_tenant_id_and_fallback_adapter(tenant)
+    return adapter_context_of(tenant, read_adapter_config(tenant_id))
+
+
+def adapter_context_of(tenant: TenantLike, config_row: DBAdapterConfig | None) -> AdapterContext:
+    """The context *config_row* gives *tenant*: the row's ``adapter_type``, else ``tenant.ad_server``.
+
+    The one selection rule, for :func:`resolve_adapter_context`, which reads the row, and for
+    ``build_adapter``, whose caller read it inside its own unit of work.
+    """
+    tenant_id, selected_adapter = _resolve_tenant_id_and_fallback_adapter(tenant)
+    logger.info(f"[ADAPTER_SELECT] Initial selected_adapter from tenant.ad_server: {selected_adapter}")
+    if config_row and config_row.adapter_type:
+        selected_adapter = config_row.adapter_type
+        logger.info(f"[ADAPTER_SELECT] Using AdapterConfig.adapter_type: {selected_adapter}")
+    return AdapterContext(tenant=tenant, adapter_type=selected_adapter or "mock", tenant_id=tenant_id)
 
 
 def get_adapter_class_for_tenant(tenant: TenantLike) -> type[AdServerAdapter]:
@@ -340,6 +345,10 @@ def _simulating_adapter_config(config_row: DBAdapterConfig) -> dict[str, object]
     return {
         "enabled": True,
         "manual_approval_required": config_row.mock_manual_approval_required,
+        # The fault injection the simulating adapter raises (docs/adapters/mock/README.md),
+        # carried from the row the caller read so the adapter never reads it again: a read
+        # of its own inside the caller's open unit of work would close that unit's session.
+        "test_behavior": (config_row.config_json or {}).get("test_behavior", {}),
     }
 
 
@@ -378,20 +387,36 @@ def get_adapter(identity: ResolvedIdentity) -> MockAdServerAdapter | GoogleAdMan
     An identity carrying NO account is unchanged: the tenant's configured adapter
     answers. That is the only honest reading — a sandbox account is a thing the
     request named, and a request that named none made no such claim.
+
+    Reads the tenant's ``adapter_config`` row in a session of its own. A caller holding a
+    unit of work open reads the row through it and calls :func:`build_adapter` instead:
+    the first ``get_db_session()`` opened inside an open unit closes that unit's session
+    (#1644, #2647).
     """
+    from src.core.database.repositories.adapter_config import read_adapter_config
+
+    tenant_id, _fallback = _resolve_tenant_id_and_fallback_adapter(identity.tenant)
+    return build_adapter(identity, read_adapter_config(tenant_id))
+
+
+def build_adapter(
+    identity: ResolvedIdentity, config_row: DBAdapterConfig | None
+) -> MockAdServerAdapter | GoogleAdManager | Kevel | TritonDigital:
+    """The ad-server adapter that acts for *identity*, built from the *config_row* the caller read.
+
+    :func:`get_adapter` states the selection rules. This opens no database session:
+    every input is the identity or the row.
+    """
+    from src.core.database.repositories.adapter_config import AdapterConfigRepository
+
     principal = identity.principal
     tenant = identity.tenant
-    ctx = resolve_adapter_context(tenant)
-    selected_adapter = ctx.adapter_type
+    ctx = adapter_context_of(tenant, config_row)
     tenant_id = ctx.tenant_id
-
-    # Get adapter config via repository
-    from src.core.database.repositories.adapter_config import AdapterConfigRepository, read_adapter_config
+    selected_adapter = ctx.adapter_type
 
     targeting_config: dict[str, object] | None = None
     naming_templates: tuple[str | None, str | None] | None = None
-
-    config_row = read_adapter_config(tenant_id)
 
     # A SANDBOX account never reaches a live ad server. Returned HERE, before the
     # live config assembly below reads a credential and before any live client is

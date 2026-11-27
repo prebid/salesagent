@@ -437,9 +437,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     # tests/admin/test_workflows_blueprint.py
     ("tests/admin/test_workflows_blueprint.py", "test_tenant"),
     ("tests/admin/test_workflows_blueprint.py", "_create_context_and_step"),
-    # ── tests/e2e/ — pre-existing violations from e2e lifecycle test ──
-    ("tests/e2e/test_gam_lifecycle.py", "_seed_lifecycle_test_data"),
-    ("tests/e2e/test_gam_lifecycle.py", "_persist_media_buy"),
 }
 
 
@@ -637,8 +634,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/admin/test_workflows_blueprint.py", "test_reject_step_sets_status_rejected"),
     ("tests/admin/test_workflows_blueprint.py", "test_reject_step_without_reason_uses_default"),
     ("tests/admin/test_workflows_blueprint.py", "test_tenant"),
-    ("tests/e2e/test_gam_lifecycle.py", "_persist_media_buy"),
-    ("tests/e2e/test_gam_lifecycle.py", "_seed_lifecycle_test_data"),
     ("tests/helpers/creative_test_helpers.py", "assert_stored_creative_assets"),
     ("tests/integration/conftest.py", "authenticated_admin_session"),
     ("tests/integration/conftest.py", "sample_principal"),
@@ -718,11 +713,9 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_creative_review_model.py", "test_get_creative_with_latest_review_tenant_isolation"),
     ("tests/integration/test_creative_sync_processing.py", "test_create_ai_powered_submits_task"),
     ("tests/integration/test_creative_sync_processing.py", "test_create_auto_approve_status"),
-    ("tests/integration/test_creative_sync_processing.py", "test_create_preview_dimensions_extracted"),
     ("tests/integration/test_creative_sync_processing.py", "test_format_change_detected"),
     ("tests/integration/test_creative_sync_processing.py", "test_update_ai_powered_submits_review"),
     ("tests/integration/test_creative_sync_processing.py", "test_update_auto_approve_sets_approved"),
-    ("tests/integration/test_creative_sync_processing.py", "test_update_preview_dimensions_extracted"),
     ("tests/integration/test_creative_sync_processing.py", "test_update_user_assets_not_overwritten"),
     ("tests/integration/test_creative_sync_transport.py", "test_ai_review_submitted"),
     ("tests/integration/test_creative_sync_transport.py", "test_dry_run_does_not_persist"),
@@ -983,7 +976,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_media_buy_repository_writes.py", "test_roundtrip_update_status"),
     ("tests/integration/test_media_buy_repository_writes.py", "test_tenant_isolation_on_create"),
     ("tests/integration/test_media_buy_repository_writes.py", "test_uow_rollback_on_exception"),
-    ("tests/integration/test_media_buy_repository_writes.py", "test_update_config_other_tenant_returns_none"),
     ("tests/integration/test_media_buy_repository_writes.py", "test_update_fields_tenant_isolation"),
     ("tests/integration/test_media_buy_repository_writes.py", "test_update_status_other_tenant_returns_none"),
     ("tests/integration/test_media_buy_v3.py", "mb_creatives"),

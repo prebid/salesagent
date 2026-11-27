@@ -15,8 +15,10 @@
 # pending_creatives: "the seller has already accepted the buy") is not booked again when the
 # seller approves that creative.
 #
-# Transports: a2a, mcp and rest. The live server has no stand-in GAM network, so the
-# setup declares itself unrealizable on e2e (GamSellerMixin.sell_through_gam).
+# Transports: a2a, mcp and rest. On e2e the tenant
+# sells on the GAM network the environment configures, and each GAM Then reads it back
+# (tests/harness/gam_network.py); a Given the configured network cannot be made into
+# declares that with its own reason (GamSellerMixin).
 #
 # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/create_media_buy.mdx
 # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/specialisms/sales-non-guaranteed/index.yaml pointer=/phases/create_buy
@@ -31,6 +33,19 @@ Feature: A Google Ad Manager seller books the buyer's media buy in Google Ad Man
     Then the response should succeed
     And the buyer holds a media buy booked in Google Ad Manager as one order, for advertiser "3000001", trafficked by "2000001"
     And Google Ad Manager received one line item, in that order, targeting ad unit "4000001" with its descendants
+
+  # The synchronous success create_media_buy.mdx requires of a non-guaranteed buy is a booked
+  # buy: the seller approves the order it created, and GAM holds it APPROVED (Order.status,
+  # Ad Manager API v202602). Migrated from tests/e2e/test_gam_lifecycle.py, which graded the
+  # adapter alone.
+  @T-UC-002-local-gam-order-approved @extension
+  Scenario: A non-guaranteed buy's GAM order is approved when the buy is created
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001"
+    When the Buyer Agent sends the create_media_buy request
+    Then the response should succeed
+    And Google Ad Manager holds the order it created as approved
 
   # The buy is booked when it is created and held for the creative under review. The approved
   # creative is created in GAM and placed on the line item at create, once (#2378). Approving
@@ -62,7 +77,7 @@ Feature: A Google Ad Manager seller books the buyer's media buy in Google Ad Man
     Given a valid create_media_buy request
     And the account exists and is active
     And the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001"
-    And the package references the buyer's 300x250 image creative "cr-placed" showing "https://example.com/placed.png", <status> and already held by Google Ad Manager as creative "7000001"
+    And the package references the buyer's 300x250 image creative "cr-placed" showing "https://prebid.org/placed.png", <status> and already held by Google Ad Manager as creative "7000001"
     When the Buyer Agent sends the create_media_buy request
     Then the response should succeed
     And Google Ad Manager created no creative

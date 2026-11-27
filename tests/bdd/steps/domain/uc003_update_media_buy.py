@@ -33,6 +33,12 @@ from tests.bdd.steps.generic._auth import authenticate_env_as
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic._table import as_bool, drop_header_if
 from tests.bdd.steps.generic.given_media_buy import _resolve_date_token
+from tests.bdd.steps.generic.then_media_buy_readback import (
+    _is_wire_integer,
+    _reported_creative_ids,
+    _wire_media_buy,
+    _wire_package,
+)
 from tests.factories.mint import mint, mint_id
 from tests.factories.request import OMIT
 from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY
@@ -529,7 +535,8 @@ def given_request_no_updatable_fields(ctx: dict) -> None:
 #: T-UC-003-ext-w is xfailed (#1417). canceled and start_time are package-update.json
 #: properties (adcp v3.2.7), sent as written: start_time's literal "asap" is the value the
 #: package-scope row exists to show refused (``not: {const: asap}``), so it is not resolved
-#: as a date token.
+#: as a date token. creative_assignments and creatives take a comma-separated list of creative
+#: ids: library creatives assigned at weight 1, and inline display creatives, respectively.
 _SUPPORTED_PACKAGE_FIELDS = frozenset(
     {
         "package_id",
@@ -541,6 +548,8 @@ _SUPPORTED_PACKAGE_FIELDS = frozenset(
         "canceled",
         "start_time",
         "pacing",
+        "creative_assignments",
+        "creatives",
     }
 )
 
@@ -560,6 +569,10 @@ def _set_package_field(pkg_update: dict[str, Any], field: str, value: str) -> No
         pkg_update[field] = as_bool(value)
     elif field in ("targeting_overlay", "catalogs"):
         pkg_update[field] = json.loads(value)
+    elif field == "creative_assignments":
+        pkg_update[field] = [{"creative_id": cid.strip(), "weight": 1.0} for cid in value.split(",")]
+    elif field == "creatives":
+        pkg_update[field] = [_inline_creative_payload(cid.strip(), "Inline Creative") for cid in value.split(",")]
     else:
         pkg_update[field] = value
 
@@ -609,6 +622,10 @@ def given_package_exists(ctx: dict, package_id: str) -> None:
     env = ctx["env"]
     new_pkg = MediaPackageFactory(
         media_buy=ctx["existing_media_buy"],
+        # A minted id, never the factory default: the default names the buy's first request
+        # package, so the factory updated THAT row in place and every label this step
+        # registered aliased the package the buy already held.
+        package_id=mint_id("pkg"),
         package_config={
             "product_id": "guaranteed_display",
             "budget": 5000.0,
@@ -1701,6 +1718,13 @@ def given_earlier_library_assignment(ctx: dict, creative_id: str, package_id: st
     _send_earlier_update(ctx, package_id, creative_assignments=[{"creative_id": creative_id, "weight": 1.0}])
 
 
+@given(parsers.parse('the Buyer\'s library holds the approved display creative "{creative_id}"'))
+def given_library_display_creative(ctx: dict, creative_id: str) -> None:
+    """An approved display creative in the buyer's library, assigned to no package yet."""
+    _approved_display_creative(ctx, creative_id)
+    ctx["env"]._commit_factory_data()  # noqa: SLF001 — the harness's commit seam, as the earlier-update Givens use
+
+
 @given(parsers.parse('an earlier update gave package "{package_id}" the catalogs {catalogs}'))
 def given_earlier_catalogs(ctx: dict, package_id: str, catalogs: str) -> None:
     """The package's stored catalogs arrived the way a buyer sets them: a catalogs replacement.
@@ -1746,8 +1770,6 @@ def when_read_back_media_buy(ctx: dict, media_buy_id: str) -> None:
 def then_package_reports_exactly(ctx: dict, package_id: str, creative_ids: str) -> None:
     """The package's ``creative_approvals`` on the get_media_buys wire name exactly *creative_ids*."""
     import json
-
-    from tests.bdd.steps.domain.uc019_query_media_buys import _reported_creative_ids
 
     expected = sorted(json.loads(creative_ids))
     reported = _reported_creative_ids(ctx, _resolve_package_id(ctx, package_id))
@@ -2796,11 +2818,22 @@ def then_stored_buy_status(ctx: dict, label: str, status: str) -> None:
     assert [row.status for row in rows] == [status], f"the stored media buy reads {[r.status for r in rows]}"
 
 
+def _assert_adapter_update_actions(ctx: dict, expected: list[str]) -> None:
+    """The ad server was handed exactly *expected*, in order, read from its own record (``adapter_update_actions``)."""
+    actions = ctx["env"].adapter_update_actions()
+    assert actions == expected, f"the ad server was handed {actions}, expected {expected}"
+
+
 @then("the ad server received an update_package_budget call")
 def then_ad_server_budget_call(ctx: dict) -> None:
     """The control: this request does reach the ad server, so the no-call Then can fail."""
-    actions = ctx["env"].adapter_update_actions()
-    assert actions == ["update_package_budget"], f"the ad server was handed {actions}"
+    _assert_adapter_update_actions(ctx, ["update_package_budget"])
+
+
+@then(parsers.parse('the ad server received the updates "{actions}"'))
+def then_ad_server_received_updates(ctx: dict, actions: str) -> None:
+    """The ad server was handed the comma-separated *actions*, in order: a refusal before the first cannot pass."""
+    _assert_adapter_update_actions(ctx, [action.strip() for action in actions.split(",")])
 
 
 @given(parsers.parse('the update sets its "{member}" member'))
@@ -3786,4 +3819,68 @@ def assert_update_not_persisted(ctx: dict) -> None:
     stored, _config = _stored_package(ctx, "pkg_001")
     assert stored is None or float(stored) != _requested_budget(ctx), (
         f"the update was rejected but the stored budget is the requested {_requested_budget(ctx)}"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# One request, one atomic mutation (#2647)
+# ═══════════════════════════════════════════════════════════════════════
+# update_media_buy.mdx @ v3.2.7 line 25: "One `update_media_buy` request is one atomic
+# mutation." A request that changes several things is applied as a whole or not at all, and
+# the buyer reads the outcome back with get_media_buys. These steps seed the starting values
+# the readback compares against and read each value off the get_media_buys wire.
+
+
+@given(parsers.parse('package "{label}" holds a budget of {budget:d} and is not paused'))
+def given_package_budget_not_paused(ctx: dict, label: str, budget: int) -> None:
+    """Store *budget* and ``paused: false`` on package *label*, the values a readback compares against.
+
+    Both are written rather than left to defaults: ``get_media_buys`` serves ``paused`` from
+    ``package_config`` and omits it when unset, so a readback of "not paused" needs the stored
+    ``false`` to compare with, and a distinctive budget is what separates "unchanged" from a
+    factory default.
+    """
+    from decimal import Decimal
+
+    from tests.factories import MediaPackageFactory
+
+    _stored_budget, config = _stored_package(ctx, label)
+    MediaPackageFactory(
+        media_buy=_existing_media_buy(ctx),
+        package_id=_resolve_package_id(ctx, label),
+        budget=Decimal(budget),
+        package_config={**config, "budget": float(budget), "paused": False},
+    )
+    ctx["env"]._commit_factory_data()  # noqa: SLF001 — the harness's commit seam, as given_package_exists uses
+
+
+@given(parsers.parse('the ad server refuses the "{action}" update'))
+def given_ad_server_refuses_update_action(ctx: dict, action: str) -> None:
+    """The ad server refuses the ``update_media_buy`` call carrying *action* and accepts the others."""
+    ctx["env"].refuse_adapter_update_action(action)
+
+
+@then(parsers.parse('get_media_buys reports package "{label}" with budget {budget:d}'))
+def then_readback_package_budget(ctx: dict, label: str, budget: int) -> None:
+    """The package's ``budget`` on the get_media_buys wire is *budget*."""
+    reported = _wire_package(ctx, _resolve_package_id(ctx, label)).get("budget")
+    assert reported == budget, f"get_media_buys reports package {label!r} with budget {reported!r}, expected {budget}"
+
+
+@then(parsers.parse('get_media_buys reports package "{label}" with paused {paused}'))
+def then_readback_package_paused(ctx: dict, label: str, paused: str) -> None:
+    """The package's ``paused`` on the get_media_buys wire is *paused*."""
+    expected = as_bool(paused)
+    reported = _wire_package(ctx, _resolve_package_id(ctx, label)).get("paused")
+    assert reported is expected, (
+        f"get_media_buys reports package {label!r} with paused {reported!r}, expected {expected}"
+    )
+
+
+@then(parsers.parse('get_media_buys reports media buy "{label}" at a revision greater than {floor:d}'))
+def then_readback_revision_above(ctx: dict, label: str, floor: int) -> None:
+    """The buy's ``revision`` on the get_media_buys wire moved past *floor*: the update was stored."""
+    reported = _wire_media_buy(ctx, label).get("revision")
+    assert _is_wire_integer(reported) and reported > floor, (
+        f"get_media_buys reports media buy {label!r} at revision {reported!r}; the update must have moved it past {floor}"
     )

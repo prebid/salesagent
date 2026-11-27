@@ -14,6 +14,7 @@ __all__ = [
 
 import logging
 import uuid
+from collections.abc import Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -33,6 +34,7 @@ from src.adapters.base import (
 
 # Import modular components
 from src.adapters.gam.client import GAMClientManager, current_network_time_zone
+from src.adapters.gam.creative_plan import plan_or_refuse
 from src.adapters.gam.managers import (
     GAMCreativesManager,
     GAMInventoryManager,
@@ -54,7 +56,6 @@ from src.core.audit_logger import AuditLogger
 from src.core.errors.codes import AppErrorCode
 from src.core.errors.details import (
     AdapterFailureDetails,
-    BudgetDetails,
     CapabilityRefusalDetails,
     ConfigurationDetails,
     EntityRefDetails,
@@ -64,7 +65,6 @@ from src.core.errors.details import (
 from src.core.exceptions import (
     AdCPActivationWorkflowError,
     AdCPAuthorizationError,
-    AdCPBudgetExceededError,
     AdCPBulkUpdateError,
     AdCPCapabilityNotSupportedError,
     AdCPConfigurationError,
@@ -84,6 +84,8 @@ from src.core.schemas import (
     MediaPackage,
     ReportingPeriod,
 )
+from src.core.stored_package import StoredPackage, stored_package
+from src.core.traffic_carrier import AdapterCreativeAsset, CreativesByPackage
 from src.services.ai.config import SellerAIConfig
 
 # Set up logger
@@ -210,7 +212,7 @@ class GoogleAdManager(AdServerAdapter):
         # Only initialize creative manager if we have advertiser_id (required for creative operations)
         # Note: trafficker_id is NOT required for creative operations - only for order creation
         if self.advertiser_id:
-            self.creatives_manager = GAMCreativesManager(self.client_manager, self.advertiser_id, self.log, self)
+            self.creatives_manager = GAMCreativesManager(self.client_manager, self.advertiser_id)
         else:
             self.creatives_manager = None  # type: ignore[assignment]
 
@@ -222,11 +224,6 @@ class GoogleAdManager(AdServerAdapter):
             self.client_manager, self.inventory_manager, self.orders_manager, self.tenant_id
         )
         self.workflow_manager = GAMWorkflowManager(self.tenant_id, principal, audit_logger, self.log)
-
-        # Initialize legacy validator for backward compatibility
-        from .gam.utils.validation import GAMValidator
-
-        self.validator = GAMValidator()
 
     # Legacy methods for backward compatibility - delegated to managers
     def _init_client(self):
@@ -285,18 +282,6 @@ class GoogleAdManager(AdServerAdapter):
             raise AdCPConfigurationError(field="orders_manager")
         return manager
 
-    def _validate_creative_for_gam(self, asset):
-        """Validate creative asset for GAM requirements (delegated to creatives manager)."""
-        return self._require_creatives_manager()._validate_creative_for_gam(asset)
-
-    def _get_creative_type(self, asset):
-        """Determine creative type from asset (delegated to creatives manager)."""
-        return self._require_creatives_manager()._get_creative_type(asset)
-
-    def _create_gam_creative(self, asset, creative_type, asset_placeholders):
-        """Create a GAM creative (delegated to creatives manager)."""
-        return self._require_creatives_manager()._create_gam_creative(asset, creative_type, asset_placeholders)
-
     def _check_order_has_guaranteed_items(self, order_id):
         """Check if order has guaranteed line items (delegated to orders manager)."""
         return self._require_orders_manager().check_order_has_guaranteed_items(order_id)
@@ -354,6 +339,59 @@ class GoogleAdManager(AdServerAdapter):
     def SUPPORTED_MEDIA_TYPES(self):
         return self.targeting_manager.SUPPORTED_MEDIA_TYPES
 
+    def validate_media_buy_request(
+        self,
+        request: AdapterCreateRequest,
+        packages: list[MediaPackage],
+        start_time: datetime,
+        end_time: datetime,
+        package_pricing_info: dict[str, dict] | None = None,
+        *,
+        creatives_by_package: CreativesByPackage,
+    ) -> list[ErrorProblem]:
+        """The base checks, plus each creative GAM has no creative for on its package's line item.
+
+        Interim; RFC #2529 folds it into plan(buy).
+
+        Each creative is planned (``plan_or_refuse``, the call the creatives manager makes at
+        upload) against the placeholders the package's line item will be created with
+        (``GAMOrdersManager.line_item_placeholders``, the computation ``create_line_items``
+        writes, from the same carriers), so a size or kind refused here is one the upload
+        would refuse after the order and line items were written. Every creative refusal is a
+        problem naming its creative and package; core raises the error. What the placeholder
+        computation itself refuses (a format family the product excludes, audio, a format
+        lookup that fails) it raises, and core treats that raise as a refusal before booking.
+        """
+        problems = super().validate_media_buy_request(
+            request,
+            packages,
+            start_time,
+            end_time,
+            package_pricing_info,
+            creatives_by_package=creatives_by_package,
+        )
+        planned = [package for package in packages if creatives_by_package.get(package.package_id)]
+        if not planned:
+            return problems
+        from src.core.database.repositories.uow import ProductUoW
+
+        # Read and closed before the placeholders are computed: the computation opens a
+        # session of its own, which would close one still open here.
+        with ProductUoW(self.tenant_id) as uow:
+            assert uow.products is not None
+            impl_configs = {}
+            for package in planned:
+                product = uow.products.get_by_id(package.product_id) if package.product_id else None
+                impl_configs[package.package_id] = dict((product.implementation_config if product else None) or {})
+        for package in planned:
+            creatives = creatives_by_package[package.package_id]
+            placeholders = self.orders_manager.line_item_placeholders(
+                package, impl_configs[package.package_id], creatives, tenant_id=self.tenant_id, log=self.log
+            )
+            plans = [plan_or_refuse(creative, placeholders, package.package_id) for creative in creatives]
+            problems.extend(plan for plan in plans if isinstance(plan, ErrorProblem))
+        return problems
+
     def create_media_buy(
         self,
         request: AdapterCreateRequest,
@@ -361,6 +399,8 @@ class GoogleAdManager(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
+        *,
+        creatives_by_package: CreativesByPackage | None = None,
     ) -> AdapterCreateResult:
         """Create a new media buy (order) in GAM - main orchestration method.
 
@@ -371,6 +411,8 @@ class GoogleAdManager(AdServerAdapter):
             end_time: Campaign end time
             package_pricing_info: Optional validated pricing info (AdCP PR #88)
                 Maps package_id → {pricing_model, rate, currency, is_fixed, bid_price}
+            creatives_by_package: The carriers ``validate_media_buy_request`` planned, which
+                narrow each line item's placeholders as they did there.
 
         Returns:
             AdapterCreateResult with GAM order details
@@ -683,6 +725,7 @@ class GoogleAdManager(AdServerAdapter):
                 package_pricing_info=package_pricing_info,
                 package_targeting=package_targeting,
                 line_item_name_template=self._line_item_name_template,
+                creatives_by_package=creatives_by_package,
             )
             self.log(f"✓ Created {len(line_item_ids)} line items")
 
@@ -799,7 +842,7 @@ class GoogleAdManager(AdServerAdapter):
         return self.orders_manager.get_advertisers(search_query=search_query, limit=limit, fetch_all=fetch_all)
 
     def add_creative_assets(
-        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
+        self, media_buy_id: str, assets: list[AdapterCreativeAsset], today: datetime
     ) -> list[AssetStatus]:
         """Create and associate creatives with line items (delegated to creatives manager)."""
 
@@ -1123,7 +1166,7 @@ class GoogleAdManager(AdServerAdapter):
         Uses stats stored in the GAMLineItem table (synced every ~15 minutes by the
         background sync job). The staleness is derived from the last_synced timestamp.
         """
-        from datetime import UTC, datetime
+        from datetime import UTC
 
         from sqlalchemy import select
 
@@ -1204,8 +1247,14 @@ class GoogleAdManager(AdServerAdapter):
         package_id: str | None,
         budget: int | None,
         today: datetime,
+        *,
+        packages: Sequence[StoredPackage],
     ) -> AdapterUpdateResult:
-        """Update a media buy in GAM."""
+        """Update a media buy in GAM.
+
+        Line item ids, pricing and spend come from *packages*, which the update tool reads
+        inside its unit of work; this opens no session (#2647).
+        """
         # Admin-only actions
         admin_only_actions = ["approve_order"]
 
@@ -1250,11 +1299,6 @@ class GoogleAdManager(AdServerAdapter):
 
         # Handle package budget updates
         if action == "update_package_budget" and package_id and budget is not None:
-            from sqlalchemy.orm import attributes
-
-            from src.core.database.database_session import get_db_session
-            from src.core.database.repositories.media_buy import MediaBuyRepository
-
             # Validate budget is positive (security: prevent negative/zero budgets)
             if budget <= 0:
                 self.log(f"[red]Invalid budget value: {budget} (must be positive)[/red]")
@@ -1265,71 +1309,38 @@ class GoogleAdManager(AdServerAdapter):
 
             self.log(f"[GAM] Updating package {package_id} budget to {budget} (with delivery validation)")
 
-            assert self.tenant_id is not None, "tenant_id required for DB operations"
+            # No below-spend refusal here: it compared against a package_config key nothing
+            # writes, so the spend it read was always 0 and it never fired. A spend rule
+            # belongs in the update tool's budget validation, before any ad-server call.
+            stored = stored_package(packages, media_buy_id, package_id)
 
-            with get_db_session() as session:
-                repo = MediaBuyRepository(session, self.tenant_id)
-                media_package = repo.get_package(media_buy_id, package_id)
-
-                if not media_package:
-                    self.log(f"[red]Package {package_id} not found for media buy {media_buy_id}[/red]")
-                    raise AdCPPackageNotFoundError(
-                        details=EntityRefDetails(package_id=package_id, media_buy_id=media_buy_id)
-                    )
-
-                # Validate budget isn't less than delivery to date
-                delivery_metrics = media_package.package_config.get("delivery_metrics", {})
-                current_spend = float(delivery_metrics.get("spend", 0))
-
-                if budget < current_spend:
-                    self.log(
-                        f"[red]Cannot set budget ${budget} below current spend ${current_spend} "
-                        f"for package {package_id}[/red]"
-                    )
-                    raise AdCPBudgetExceededError(
-                        # "budget" and "requested_budget" were the same value under two
-                        # names; one channel per fact.
-                        details=BudgetDetails(
-                            requested_budget=str(budget),
-                            current_spend=str(current_spend),
-                            package_id=package_id,
-                        ),
-                    )
-
-                # Get platform line item ID from package config
-                platform_line_item_id = media_package.package_config.get("platform_line_item_id")
-                if not platform_line_item_id:
-                    self.log(f"[red]Package {package_id} has no platform_line_item_id - cannot sync to GAM[/red]")
-                    raise AdCPValidationError(
-                        details=ValidationDetails(package_id=package_id),
-                    )
-
-                # Get pricing model from package config for budget calculation
-                pricing_info = media_package.package_config.get("pricing", {})
-                pricing_model = pricing_info.get("model", "cpm").lower()
-                currency = pricing_info.get("currency", "USD")
-
-                # Sync budget change to GAM line item
-                self.log(f"[GAM] Syncing budget change to GAM line item {platform_line_item_id}")
-                success = self.orders_manager.update_line_item_budget(
-                    line_item_id=platform_line_item_id,
-                    new_budget=float(budget),
-                    pricing_model=pricing_model,
-                    currency=currency,
+            platform_line_item_id = stored.platform_line_item_id
+            if not platform_line_item_id:
+                self.log(f"[red]Package {package_id} has no platform_line_item_id - cannot sync to GAM[/red]")
+                raise AdCPValidationError(
+                    details=ValidationDetails(package_id=package_id),
                 )
 
-                if not success:
-                    self.log(f"[red]Failed to update GAM line item {platform_line_item_id} budget[/red]")
-                    raise AdCPGamUpdateError(
-                        details=AdapterFailureDetails(package_id=package_id, line_item_id=platform_line_item_id),
-                    )
+            # Sync budget change to GAM line item
+            self.log(f"[GAM] Syncing budget change to GAM line item {platform_line_item_id}")
+            success = self.orders_manager.update_line_item_budget(
+                line_item_id=platform_line_item_id,
+                new_budget=float(budget),
+                pricing_model=stored.pricing_model,
+                currency=stored.currency,
+            )
 
-                # Update budget in package_config JSON after successful GAM sync
-                media_package.package_config["budget"] = float(budget)
-                # Flag the JSON field as modified so SQLAlchemy persists it
-                attributes.flag_modified(media_package, "package_config")
-                session.commit()
-                self.log(f"✓ Updated package {package_id} budget to ${budget} in both GAM and database")
+            if not success:
+                self.log(f"[red]Failed to update GAM line item {platform_line_item_id} budget[/red]")
+                raise AdCPGamUpdateError(
+                    details=AdapterFailureDetails(package_id=package_id, line_item_id=platform_line_item_id),
+                )
+
+            # The seller's record of the budget is the package's budget column, which the
+            # update tool writes inside its unit of work once this returns. A second copy in
+            # package_config, committed here in a session of its own, survived a refusal of
+            # the same request and disagreed with the column (#2647).
+            self.log(f"✓ Updated package {package_id} budget to ${budget} in GAM")
 
             return AdapterUpdateResult(
                 media_buy_id=media_buy_id,
@@ -1338,11 +1349,6 @@ class GoogleAdManager(AdServerAdapter):
 
         # Handle pause/resume actions
         if action in ["pause_package", "resume_package", "pause_media_buy", "resume_media_buy"]:
-            from src.core.database.database_session import get_db_session
-            from src.core.database.repositories.media_buy import MediaBuyRepository
-
-            assert self.tenant_id is not None, "tenant_id required for DB operations"
-
             # Determine if we're pausing or resuming
             is_pause = action.startswith("pause_")
             new_status = "PAUSED" if is_pause else "READY"
@@ -1356,110 +1362,98 @@ class GoogleAdManager(AdServerAdapter):
                         details=ValidationDetails(rejected_value=action),
                     )
 
-                with get_db_session() as session:
-                    repo = MediaBuyRepository(session, self.tenant_id)
-                    media_package = repo.get_package(media_buy_id, package_id)
+                platform_line_item_id = stored_package(packages, media_buy_id, package_id).platform_line_item_id
+                if not platform_line_item_id:
+                    raise AdCPValidationError(
+                        details=ValidationDetails(package_id=package_id),
+                    )
 
-                    if not media_package:
-                        raise AdCPPackageNotFoundError(details=EntityRefDetails(package_id=package_id))
+                # Update status in GAM
+                self.log(f"[GAM] {action_verb} line item {platform_line_item_id}")
+                if is_pause:
+                    success = self.orders_manager.pause_line_item(platform_line_item_id)
+                else:
+                    success = self.orders_manager.resume_line_item(platform_line_item_id)
 
-                    # Get platform line item ID
-                    platform_line_item_id = media_package.package_config.get("platform_line_item_id")
+                if not success:
+                    raise AdCPGamUpdateError(
+                        details=AdapterFailureDetails(package_id=package_id, line_item_id=platform_line_item_id),
+                    )
+
+                self.log(f"✓ {action_verb} package {package_id} in GAM")
+
+                # Return affected package with paused state
+                affected_package = AffectedPackage(
+                    package_id=package_id,
+                    paused=is_pause,  # True if paused, False if resumed
+                )
+
+                return AdapterUpdateResult(
+                    media_buy_id=media_buy_id,
+                    affected_packages=[affected_package],
+                )
+
+            # Media buy-level actions (pause/resume all packages)
+            elif action in ["pause_media_buy", "resume_media_buy"]:
+                if not packages:
+                    raise AdCPPackageNotFoundError(
+                        details=EntityRefDetails(media_buy_id=media_buy_id),
+                    )
+
+                # Pause/resume each package's line item
+                failed_items = []
+                for pkg in packages:
+                    platform_line_item_id = pkg.platform_line_item_id
                     if not platform_line_item_id:
-                        raise AdCPValidationError(
-                            details=ValidationDetails(package_id=package_id),
-                        )
+                        failed_items.append({"id": pkg.package_id, "reason": "No GAM line item ID"})
+                        continue
 
-                    # Update status in GAM
-                    self.log(f"[GAM] {action_verb} line item {platform_line_item_id}")
+                    self.log(f"[GAM] {action_verb} line item {platform_line_item_id} (package {pkg.package_id})")
                     if is_pause:
                         success = self.orders_manager.pause_line_item(platform_line_item_id)
                     else:
                         success = self.orders_manager.resume_line_item(platform_line_item_id)
 
                     if not success:
-                        raise AdCPGamUpdateError(
-                            details=AdapterFailureDetails(package_id=package_id, line_item_id=platform_line_item_id),
+                        failed_items.append(
+                            {"id": pkg.package_id, "reason": f"GAM line item {platform_line_item_id} update failed"}
                         )
 
-                    self.log(f"✓ {action_verb} package {package_id} in GAM")
+                if failed_items:
+                    # The GAM line-item id the replaced prose named is an internal
+                    # platform id, so it rides internal_detail via the log above
+                    # rather than the buyer's envelope. What the buyer needs is which
+                    # of THEIR packages failed, and that the failure was an ad-server
+                    # update -- both of which the code and subject carry.
+                    raise AdCPBulkUpdateError(
+                        details=AdapterFailureDetails(
+                            media_buy_id=media_buy_id,
+                            problems=[
+                                ErrorProblem(
+                                    code=AppErrorCode.AD_SERVER_UPDATE_FAILED,
+                                    subject_type="package",
+                                    subject_id=str(item["id"]),
+                                )
+                                for item in failed_items
+                            ],
+                        ),
+                    )
 
-                    # Return affected package with paused state
-                    affected_package = AffectedPackage(
-                        package_id=package_id,
+                self.log(f"✓ {action_verb} all {len(packages)} packages in media buy {media_buy_id}")
+
+                # Return all affected packages with paused state
+                affected_packages_list = [
+                    AffectedPackage(
+                        package_id=pkg.package_id,
                         paused=is_pause,  # True if paused, False if resumed
                     )
+                    for pkg in packages
+                ]
 
-                    return AdapterUpdateResult(
-                        media_buy_id=media_buy_id,
-                        affected_packages=[affected_package],
-                    )
-
-            # Media buy-level actions (pause/resume all packages)
-            elif action in ["pause_media_buy", "resume_media_buy"]:
-                with get_db_session() as session:
-                    repo = MediaBuyRepository(session, self.tenant_id)
-                    packages = repo.get_packages(media_buy_id)
-
-                    if not packages:
-                        raise AdCPPackageNotFoundError(
-                            details=EntityRefDetails(media_buy_id=media_buy_id),
-                        )
-
-                    # Pause/resume each package's line item
-                    failed_items = []
-                    for pkg in packages:
-                        platform_line_item_id = pkg.package_config.get("platform_line_item_id")
-                        if not platform_line_item_id:
-                            failed_items.append({"id": pkg.package_id, "reason": "No GAM line item ID"})
-                            continue
-
-                        self.log(f"[GAM] {action_verb} line item {platform_line_item_id} (package {pkg.package_id})")
-                        if is_pause:
-                            success = self.orders_manager.pause_line_item(platform_line_item_id)
-                        else:
-                            success = self.orders_manager.resume_line_item(platform_line_item_id)
-
-                        if not success:
-                            failed_items.append(
-                                {"id": pkg.package_id, "reason": f"GAM line item {platform_line_item_id} update failed"}
-                            )
-
-                    if failed_items:
-                        # The GAM line-item id the replaced prose named is an internal
-                        # platform id, so it rides internal_detail via the log above
-                        # rather than the buyer's envelope. What the buyer needs is which
-                        # of THEIR packages failed, and that the failure was an ad-server
-                        # update -- both of which the code and subject carry.
-                        raise AdCPBulkUpdateError(
-                            details=AdapterFailureDetails(
-                                media_buy_id=media_buy_id,
-                                problems=[
-                                    ErrorProblem(
-                                        code=AppErrorCode.AD_SERVER_UPDATE_FAILED,
-                                        subject_type="package",
-                                        subject_id=str(item["id"]),
-                                    )
-                                    for item in failed_items
-                                ],
-                            ),
-                        )
-
-                    self.log(f"✓ {action_verb} all {len(packages)} packages in media buy {media_buy_id}")
-
-                    # Return all affected packages with paused state
-                    affected_packages_list = [
-                        AffectedPackage(
-                            package_id=pkg.package_id,
-                            paused=is_pause,  # True if paused, False if resumed
-                        )
-                        for pkg in packages
-                    ]
-
-                    return AdapterUpdateResult(
-                        media_buy_id=media_buy_id,
-                        affected_packages=affected_packages_list,
-                    )
+                return AdapterUpdateResult(
+                    media_buy_id=media_buy_id,
+                    affected_packages=affected_packages_list,
+                )
 
             # Should not reach here - both pause/resume branches return above
             return AdapterUpdateResult(

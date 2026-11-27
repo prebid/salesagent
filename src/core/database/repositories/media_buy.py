@@ -29,6 +29,7 @@ from src.core.database.models import (
 from src.core.database.repositories.effects import SessionEffectsMixin
 from src.core.errors.details import EntityRefDetails
 from src.core.idempotency_canonical import canonical_request_hash
+from src.core.stored_package import StoredPackage
 
 if TYPE_CHECKING:
     from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
@@ -51,6 +52,10 @@ class RequestedPackage:
     requires a package to "retain and return this checklist" and says "the live Product is never
     substituted for the package snapshot", so a later read answers from the row. ``minItems: 1``
     on ``formats_to_provide`` means an empty selection records None.
+
+    ``booked_format_contract`` is the product's contract at create, kept for a package that
+    selected nothing (``format_resolver.booked_format_contract`` reads it). It stays on the
+    row and never reaches the wire.
     """
 
     package_id: str
@@ -59,11 +64,33 @@ class RequestedPackage:
     paused: bool = False
     formats_to_provide: list[LibraryPackageFormatSnapshot] | None = None
     format_ids_to_provide: list[LibraryFormatId] | None = None
+    booked_format_contract: dict[str, list[Any]] | None = None
 
 
 def stored_line_item_id(package: MediaPackage) -> str | None:
     """The ad server line item a package row stores, None for a package not booked as one."""
     return (package.package_config or {}).get("platform_line_item_id")
+
+
+def stored_package_of(package: MediaPackage) -> StoredPackage:
+    """The adapter's view of the package *package*: the one reader of the row for ``StoredPackage``.
+
+    Pricing comes from ``pricing_info``, the terms ``_requested_package_row`` stores
+    (``pricing_helpers`` writes ``pricing_model`` and ``currency``). A package stored without
+    them is read as CPM in USD, the defaults the GAM budget sync has always applied.
+    """
+    config = package.package_config or {}
+    pricing = config.get("pricing_info") or {}
+    return StoredPackage(
+        package_id=package.package_id,
+        platform_line_item_id=stored_line_item_id(package),
+        pricing_model=str(pricing.get("pricing_model") or "cpm").lower(),
+        currency=pricing.get("currency") or "USD",
+        paused=bool(config.get("paused", False)),
+        product_id=config.get("product_id"),
+        budget=float(package.budget) if package.budget is not None else None,
+        broadstreet_advertisement_ids=tuple(config.get("broadstreet_advertisement_ids") or ()),
+    )
 
 
 class MediaBuyRepository(SessionEffectsMixin):
@@ -241,6 +268,10 @@ class MediaBuyRepository(SessionEffectsMixin):
                 )
             ).all()
         )
+
+    def get_stored_packages(self, media_buy_id: str) -> list[StoredPackage]:
+        """Every package of the buy as an adapter reads it (``stored_package_of``)."""
+        return [stored_package_of(package) for package in self.get_packages(media_buy_id)]
 
     def buy_packages_of_creative(self, creative_id: str, principal_id: str) -> list[tuple[MediaBuy, MediaPackage]]:
         """Each package of the principal's own buys that the principal's creative is assigned to, with its buy."""
@@ -521,6 +552,8 @@ class MediaBuyRepository(SessionEffectsMixin):
         ``media-buy/package-update.json``: "Omit to leave catalogs unchanged"). Models go in, not
         dicts: the JSONType column serializes them through the engine's serializer.
         """
+        from src.core.format_resolver import BOOKED_FORMAT_CONTRACT
+
         request = requested.request
         pricing_info = requested.pricing_info
         budget: dict[str, Any] | None = None
@@ -539,6 +572,7 @@ class MediaBuyRepository(SessionEffectsMixin):
             "catalogs": request.catalogs,
             "formats_to_provide": requested.formats_to_provide,
             "format_ids_to_provide": requested.format_ids_to_provide,
+            BOOKED_FORMAT_CONTRACT: requested.booked_format_contract,
             "pricing_info": pricing_info,
             "impressions": request.impressions,
         }
@@ -750,7 +784,7 @@ class MediaBuyRepository(SessionEffectsMixin):
         rather than going through update_status / update_fields, which would
         otherwise leave the parent's token stale.
 
-        For the two package writers that hold only the package (update_package_config,
+        For the two package writers that hold only the package (set_package_config_keys,
         update_package_fields). The two that already hold the parent row
         (create_package, create_packages_bulk) call ``_bump_revision`` directly rather
         than paying for a second lookup.
@@ -793,20 +827,17 @@ class MediaBuyRepository(SessionEffectsMixin):
         self._session.flush()
         return package
 
-    def update_package_config(
-        self,
-        media_buy_id: str,
-        package_id: str,
-        package_config: dict,
-    ) -> MediaPackage | None:
-        """Update the package_config of a package within this tenant.
+    def set_package_config_keys(self, media_buy_id: str, package_id: str, /, **keys: Any) -> MediaPackage:
+        """Set *keys* in the package's ``package_config``, keep the rest, and move the buy's revision.
 
-        Returns the updated MediaPackage, or None if not found.
+        The two ids are positional-only, so a stored key may share their names: a package
+        stores its own ``package_id`` in ``package_config``.
+
+        Raises ``AdCPPackageNotFoundError`` when the buy holds no such package. A new
+        document is assigned, so the JSON column records the change without ``flag_modified``.
         """
-        package = self.get_package(media_buy_id, package_id)
-        if package is None:
-            return None
-        package.package_config = package_config
+        package = self.get_package_or_raise(media_buy_id, package_id)
+        package.package_config = {**(package.package_config or {}), **keys}
         self._bump_parent_revision(media_buy_id)
         self._session.flush()
         return package

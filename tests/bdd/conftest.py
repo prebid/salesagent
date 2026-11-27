@@ -73,6 +73,7 @@ pytest_plugins = [
     "tests.bdd.steps.generic.then_error",
     "tests.bdd.steps.generic.then_payload",
     "tests.bdd.steps.generic.then_schema",
+    "tests.bdd.steps.generic.then_media_buy_readback",
     "tests.bdd.steps.domain.uc004_delivery",
     "tests.bdd.steps.domain.uc002_create_media_buy",
     "tests.bdd.steps.domain.uc002_nfr",
@@ -80,6 +81,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc002_v31_request",
     "tests.bdd.steps.domain.uc002_v31_proposal_targeting",
     "tests.bdd.steps.domain.uc002_invariants",
+    "tests.bdd.steps.domain.uc002_creative_kind",
     "tests.bdd.steps.domain.gam_seller",
     "tests.bdd.steps.domain.uc003_update_media_buy",
     "tests.bdd.steps.domain.uc003_ext_error_scenarios",
@@ -107,6 +109,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.admin_tenant_scoping",
     "tests.bdd.steps.domain.admin_workflow_step_review",
     "tests.bdd.steps.domain.admin_inventory_profiles",
+    "tests.bdd.steps.domain.admin_media_buy_page",
     "tests.bdd.steps.domain.admin_signing_keys",
     "tests.bdd.steps.domain.uc_get_products_inventory",
     "tests.bdd.steps.domain.uc_get_products_pricing",
@@ -3116,8 +3119,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # new failure is a LIBRARY-REFERENCE row — assignments_only,
             # assignment_with_weight_zero, assignment_with_placement_targeting, "assignment
             # cr-001", weight=0, weight=100. The cause is symmetrical to the one above: those
-            # rows seed their creative through given_media_buy._create_approved_creative,
-            # whose default fmt is the BARE id, so moving only the product inverts the
+            # rows seeded their creative through given_media_buy._create_approved_creative (now
+            # _creative_seeding.store_package_creative), whose default fmt was then the BARE id,
+            # so moving only the product inverts the
             # product-vs-creative compatibility check for every one of them.
             #
             # THOSE SIX ROW LABELS ARE EXACTLY THE SIX THAT FAIL ON e2e_rest, which nobody
@@ -5053,8 +5057,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # updated (salesagent-mx7a8). catalogs is now applied: 3.2
             # media-buy/package-update.json defines it as "Replace the catalogs this
             # package promotes. Uses replacement semantics — the provided array replaces
-            # the current list", and update_media_buy writes that whole document through
-            # MediaBuyRepository.update_package_config, which the one affected_packages
+            # the current list", and update_media_buy writes that key through
+            # MediaBuyRepository.set_package_config_keys, which the one affected_packages
             # snapshot then reads back. Measured in one serial run over this module's
             # 63 immutable/replacement rows: 29 passed / 8 failed / 22 xfailed / 4 xpassed
             # -> 37 passed / 0 failed / 18 xfailed / 8 xpassed, the four new xpasses being
@@ -5752,8 +5756,6 @@ def e2e_stack():
     server_host = os.environ.get("E2E_SERVER_HOST")
     worker = os.environ.get("PYTEST_XDIST_WORKER")  # e.g. "gw3"
     if os.environ.get("E2E_PER_WORKER") == "1" and worker and worker.startswith("gw"):
-        import re
-
         # Server containers are named "<project>-server-gwN" (globally-unique so
         # parallel worktrees don't collide) and reachable by that name on the
         # compose network. Hit the server directly on :8080 (SKIP_NGINX).
@@ -6549,6 +6551,11 @@ _UC003_INLINE_CREATIVES_READBACK_TAGS = frozenset(
         "T-UC-003-alt-creatives-inline",
         "T-UC-003-storyboard-creative-fate-after-cancellation",
         "T-UC-003-media-buy-name",
+        # #2647: they read the stored budgets, pause and revision back with get_media_buys.
+        "T-UC-003-local-atomic-two-package-budgets",
+        "T-UC-003-local-atomic-budget-and-campaign-pause",
+        "T-UC-003-local-atomic-refused-midway",
+        "T-UC-003-local-atomic-assignments-and-inline-creatives",
     }
 )
 
@@ -6648,6 +6655,8 @@ _UC006_WIRED_SCENARIOS = frozenset(
         # delete_missing and active delivery: plain syncs CreativeSyncEnv serves on every transport.
         "T-UC-006-local-delete-missing-active-delivery",
         "T-UC-006-local-delete-missing-not-delivering",
+        # A creative agent's preview stays out of the stored creative: plain syncs, create and update.
+        "T-UC-006-local-preview-kept-out-of-creative",
         # The format/validation error paths, corrected to the pinned enum (INVALID_REQUEST
         # for schema violations at the request, REFERENCE_NOT_FOUND / VALIDATION_ERROR on
         # the creative's entry, SERVICE_UNAVAILABLE for an agent that does not answer) and
@@ -7287,6 +7296,9 @@ ENV_ROUTES: list[EnvRoute] = [
                 # request the Givens built. The row claims that feature's tag prefix once, so
                 # a new GAM scenario joins it without editing this predicate.
                 or any(t.startswith("T-UC-002-local-gam-") for t in m)
+                # local-uc002-creative-kind-reaches-adapter.feature, for the same reason:
+                # the create chain and the create dispatch, claimed by its tag prefix once.
+                or any(t.startswith("T-UC-002-local-creative-kind-") for t in m)
             ),
         ),
         env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),

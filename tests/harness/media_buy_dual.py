@@ -40,8 +40,19 @@ def _adapter_update_actions_on_the_live_stack(self: MediaBuyDualEnv) -> list[str
     return [details["action"] for details in _adapter_operation_receipts(self, "update_media_buy")]
 
 
+def _refuse_update_action_on_the_live_stack(self: MediaBuyDualEnv, action: str) -> None:
+    """Realize ``refuse_adapter_update_action`` on the live stack: the ``test_behavior`` row.
+
+    The live server runs the real ``MockAdServer``, which fails the one ``update_media_buy``
+    action named by ``fail_on_update_action`` and lets every other action through.
+    """
+    from tests.factories.core import set_adapter_test_behavior
+
+    set_adapter_test_behavior(self, self.tenant_id, fail_on_update_action=action)
+
+
 _UPDATE_PATCHES = {
-    "update_adapter": f"{_UPDATE_MODULE}.get_adapter",
+    "update_adapter": f"{_UPDATE_MODULE}.build_adapter",
     "update_audit": f"{_UPDATE_MODULE}.get_audit_logger",
     "update_context_mgr": f"{_UPDATE_MODULE}.get_context_manager",
 }
@@ -96,6 +107,26 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         """The ``action`` of each ``update_media_buy`` the ad server was handed, in order."""
         calls = self.mock["update_adapter"].return_value.update_media_buy.call_args_list
         return [call.kwargs["action"] for call in calls]
+
+    @realize_e2e(_refuse_update_action_on_the_live_stack)
+    def refuse_adapter_update_action(self, action: str) -> None:
+        """Make the ad server refuse the ``update_media_buy`` call carrying *action*, and accept the rest.
+
+        The update tool calls the ad server once per package change and once for the campaign
+        pause, so this is what lets one request reach the ad server and then be refused on a
+        later call. The refusal is the transient ad-server failure (``SERVICE_UNAVAILABLE``),
+        the same class ``MockAdServer`` raises for the ``test_behavior`` knob the live branch sets.
+        """
+        from src.core.exceptions import AdCPAdapterError
+
+        accept = make_adapter_update_side_effect()
+
+        def _refuse_one_action(*args: Any, **kwargs: Any) -> Any:
+            if kwargs["action"] == action:
+                raise AdCPAdapterError()
+            return accept(*args, **kwargs)
+
+        self.mock["update_adapter"].return_value.update_media_buy.side_effect = _refuse_one_action
 
     def adapter_mocks(self) -> list[MagicMock]:
         """The create module's adapter, then the update module's (``_UPDATE_PATCHES``)."""

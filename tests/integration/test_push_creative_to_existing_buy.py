@@ -63,8 +63,8 @@ def _seed_live_buy_with_assigned_creative():
 
     tenant = TenantFactory(ad_server="mock")
     principal = PrincipalFactory(tenant=tenant)
-    # ``uploadable_creative`` supplies the format + assets that get through
-    # ``_build_adapter_asset_from_creative``; the factory defaults do not.
+    # ``uploadable_creative`` supplies the format + assets that get through the push's read
+    # (``_read_for_push``); the factory defaults do not.
     creative = uploadable_creative(
         CreativeFactory,
         tenant=tenant,

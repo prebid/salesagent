@@ -179,10 +179,12 @@ _CREATE_PATHS = {
 
 
 def _write_package_config(repo, media_buy, package):
-    return repo.update_package_config(
+    return repo.set_package_config_keys(
         media_buy.media_buy_id,
         package.package_id,
-        {"package_id": package.package_id, "product_id": "prod_001", "budget": 7500.0},
+        package_id=package.package_id,
+        product_id="prod_001",
+        budget=7500.0,
     )
 
 
@@ -220,7 +222,7 @@ def _write_packages_bulk(repo, media_buy, package):
 # cannot be mistaken for covering all four.
 _PACKAGE_WRITERS = {
     "create_package": _write_new_package,
-    "update_package_config": _write_package_config,
+    "set_package_config_keys": _write_package_config,
     "update_package_fields": _write_package_fields,
     "create_packages_bulk": _write_packages_bulk,
 }

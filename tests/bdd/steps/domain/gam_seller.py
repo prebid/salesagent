@@ -1,8 +1,9 @@
 """Steps for the local-gam-*.feature files: what a Google Ad Manager seller sends GAM, and what it reports.
 
-local-gam-seller.feature, local-gam-line-item-flight.feature, local-gam-geo-targeting.feature
-(create_media_buy on ``MediaBuyCreateEnv``) and local-uc006-gam-assignment-trafficking.feature
-(sync_creatives and the seller's creative approval on ``CreativeSyncEnv``): the Given makes the
+local-gam-seller.feature, local-gam-line-item-flight.feature, local-gam-geo-targeting.feature,
+local-gam-creative-kinds.feature (create_media_buy on ``MediaBuyCreateEnv``) and
+local-uc006-gam-assignment-trafficking.feature (sync_creatives and the seller's creative
+approval on ``CreativeSyncEnv``): the Given makes the
 env's tenant a GAM seller (``GamSellerMixin.sell_through_gam``). The Thens read two things: the
 buyer's wire response, and the stand-in GAM network's record of what the seller sent it and what
 it created. Their expectations are the scenario's literals, or links the stand-in itself
@@ -26,6 +27,8 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
+from collections.abc import Mapping
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -41,8 +44,20 @@ from tests.bdd.steps._outcome_helpers import (
 )
 from tests.bdd.steps.domain.uc006_sync_creatives import _ask_assignment_terms, when_sync_creative_with_assignments
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
+from tests.bdd.steps.generic._creative_seeding import store_creative, store_package_creative
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.bdd.steps.generic._table import comma_list
 from tests.bdd.steps.generic._table import rows as table_rows
+from tests.factories.creative_asset import (
+    LIBRARY_IMAGE_FORMAT,
+    build_assets,
+    html_spec,
+    image_spec,
+    library_image_assets,
+    parse_sizes,
+    text_spec,
+    url_spec,
+)
 from tests.helpers.gam_client import gam_delivery_row
 
 
@@ -52,6 +67,7 @@ from tests.helpers.gam_client import gam_delivery_row
         r'"(?P<ad_unit_id>[^"]+)", and the buyer is its advertiser "(?P<advertiser_id>[^"]+)"'
         r'(?:, on a network (?:in time zone "(?P<network_time_zone>[^"]+)"'
         r'|that refuses to name its time zone with "(?P<network_fault>[^"]+)"))?'
+        r"(?:, with product formats '(?P<product_formats>[^']*)')?"
         r"(?:, with product settings '(?P<product_settings>[^']*)')?"
     )
 )
@@ -62,6 +78,7 @@ def given_seller_sells_through_gam(
     advertiser_id: str,
     network_time_zone: str | None,
     network_fault: str | None,
+    product_formats: str | None,
     product_settings: str | None,
 ) -> None:
     """Onboard the env's tenant to GAM and sell every product the scenario built on one ad unit.
@@ -73,7 +90,9 @@ def given_seller_sells_through_gam(
 
     The optional network clause states the GAM network's own time zone, or the ``ApiError``
     reason with which the network refuses to name it; without it the stand-in network keeps
-    its default zone. The optional
+    its default zone. The optional product-formats clause is a JSON object of the format
+    arms each product sells (``format_ids``, ``format_options``; an arm it omits is none),
+    from which the GAM configuration is generated. The optional
     product-settings clause is a JSON object of ``implementation_config`` keys the seller
     wrote over the generated GAM configuration of each product it sells. A scenario that
     needs another seller fact adds a clause to this sentence rather than a second seller
@@ -82,11 +101,8 @@ def given_seller_sells_through_gam(
     from tests.bdd.steps.generic.given_media_buy import scenario_products
 
     if "default_product" not in ctx:
-        from tests.factories import PricingOptionFactory, ProductFactory
-
         ensure_tenant_principal(ctx, ctx["env"])
-        ctx["default_product"] = ProductFactory(tenant=ctx["tenant"])
-        PricingOptionFactory(product=ctx["default_product"])
+        ctx["default_product"] = _priced_product(ctx)
     ctx["env"].sell_through_gam(
         trafficker_id=trafficker_id,
         advertiser_id=advertiser_id,
@@ -95,6 +111,7 @@ def given_seller_sells_through_gam(
         network_time_zone=network_time_zone,
         network_fault=network_fault,
         implementation_config=json.loads(product_settings) if product_settings is not None else None,
+        product_formats=json.loads(product_formats) if product_formats is not None else None,
     )
 
 
@@ -209,12 +226,10 @@ def given_package_references_ready_and_held_creatives(
     ctx: dict, ready_id: str, ready_url: str, held_id: str, held_url: str
 ) -> None:
     """Two library creatives in the format the GAM product sells, both named in the package's creative_ids."""
-    from tests.bdd.steps.generic.given_media_buy import _add_creative_ids_to_package
-
-    _library_image_creative(ctx, ready_id, ready_url)
-    _library_image_creative(ctx, held_id, held_url, status="pending_review")
-    ctx["env"]._commit_factory_data()
-    _add_creative_ids_to_package(ctx, [ready_id, held_id])
+    store_package_creative(ctx, ready_id, library_image_assets(ready_url), fmt=LIBRARY_IMAGE_FORMAT)
+    store_package_creative(
+        ctx, held_id, library_image_assets(held_url), fmt=LIBRARY_IMAGE_FORMAT, status="pending_review"
+    )
 
 
 @given(
@@ -309,60 +324,13 @@ def given_package_references_creative_gam_holds(
     ctx: dict, creative_id: str, url: str, status: str, gam_id: str
 ) -> None:
     """A library creative whose record holds GAM's id for it, named in the package's creative_ids."""
-    from tests.bdd.steps.generic.given_media_buy import _add_creative_ids_to_package
-
-    _library_image_creative(
+    store_package_creative(
         ctx,
         creative_id,
-        url,
+        library_image_assets(url),
+        fmt=LIBRARY_IMAGE_FORMAT,
         status="approved" if status == "approved" else "pending_review",
-        ad_server_creative_id=gam_id,
-    )
-    ctx["env"]._commit_factory_data()
-    _add_creative_ids_to_package(ctx, [creative_id])
-
-
-def _library_image_creative(
-    ctx: dict, creative_id: str, url: str, *, status: str = "approved", principal: Any = None, **data: Any
-) -> None:
-    """A 300x250 image creative stored in the library, in the reference format the GAM product sells.
-
-    The buyer's own unless *principal* names another; *data* adds keys to its stored record.
-    """
-    from tests.factories.creative_asset import image_spec
-
-    _library_creative(
-        ctx,
-        creative_id,
-        "display_300x250_image",
-        image_spec("banner_image", url=url),
-        status=status,
-        principal=principal,
-        **data,
-    )
-
-
-def _library_creative(
-    ctx: dict,
-    creative_id: str,
-    format_id: str,
-    asset: Any,
-    *,
-    status: str = "approved",
-    principal: Any = None,
-    **data: Any,
-) -> None:
-    """A creative stored in the library with one asset, in reference-catalog format *format_id*."""
-    from tests.factories.creative import CreativeFactory
-    from tests.factories.creative_asset import build_assets
-
-    CreativeFactory(
-        creative_id=creative_id,
-        tenant=ctx["tenant"],
-        principal=principal or ctx["principal"],
-        format=format_id,
-        status=status,
-        data={"assets": build_assets(asset), **data},
+        ad_server_creative_id=ctx["env"].hold_gam_creative(gam_id, url),
     )
 
 
@@ -386,8 +354,13 @@ def given_another_buyer_holds_creative(ctx: dict, creative_id: str, url: str) ->
     """A second principal of the tenant, with a creative under an id the buyer also uses."""
     from tests.factories import PrincipalFactory
 
-    _library_image_creative(ctx, creative_id, url, principal=PrincipalFactory(tenant=ctx["tenant"]))
-    ctx["env"]._commit_factory_data()
+    store_creative(
+        ctx,
+        creative_id,
+        library_image_assets(url),
+        fmt=LIBRARY_IMAGE_FORMAT,
+        principal=PrincipalFactory(tenant=ctx["tenant"]),
+    )
 
 
 @given(
@@ -420,8 +393,9 @@ def given_gam_fails_report_job(ctx: dict, advertiser_id: str) -> None:
 )
 def given_buyer_holds_creative_recorded_with_own_id(ctx: dict, creative_id: str, url: str) -> None:
     """A library creative whose record holds the buyer's id under ``platform_creative_id``, as #2247 wrote it."""
-    _library_image_creative(ctx, creative_id, url, platform_creative_id=creative_id)
-    ctx["env"]._commit_factory_data()
+    store_creative(
+        ctx, creative_id, library_image_assets(url), fmt=LIBRARY_IMAGE_FORMAT, platform_creative_id=creative_id
+    )
 
 
 @given(
@@ -438,18 +412,75 @@ def given_buyer_holds_html_creative(ctx: dict, creative_id: str, markup: str, pr
     as the creative's root ``url``, ``width`` and ``height``
     (src/core/tools/creatives/_processing.py).
     """
-    from tests.factories.creative_asset import asset_spec
-
-    _library_creative(
+    store_creative(
         ctx,
         creative_id,
-        "display_300x250_html",
-        asset_spec("html_creative", "html", content=markup),
+        build_assets(html_spec("html_creative", content=markup)),
+        fmt="display_300x250_html",
         url=preview_url,
         width=300,
         height=250,
     )
-    ctx["env"]._commit_factory_data()
+
+
+@given(
+    parsers.parse(
+        'the package references the buyer\'s approved 300x250 HTML creative "{creative_id}" with markup "{markup}", '
+        "stored without a URL"
+    )
+)
+def given_package_references_html_creative(ctx: dict, creative_id: str, markup: str) -> None:
+    """A library creative in the reference HTML format whose one asset is its markup, and no root URL or size."""
+    assets = build_assets(html_spec("html_creative", content=markup))
+    store_package_creative(ctx, creative_id, assets, fmt="display_300x250_html")
+
+
+@given(
+    parsers.parse(
+        'the package references the buyer\'s approved native_in_feed creative "{creative_id}" titled "{title}" '
+        'by "{advertiser}", landing on "{landing_url}", with main image "{image_url}"'
+    )
+)
+def given_package_references_native_creative(
+    ctx: dict, creative_id: str, title: str, advertiser: str, landing_url: str, image_url: str
+) -> None:
+    """A canonical ``native_in_feed`` creative: its required slots and a main image.
+
+    AdCP 3.2.7 formats/canonical/native_in_feed.json requires ``title``,
+    ``advertiser_name`` and ``landing_page_url``; ``main_image`` is optional.
+    """
+    assets = build_assets(
+        text_spec("title", content=title),
+        text_spec("advertiser_name", content=advertiser),
+        url_spec("landing_page_url", url=landing_url),
+        image_spec("main_image", url=image_url),
+    )
+    store_package_creative(ctx, creative_id, assets, kind="native_in_feed")
+
+
+@given(
+    parsers.re(
+        r'Google Ad Manager sells product "(?P<product_id>[^"]+)" with product formats \'(?P<product_formats>[^\']*)\''
+        r"(?:, with product settings '(?P<product_settings>[^']*)')?$"
+    )
+)
+def given_gam_sells_product_with_formats(
+    ctx: dict, product_id: str, product_formats: str, product_settings: str | None
+) -> None:
+    """One product of the GAM seller sells its own format arms, over its own configuration keys.
+
+    The seller Given sells every product with one set of formats; this re-sells *product_id*
+    with *product_formats* (``core/product.json``'s ``format_ids``/``format_options``) and the
+    ``implementation_config`` keys in *product_settings*, as the Admin UI's product form
+    writes them.
+    """
+    from tests.bdd.steps.generic.given_media_buy import seeded_product
+
+    ctx["env"].sell_product_through_gam(
+        seeded_product(ctx, product_id),
+        product_formats=json.loads(product_formats),
+        implementation_config=json.loads(product_settings) if product_settings is not None else {},
+    )
 
 
 @given(parsers.parse('the seller\'s ad server is now "{adapter_type}", which takes no creatives from the seller'))
@@ -501,6 +532,25 @@ def when_seller_approves_media_buy(ctx: dict) -> None:
     ctx["approval_result"] = ctx["env"].approve_pending_media_buy()
 
 
+@when(
+    parsers.re(
+        r"the Buyer Agent sends the create_media_buy request, which the seller books (?P<booked>at once|on approving it)$"
+    )
+)
+def when_create_booked(ctx: dict, booked: str) -> None:
+    """The buyer's create, then the seller's approval of the buy when the seller books it on approving it.
+
+    The create every scenario sends and the approval "the seller approves the media buy" runs,
+    so one outline grades a GAM invariant on both paths that push creatives at booking: the
+    auto-approved create and the seller's approval. Which path books the buy is the row's.
+    """
+    from tests.bdd.steps.domain.uc002_create_media_buy import when_send_create_media_buy
+
+    when_send_create_media_buy(ctx)
+    if booked == "on approving it":
+        when_seller_approves_media_buy(ctx)
+
+
 def _orders_created(ctx: dict) -> list[Any]:
     """The orders the stand-in GAM network created, each carrying the id it assigned."""
     return ctx["env"].gam_objects_created("OrderService", "createOrders")
@@ -544,16 +594,20 @@ def then_one_line_item_on_ad_unit(ctx: dict, ad_unit_id: str) -> None:
     assert line_items == expected, f"expected GAM to receive line items {expected}; it received {line_items}"
 
 
+@then("Google Ad Manager holds the order it created as approved")
+def then_gam_holds_created_order_approved(ctx: dict) -> None:
+    """GAM created exactly one order, and holds it APPROVED (``Order.status``), as the seller's approval left it."""
+    statuses = [order.get("status") for order in _orders_created(ctx)]
+    assert statuses == ["APPROVED"], f"expected GAM to hold one APPROVED order; it holds orders in {statuses}"
+
+
 #: The keys of a GAM line item or order that carry its flight.
 _FLIGHT_KEYS = ("startDateTimeType", "startDateTime", "endDateTime")
 
 
 def _flights(ctx: dict, service: str, method: str) -> list[dict[str, Any]]:
     """For each object the stand-in GAM network created through ``service.method``, its flight keys that are present."""
-    return [
-        {key: created[key] for key in _FLIGHT_KEYS if key in created}
-        for created in ctx["env"].gam_objects_created(service, method)
-    ]
+    return ctx["env"].gam_flights(service, method, _FLIGHT_KEYS)
 
 
 def _gam_datetime(literal: str, time_zone: str) -> dict[str, Any]:
@@ -580,6 +634,15 @@ def given_creative_agent_serves_reference_formats(ctx: dict) -> None:
     ctx["env"].serve_reference_formats()
 
 
+def _priced_product(ctx: dict) -> Any:
+    """A product of the scenario's tenant with the default pricing option, as the route's seed builds one."""
+    from tests.factories import PricingOptionFactory, ProductFactory
+
+    product = ProductFactory(tenant=ctx["tenant"])
+    PricingOptionFactory(product=product)
+    return product
+
+
 _BOOKED_PACKAGE = r'package "([^"]+)" is line item "(\d+)" accepting (\d+)x(\d+)'
 
 
@@ -587,11 +650,20 @@ _BOOKED_PACKAGE = r'package "([^"]+)" is line item "(\d+)" accepting (\d+)x(\d+)
     parsers.re(
         r"(?P<owner>the buyer|another buyer of the seller) holds a buy booked in Google Ad Manager as "
         r'order "(?P<order_id>\d+)"'
-        rf'(?: in status "(?P<status>[^"]+)")? whose (?P<packages>{_BOOKED_PACKAGE}(?: and {_BOOKED_PACKAGE})*)$'
+        rf'(?: in status "(?P<status>[^"]+)")? whose (?P<packages>{_BOOKED_PACKAGE}(?: and {_BOOKED_PACKAGE})*)'
+        r"(?:, on a product selling '(?P<product_formats>[^']*)')?$"
     )
 )
-def given_buyer_holds_booked_buy(ctx: dict, owner: str, order_id: str, status: str | None, packages: str) -> None:
-    """A buy booked in GAM, the buyer's or a second GAM advertiser's: each package is its stated line item of the order."""
+def given_buyer_holds_booked_buy(
+    ctx: dict, owner: str, order_id: str, status: str | None, packages: str, product_formats: str | None
+) -> None:
+    """A buy booked in GAM, the buyer's or a second GAM advertiser's: each package is its stated line item of the order.
+
+    The buy is on the scenario's default product. The optional product clause books it on a
+    product of its own instead, which the seller sells through GAM with *product_formats*
+    (the seller Given's grammar: ``core/product.json``'s ``format_ids``/``format_options``),
+    so a scenario can state what the booked package's product accepts.
+    """
     from tests.factories import PrincipalFactory
 
     principal = None
@@ -600,16 +672,25 @@ def given_buyer_holds_booked_buy(ctx: dict, owner: str, order_id: str, status: s
         principal = PrincipalFactory(
             tenant=ctx["tenant"], platform_mappings={"google_ad_manager": {"advertiser_id": "3000002"}}
         )
-    ctx["env"].book_in_gam(
+    product = ctx["default_product"]
+    if product_formats is not None:
+        product = _priced_product(ctx)
+        ctx["env"].sell_product_through_gam(
+            product, product_formats=json.loads(product_formats), implementation_config={}
+        )
+    media_buy = ctx["env"].book_in_gam(
         principal=principal,
         line_items=[
             (package, line_item, (int(width), int(height)))
             for package, line_item, width, height in re.findall(_BOOKED_PACKAGE, packages)
         ],
         order_id=order_id,
-        product=ctx["default_product"],
+        product=product,
         status=status or "pending_creatives",
     )
+    if principal is None:
+        # The buyer's own booked buy: the one the seller's approval of a creative pushes to.
+        ctx["live_media_buy"] = media_buy
 
 
 @given(parsers.re(r'the buyer has (?P<state>paused|left) package "(?P<package>[^"]+)" of the buy$'))
@@ -661,7 +742,7 @@ def given_buyer_syncs_image_creative(
     succeeded, so a later step grades what the seller did with it rather than a refusal.
     """
     ctx["creatives"] = [_image_creative(creative_id, url)]
-    ctx["assignments"] = {creative_id: [package.strip() for package in packages.split(",")]}
+    ctx["assignments"] = {creative_id: comma_list(packages)}
     if weight is not None:
         for package in ctx["assignments"][creative_id]:
             _ask_assignment_terms(ctx, creative_id, package, weight=int(weight))
@@ -690,7 +771,7 @@ def when_buyer_references_library_creative(ctx: dict, creative_id: str, packages
     other creative, assigned nowhere.
     """
     ctx["creatives"] = [_image_creative(f"{creative_id}-unassigned", "https://example.com/unassigned.png")]
-    ctx["assignments"] = {creative_id: [package.strip() for package in packages.split(",")]}
+    ctx["assignments"] = {creative_id: comma_list(packages)}
     when_sync_creative_with_assignments(ctx)
 
 
@@ -720,8 +801,8 @@ def given_gam_refuses_line_item_read(ctx: dict, reason: str) -> None:
 
 @when(parsers.parse('the seller approves creative "{creative_id}"'))
 def when_seller_approves_creative(ctx: dict, creative_id: str) -> None:
-    """The seller approves the creative in the Admin UI's review queue."""
-    ctx["env"].approve_creative_as_seller(creative_id)
+    """The seller approves the creative in the Admin UI's review queue, keeping what the route answered."""
+    ctx.setdefault("seller_creative_approvals", {})[creative_id] = ctx["env"].approve_creative_as_seller(creative_id)
 
 
 def _creatives_created(ctx: dict) -> list[Any]:
@@ -736,12 +817,25 @@ def _line_item_created(ctx: dict) -> Any:
     return line_items[0]
 
 
+def _assert_holds_exactly(held: list[Any], expected: list[Any], what: str) -> None:
+    """GAM holds exactly *expected* of *what*, compared as a multiset (``collections.Counter``).
+
+    A missing, extra or repeated item fails and their order does not. A real network does not
+    answer in the order the seller created things: read back in id order, run 025d613f held a
+    creative on line items "5000001,5000002" as [5000002, 5000001], and run f18f96f3 held the
+    creatives "ready.png, held.png", created in that order, as [held.png, ready.png].
+    """
+    assert Counter(held) == Counter(expected), (
+        f"expected GAM to hold {what} {sorted(expected)}; it holds {sorted(held)}"
+    )
+
+
 def _assert_creatives_created(ctx: dict, expected: list[tuple[str, str, str | None, str | None]]) -> None:
-    """GAM created exactly *expected*: (type, advertiser id, image URL, snippet) of each creative, in order."""
+    """GAM created exactly *expected*: (type, advertiser id, image URL, snippet) of each creative, in any order."""
     created = [
         (c["xsi_type"], str(c["advertiserId"]), c.get("imageUrl"), c.get("snippet")) for c in _creatives_created(ctx)
     ]
-    assert created == expected, f"expected GAM to create {expected}; it created {created}"
+    _assert_holds_exactly(created, expected, "the creatives")
 
 
 @then(
@@ -794,21 +888,131 @@ def then_one_order_without_flight(ctx: dict) -> None:
     )
 )
 def then_gam_created_image_creatives(ctx: dict, advertiser_id: str, urls: str) -> None:
-    """GAM holds exactly these creatives from this scenario, in order: images for the advertiser, showing the URLs."""
+    """GAM holds exactly these creatives from this scenario: images for the advertiser, showing the URLs."""
     _assert_creatives_created(
         ctx, [("ImageRedirectCreative", advertiser_id, url.strip(), None) for url in urls.split(",")]
     )
 
 
 @then(
-    parsers.parse(
-        'Google Ad Manager created one third-party creative for advertiser "{advertiser_id}" whose snippet is '
-        '"{snippet}" and which names no image URL'
+    parsers.re(
+        r'Google Ad Manager created one third-party creative for advertiser "(?P<advertiser_id>\d+)" whose snippet is '
+        r"(?:\"(?P<double_quoted>[^\"]+)\"|'(?P<single_quoted>[^']+)') and which names no image URL$"
     )
 )
-def then_gam_created_one_third_party_creative(ctx: dict, advertiser_id: str, snippet: str) -> None:
-    """GAM holds exactly one creative from this scenario: the markup itself, not a picture of a page."""
-    _assert_creatives_created(ctx, [("ThirdPartyCreative", advertiser_id, None, snippet)])
+def then_gam_created_one_third_party_creative(
+    ctx: dict, advertiser_id: str, double_quoted: str | None, single_quoted: str | None
+) -> None:
+    """GAM holds exactly one creative from this scenario: the markup itself, not a picture of a page.
+
+    The snippet is quoted with whichever quote it does not contain, and compared byte for byte.
+    """
+    # Byte equality, macro tokens included: core/assets/display-tag-asset.json:17 at
+    # adcp@8d1d3244b, "Tokens remain byte-preserved until the resolver named by each
+    # declaration substitutes them."
+    _assert_creatives_created(ctx, [("ThirdPartyCreative", advertiser_id, None, double_quoted or single_quoted)])
+
+
+@then(parsers.parse('Google Ad Manager tracks that creative\'s impressions at exactly "{urls}"'))
+def then_gam_tracks_impressions_at(ctx: dict, urls: str) -> None:
+    """The one creative GAM created fires exactly these impression trackers, in order, in GAM's macro spelling."""
+    (creative,) = _creatives_created(ctx)
+    trackers = list(creative.get("thirdPartyImpressionTrackingUrls") or [])
+    # docs/creative/universal-macros.mdx:694 at adcp@8d1d3244b: the sales agent "Translates
+    # platform macros to their ad server's syntax", ``{CACHEBUSTER}`` -> ``%%CACHEBUSTER%%`` (GAM).
+    assert trackers == comma_list(urls), f"expected GAM to fire {comma_list(urls)}; the creative fires {trackers}"
+    # Equality already rules it out; stated because a tracker still carrying an AdCP token is
+    # the failure this grades, and GAM would fire it with the braces in it.
+    leftover = [url for url in trackers if re.search(r"\{[A-Z_]+\}", url)]
+    assert not leftover, f"GAM fires trackers still in AdCP macro spelling: {leftover}"
+
+
+@then(
+    parsers.parse(
+        'Google Ad Manager created one image redirect creative for advertiser "{advertiser_id}" showing '
+        '"{image_url}" and clicking through to "{destination_url}"'
+    )
+)
+def then_gam_created_one_image_redirect(ctx: dict, advertiser_id: str, image_url: str, destination_url: str) -> None:
+    """GAM holds exactly one creative from this scenario: an image redirect over exactly this pair of URLs."""
+    # Byte equality on both URLs. A display_tag pair keeps its macro tokens:
+    # core/assets/display-tag-asset.json:119 at adcp@8d1d3244b, "The pair MUST NOT be split,
+    # mixed, or revised independently." An image's landing page arrives in GAM's macro
+    # spelling, docs/creative/universal-macros.mdx:694, so its expected value is GAM's.
+    created = [
+        (c["xsi_type"], str(c["advertiserId"]), c.get("imageUrl"), c.get("destinationUrl"))
+        for c in _creatives_created(ctx)
+    ]
+    expected = [("ImageRedirectCreative", advertiser_id, image_url, destination_url)]
+    assert created == expected, f"expected GAM to create {expected}; it created {created}"
+
+
+@then(parsers.re(r"Google Ad Manager created that creative at size (?P<width>\d+)x(?P<height>\d+)$"))
+def then_gam_created_creative_at_size(ctx: dict, width: str, height: str) -> None:
+    """The one creative GAM created has this ``size``: GAM keeps a creative's size for life."""
+    sizes = [c.get("size") for c in _creatives_created(ctx)]
+    expected = [{"width": int(width), "height": int(height)}]
+    assert sizes == expected, f"expected GAM to create one creative at {expected}; it created sizes {sizes}"
+
+
+@then(
+    parsers.re(
+        r"Google Ad Manager associated that creative with the line item it created, "
+        r'(?:overriding its size with "(?P<sizes>[^"]+)"|at its own size)$'
+    )
+)
+def then_gam_associated_with_size_override(ctx: dict, sizes: str | None) -> None:
+    """One association, of the one creative onto the one line item, carrying exactly these sizes, or none.
+
+    Ad Manager API v202602 ``LineItemCreativeAssociation.sizes``: "Overrides the value set for
+    Creative.size, which allows the creative to be served to ad units that would otherwise
+    not be compatible for its actual size." "At its own size" is an association stating none.
+    The scenarios say the association "carries" its sizes, which is a set: they are compared
+    as a multiset, so a missing, extra or repeated size fails and their order does not. A
+    real network does not keep the order the seller sent. The creative's own size, the
+    first one, is graded by "created that creative at size".
+    """
+    (creative,) = _creatives_created(ctx)
+    held = [
+        (str(a["creativeId"]), str(a["lineItemId"]), _size_counts(a.get("sizes") or [])) for a in _licas_created(ctx)
+    ]
+    expected = [(str(creative["id"]), str(_line_item_created(ctx)["id"]), _size_counts(parse_sizes(sizes or "")))]
+    assert held == expected, f"expected GAM to hold {expected}; it holds {held}"
+
+
+def _size_counts(sizes: list[Any]) -> Counter[tuple[int, int]]:
+    """Each (width, height) of *sizes*, counted: the sizes as a multiset."""
+    return Counter((int(size["width"]), int(size["height"])) for size in sizes)
+
+
+@then(
+    parsers.re(
+        r"Google Ad Manager serves that creative on "
+        r'(?:the "(?P<product_id>[^"]+)" package\'s line item|line item "(?P<line_item>\d+)") '
+        r'at sizes "(?P<sizes>[^"]+)" only$'
+    )
+)
+def then_gam_serves_creative_on_package_line_item_at(
+    ctx: dict, product_id: str | None, line_item: str | None, sizes: str
+) -> None:
+    """On the line item of *product_id*'s package, or on *line_item*, the one creative GAM created serves at *sizes*.
+
+    Ad Manager API v202602 ``LineItemCreativeAssociation.sizes``: "Overrides the value set for
+    Creative.size". So the sizes a creative serves at on a line item are its association's
+    ``sizes``, or the creative's own ``size`` when the association states none. One
+    association of the creative on that line item. A buy GAM created names the line item by
+    its package's product; a buy the scenario booked names it by the id it stated.
+    """
+    (creative,) = _creatives_created(ctx)
+    line_item_id = line_item or str(_line_item_for(ctx, str(product_id))["id"])
+    served = [
+        list(a.get("sizes") or [creative["size"]])
+        for a in _licas_created(ctx)
+        if (str(a["creativeId"]), str(a["lineItemId"])) == (str(creative["id"]), line_item_id)
+    ]
+    assert served == [parse_sizes(sizes)], (
+        f"expected creative {creative['id']} to serve at {sizes} on line item {line_item_id}; GAM serves it at {served}"
+    )
 
 
 @then(parsers.parse('creative "{creative_id}" failed with error {code} and recovery {recovery}'))
@@ -822,20 +1026,42 @@ def then_creative_failed_with(ctx: dict, creative_id: str, code: str, recovery: 
 
 @then(parsers.parse('Google Ad Manager holds one creative, showing "{url}"'))
 def then_gam_holds_one_creative(ctx: dict, url: str) -> None:
-    """Of everything the seller sent, GAM holds exactly one creative, and it shows *url*."""
+    """Of everything the seller sent, GAM holds exactly one creative, and it shows *url*.
+
+    Read from what GAM holds now, so it also grades an update: a creative the seller updated
+    in place is still the one creative, showing the new content, and one it did not update
+    still shows the old.
+    """
     (held,) = _creatives_created(ctx)
     assert held.get("imageUrl") == url, f"expected GAM to hold the creative showing {url}; it holds {held}"
+    ctx["gam_creative_last_read"] = _modification_of(held)
 
 
-@then(parsers.parse('Google Ad Manager updated that creative, once, to show "{url}"'))
-def then_gam_updated_that_creative(ctx: dict, url: str) -> None:
-    """GAM got one update naming the one creative it created, and still holds that one creative, showing *url*."""
-    sent = ctx["env"].gam_objects_sent("CreativeService", "createCreatives")
-    assert len(sent) == 1, f"expected GAM to be asked to create one creative; it was asked for {sent}"
+def _modification_of(creative: Mapping[str, Any]) -> tuple[str, Any, Any]:
+    """(id, ``lastModifiedDateTime``, image URL) of a GAM creative: what an update would change.
+
+    A copy of the values, never the object: the stand-in updates the creative it holds in place.
+    """
+    return str(creative["id"]), creative.get("lastModifiedDateTime"), creative.get("imageUrl")
+
+
+@then("Google Ad Manager still holds that creative as it last read it, unmodified")
+def then_gam_creative_unmodified(ctx: dict) -> None:
+    """The one creative GAM holds was not modified since "holds one creative" last read it: nothing more was sent.
+
+    Ad Manager API v202602 ``Creative.lastModifiedDateTime``: "The date and time this creative
+    was last modified. This attribute is assigned by Google and is readonly." An
+    ``updateCreatives`` re-sending the same content leaves ``imageUrl`` as it was and moves
+    this stamp, on the stand-in (which stamps each update) and on a live network alike. The
+    stamp read must be there, or the comparison would hold whatever was sent. Ceiling: a live
+    network stamps to the second, so an update within the same second as the read is not seen.
+    """
+    last_read = ctx["gam_creative_last_read"]
+    assert last_read[1] is not None, f"GAM held no lastModifiedDateTime on the creative it last read: {last_read}"
     (held,) = _creatives_created(ctx)
-    updated = [(c["id"], c.get("imageUrl")) for c in ctx["env"].gam_objects_sent("CreativeService", "updateCreatives")]
-    assert updated == [(held["id"], url)], f"expected one update of creative {held['id']} to {url}; got {updated}"
-    assert held.get("imageUrl") == url, f"expected GAM to hold the creative showing {url}; it holds {held}"
+    assert _modification_of(held) == last_read, (
+        f"expected GAM to hold the creative as it last read it, {last_read}; it holds {_modification_of(held)}"
+    )
 
 
 @then(
@@ -861,10 +1087,11 @@ def then_gam_association_serving(ctx: dict, line_items: str, status: str) -> Non
 def then_gam_serving_actions(ctx: dict) -> None:
     """GAM received exactly a deactivate and then an activate of the associations of the one creative it created."""
     (creative,) = _creatives_created(ctx)
-    lica = ctx["env"].mock["gam_client"].return_value.GetService("LineItemCreativeAssociationService")
     sent = [
-        (call.args[0]["xsi_type"], [v["value"]["value"] for v in call.args[1]["values"] if v["key"] == "creativeId"])
-        for call in lica.performLineItemCreativeAssociationAction.call_args_list
+        (action["xsi_type"], [v["value"]["value"] for v in statement["values"] if v["key"] == "creativeId"])
+        for action, statement in ctx["env"].gam_actions_performed(
+            "LineItemCreativeAssociationService", "performLineItemCreativeAssociationAction"
+        )
     ]
     expected = [
         ("DeactivateLineItemCreativeAssociations", [int(creative["id"])]),
@@ -876,16 +1103,10 @@ def then_gam_serving_actions(ctx: dict) -> None:
 @then("Google Ad Manager was asked to change no association's serving")
 def then_gam_no_serving_change(ctx: dict) -> None:
     """Nothing reached GAM's association activate or deactivate action."""
-    lica = ctx["env"].mock["gam_client"].return_value.GetService("LineItemCreativeAssociationService")
-    calls = lica.performLineItemCreativeAssociationAction.call_args_list
+    calls = ctx["env"].gam_actions_performed(
+        "LineItemCreativeAssociationService", "performLineItemCreativeAssociationAction"
+    )
     assert calls == [], f"expected no association action; GAM received {calls}"
-
-
-@then("Google Ad Manager updated no creative")
-def then_gam_updated_no_creative(ctx: dict) -> None:
-    """Nothing reached GAM's creative update."""
-    updated = ctx["env"].gam_objects_sent("CreativeService", "updateCreatives")
-    assert updated == [], f"expected GAM to update no creative; it received {updated}"
 
 
 @then("Google Ad Manager created no creative")
@@ -907,11 +1128,11 @@ def _associations(ctx: dict) -> list[tuple[str, str]]:
 
 @then(parsers.re(r'Google Ad Manager associated that creative with line items "(?P<line_items>[^"]+)"$'))
 def then_gam_associated_with_line_items(ctx: dict, line_items: str) -> None:
-    """GAM holds the one creative it created on exactly these line items, each once, in this order."""
+    """GAM holds the one creative it created on exactly these line items, each once, in any order."""
     created = _creatives_created(ctx)
     assert len(created) == 1, f"'that creative' names one creative; GAM created {len(created)}"
     expected = [(str(created[0]["id"]), line_item.strip()) for line_item in line_items.split(",")]
-    assert _associations(ctx) == expected, f"expected GAM to hold {expected}; it holds {_associations(ctx)}"
+    _assert_holds_exactly(_associations(ctx), expected, "the associations")
 
 
 @then(parsers.parse('Google Ad Manager associated that creative with line item "{line_item}" at weight {weight:d}'))
@@ -921,12 +1142,11 @@ def then_gam_associated_at_weight(ctx: dict, line_item: str, weight: int) -> Non
     assert reported == [(line_item, weight)], f"expected one association at weight {weight}; GAM holds {reported}"
 
 
-@then(parsers.parse('Google Ad Manager set line item "{line_item}" to manual creative rotation'))
+@then(parsers.parse('Google Ad Manager holds line item "{line_item}" on manual creative rotation'))
 def then_gam_line_item_manual_rotation(ctx: dict, line_item: str) -> None:
-    """The seller updated the line item to MANUAL rotation, which GAM needs to honour weights."""
-    updated = ctx["env"].gam_objects_sent("LineItemService", "updateLineItems")
-    reported = [(str(item["id"]), item["creativeRotationType"]) for item in updated]
-    assert reported == [(line_item, "MANUAL")], f"expected line item {line_item} set to MANUAL; GAM got {reported}"
+    """GAM holds the line item on MANUAL rotation (``LineItem.creativeRotationType``), which it needs to honour weights."""
+    rotation = ctx["env"].gam_line_item(line_item).get("creativeRotationType")
+    assert rotation == "MANUAL", f"expected GAM to hold line item {line_item} on MANUAL rotation; it holds {rotation}"
 
 
 @then("Google Ad Manager changed no line item")
@@ -981,6 +1201,22 @@ _LINE_ITEM_READERS = {
 _INTEGER_COLUMNS = frozenset({"priority", "costPerUnitMicros", "units"})
 
 
+def _expected_line_items(datatable: Any) -> list[dict[str, Any]]:
+    """The booking Then's table, one row per line item, an integer column as ``(int, value)``."""
+    return [
+        {column: (int, int(cell)) if column in _INTEGER_COLUMNS else cell for column, cell in row.items()}
+        for row in table_rows(datatable)
+    ]
+
+
+def _line_item_columns(item: Any) -> dict[str, Any]:
+    """The booking Then's columns read off one GAM line item, an integer column as ``(type, value)``."""
+    return {
+        column: (type(value), value) if column in _INTEGER_COLUMNS else value
+        for column, value in ((column, read(item)) for column, read in _LINE_ITEM_READERS.items())
+    }
+
+
 @then("Google Ad Manager received these line items, in package order:")
 def then_line_items_in_package_order(ctx: dict, datatable: Any) -> None:
     """The seller sent GAM exactly these line items, one per package in the request's order.
@@ -991,20 +1227,32 @@ def then_line_items_in_package_order(ctx: dict, datatable: Any) -> None:
     a missing, extra or reordered line item fails it. An integer column is compared with its
     type, so a float goal (GAM's ``Goal.units`` is a long) fails it.
     """
-    expected = [
-        {column: (int, int(cell)) if column in _INTEGER_COLUMNS else cell for column, cell in row.items()}
-        for row in table_rows(datatable)
-    ]
-    sent = [
-        {
-            column: (type(value), value) if column in _INTEGER_COLUMNS else value
-            for column, value in ((column, read(item)) for column, read in _LINE_ITEM_READERS.items())
-        }
-        for item in ctx["env"].gam_objects_sent("LineItemService", "createLineItems")
-    ]
+    expected = _expected_line_items(datatable)
+    sent = [_line_item_columns(item) for item in ctx["env"].gam_objects_sent("LineItemService", "createLineItems")]
     assert sent == expected, (
         f"expected GAM to receive line items {expected}; it received {sent} (approval: {ctx.get('approval_result')})"
     )
+
+
+@then("Google Ad Manager holds each package's line item, under the line item id the package recorded:")
+def then_each_package_line_item(ctx: dict, datatable: Any) -> None:
+    """Row *i* is the line item GAM holds under the id the request's *i*-th package recorded.
+
+    Matched by package id, not by the order GAM received or returns line items in: each
+    package's stored row records its line item's id (``platform_line_item_id``). The
+    created line items must be exactly the recorded ones, so a package with no line item,
+    two packages on one line item, or a line item no package recorded fails it. Columns
+    and integer typing as in "Google Ad Manager received these line items, in package order".
+    """
+    created = {str(item["id"]): item for item in _line_items_created(ctx)}
+    recorded = ctx["env"].package_line_item_ids()
+    assert len(set(recorded)) == len(recorded) and set(recorded) == set(created), (
+        f"expected each package to record its own line item of the ones GAM created ({sorted(created)}); "
+        f"the packages recorded {recorded} (approval: {ctx.get('approval_result')})"
+    )
+    expected = _expected_line_items(datatable)
+    booked = [_line_item_columns(created[line_item_id]) for line_item_id in recorded if line_item_id is not None]
+    assert booked == expected, f"expected the packages' line items to be {expected}; GAM holds {booked}"
 
 
 @then("the seller's approval books the media buy")
@@ -1016,17 +1264,57 @@ def then_approval_books_media_buy(ctx: dict) -> None:
     assert pending == [], f"expected no media buy to await approval; {len(pending)} still do"
 
 
+def assert_media_buy_still_awaits_approval(ctx: dict) -> None:
+    """The one media buy the scenario held is still ``pending_approval``, read off the stored row."""
+    pending = ctx["env"].media_buys_awaiting_approval()
+    assert len(pending) == 1, f"expected the media buy to still await approval; {len(pending)} buys do"
+
+
 @then("the seller's approval fails on the package's missing pricing_info, and the media buy still awaits approval")
 def then_approval_fails_on_missing_pricing_info(ctx: dict) -> None:
-    """The approval failed naming the missing ``pricing_info``, and left the buy awaiting approval."""
+    """The approval failed naming the stored package's missing ``pricing_info``, and left the buy awaiting approval.
+
+    A store defect the buyer cannot correct: CONFIGURATION_ERROR, its ``field`` the stored
+    field at fault, as ``media_buy_delivery`` refuses the same missing terms.
+    """
+    error = failed_approval_error(ctx, "CONFIGURATION_ERROR")
+    assert error.field == "pricing_info", f"expected the refusal to name pricing_info; it names {error.field!r}"
+    assert_media_buy_still_awaits_approval(ctx)
+
+
+@then("the media buy still awaits approval")
+def then_media_buy_still_awaits_approval(ctx: dict) -> None:
+    """A refused approval booked nothing, so the buy is left awaiting approval for the seller to retry."""
+    assert_media_buy_still_awaits_approval(ctx)
+
+
+def failed_approval_error(ctx: dict, code: str) -> Any:
+    """The typed error the seller's approval failed with (``ApprovalResult.error``), asserted to carry *code*."""
     from src.core.tools.media_buy_create import ApprovalOutcome
 
     result = ctx["approval_result"]
-    assert result.outcome is ApprovalOutcome.FAILED and "missing pricing_info" in (result.error_msg or ""), (
-        f"expected the approval to fail on the package's missing pricing_info; it returned {result}"
+    error = result.error
+    assert result.outcome is ApprovalOutcome.FAILED and error is not None and str(error.error_code) == code, (
+        f"expected the seller's approval to fail with {code}; it returned {result}"
     )
-    pending = ctx["env"].media_buys_awaiting_approval()
-    assert len(pending) == 1, f"expected the media buy to still await approval; {len(pending)} buys do"
+    return error
+
+
+@then(parsers.parse('the seller\'s approval fails with error code "{code}"'))
+def then_approval_fails_with_code(ctx: dict, code: str) -> None:
+    """The approval failed, and its typed error carries the code."""
+    failed_approval_error(ctx, code)
+
+
+@then(parsers.parse('the seller\'s approval fails with error code "{code}" naming field "{field}"'))
+def then_approval_fails_with_code_naming_field(ctx: dict, code: str, field: str) -> None:
+    """The approval failed with the code, its ``error.field`` pointing where the stored buy names the subject.
+
+    The same pointer a create answers with: the approval's refusal is the one object a
+    pre-booking refusal is built as (``_execute_adapter_media_buy_creation``).
+    """
+    error = failed_approval_error(ctx, code)
+    assert error.field == field, f"expected the seller's approval to name field {field!r}; it names {error.field!r}"
 
 
 @then("Google Ad Manager received no order and no line item")
@@ -1062,10 +1350,9 @@ def then_gam_associated_each_creative_with_created_line_item(ctx: dict) -> None:
 def then_gam_approved_created_order_twice(ctx: dict) -> None:
     """Both approvals the seller sent GAM name the one order GAM created."""
     (order,) = _orders_created(ctx)
-    order_actions = ctx["env"].mock["gam_client"].return_value.GetService("OrderService").performOrderAction
     approvals = [
         str(bound["value"]["value"])
-        for action, statement in (call.args for call in order_actions.call_args_list)
+        for action, statement in ctx["env"].gam_actions_performed("OrderService", "performOrderAction")
         if action["xsi_type"].startswith("Approve")
         for bound in statement["values"]
         if bound["key"] == "orderId"

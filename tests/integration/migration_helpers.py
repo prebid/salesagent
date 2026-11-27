@@ -245,23 +245,29 @@ def _json_or_null(value: Any) -> str | None:
     return None if value is None else json.dumps(value)
 
 
+#: ``seed_inventory_profile``'s default for ``publisher_properties``: leave the column out.
+_OMITTED = object()
+
+
 def seed_inventory_profile(
-    engine, *, tenant_id: str, profile_id: str, format_options: Any, publisher_properties: Any
+    engine, *, tenant_id: str, profile_id: str, format_options: Any, publisher_properties: Any = _OMITTED
 ) -> int:
-    """Insert an inventory_profiles row with raw SQL, as the schema under test stores it; return its id."""
+    """Insert an inventory_profiles row with raw SQL, as the schema under test stores it; return its id.
+
+    ``publisher_properties`` is written only when given, so a revision after the column was
+    dropped is seeded without it.
+    """
+    names = ["tenant_id", "profile_id", "name", "inventory_config", "format_options", "created_at", "updated_at"]
+    values = [":tid", ":pid", ":pid", "'{}'::jsonb", "CAST(:options AS jsonb)", "now()", "now()"]
+    params = {"tid": tenant_id, "pid": profile_id, "options": _json_or_null(format_options)}
+    if publisher_properties is not _OMITTED:
+        names.append("publisher_properties")
+        values.append("CAST(:properties AS jsonb)")
+        params["properties"] = _json_or_null(publisher_properties)
     with engine.begin() as conn:
         return conn.execute(
-            text(
-                "INSERT INTO inventory_profiles (tenant_id, profile_id, name, inventory_config, format_options, "
-                "publisher_properties, created_at, updated_at) VALUES (:tid, :pid, :pid, '{}'::jsonb, "
-                "CAST(:options AS jsonb), CAST(:properties AS jsonb), now(), now()) RETURNING id"
-            ),
-            {
-                "tid": tenant_id,
-                "pid": profile_id,
-                "options": _json_or_null(format_options),
-                "properties": _json_or_null(publisher_properties),
-            },
+            text(f"INSERT INTO inventory_profiles ({', '.join(names)}) VALUES ({', '.join(values)}) RETURNING id"),
+            params,
         ).scalar_one()
 
 

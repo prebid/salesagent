@@ -95,6 +95,7 @@ class TestGAMOrderLifecycleIntegration:
                     package_id=None,
                     budget=None,
                     today=datetime.now(UTC),
+                    packages=(),
                 )
 
         # approve_order is admin-only — non-admin gets AdCPAuthorizationError.
@@ -105,6 +106,7 @@ class TestGAMOrderLifecycleIntegration:
                 package_id=None,
                 budget=None,
                 today=datetime.now(UTC),
+                packages=(),
             )
 
         # Admin user passes the admin_only_actions gate, but approve_order has
@@ -121,6 +123,7 @@ class TestGAMOrderLifecycleIntegration:
                 package_id=None,
                 budget=None,
                 today=datetime.now(UTC),
+                packages=(),
             )
 
     def test_guaranteed_line_item_classification(self):
@@ -172,6 +175,7 @@ class TestGAMOrderLifecycleIntegration:
                     package_id=None,
                     budget=None,
                     today=datetime.now(UTC),
+                    packages=(),
                 )
 
         # The guaranteed-items half is deleted, not repaired. It asserted

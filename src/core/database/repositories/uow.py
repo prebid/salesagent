@@ -28,14 +28,16 @@ from __future__ import annotations
 import logging
 import warnings
 from collections.abc import Collection, Mapping
+from contextlib import AbstractContextManager
 from datetime import UTC, datetime
 from types import TracebackType
 from typing import Any, ClassVar, Self
 
 from sqlalchemy.orm import Session
 
-from src.core.database.database_session import get_db_session
+from src.core.database.database_session import get_db_session, get_separate_session
 from src.core.database.repositories.account import AccountRepository
+from src.core.database.repositories.adapter_config import AdapterConfigRepository
 from src.core.database.repositories.audit_log import AuditLogRepository
 from src.core.database.repositories.creative import CreativeAssignmentRepository, CreativeRepository
 from src.core.database.repositories.currency_limit import CurrencyLimitRepository
@@ -113,8 +115,12 @@ class BaseUoW:
         """Deprecated setter — only used by tests that mock uow.session."""
         self._session = value
 
+    def _open_session(self) -> AbstractContextManager[Session]:
+        """The session this unit runs on: the thread's scoped session (:func:`get_db_session`)."""
+        return get_db_session()
+
     def __enter__(self) -> Self:
-        self._session_cm = get_db_session()
+        self._session_cm = self._open_session()
         self._session = self._session_cm.__enter__()
         begin_effects(self._session, preview=self._dry_run)
         self._init_repos()
@@ -253,6 +259,9 @@ class MediaBuyUoW(_OffersProducts, BaseUoW):
     assignments: CreativeAssignmentRepository | None
     currency_limits: CurrencyLimitRepository | None
     idempotency_attempts: IdempotencyAttemptRepository | None
+    # The tenant's adapter_config row, read on this unit's session so building the adapter
+    # inside the unit opens no session of its own (``build_adapter``, #2647).
+    adapter_configs: AdapterConfigRepository | None
 
     def _init_repos(self) -> None:
         assert self._session is not None
@@ -263,6 +272,7 @@ class MediaBuyUoW(_OffersProducts, BaseUoW):
         self.assignments = CreativeAssignmentRepository(self._session, self._tenant_id)
         self.currency_limits = CurrencyLimitRepository(self._session, self._tenant_id)
         self.idempotency_attempts = IdempotencyAttemptRepository(self._session, self._tenant_id)
+        self.adapter_configs = AdapterConfigRepository(self._session, self._tenant_id)
 
     def _clear_repos(self) -> None:
         self.media_buys = None
@@ -272,6 +282,7 @@ class MediaBuyUoW(_OffersProducts, BaseUoW):
         self.assignments = None
         self.currency_limits = None
         self.idempotency_attempts = None
+        self.adapter_configs = None
 
 
 class ProductUoW(_OffersProducts, BaseUoW):
@@ -570,3 +581,30 @@ class SyncJobUoW(BaseUoW):
     sync_jobs: SyncJobRepository | None
 
     _REPOSITORIES: ClassVar[Mapping[str, type]] = {"sync_jobs": SyncJobRepository}
+
+
+class AuditUoW(BaseUoW):
+    """Unit of Work for the audit trail, on a session and a transaction of its own.
+
+    An audit record is written while the request that made the call holds its own unit
+    open, and it must stay recorded when that request is refused. On the thread's scoped
+    session it would run on the open unit's session: its commit would release what that
+    unit had flushed, and its exit would close that unit's session (#1644). This unit
+    therefore opens its own session, so its commit records the audit record alone and its
+    exit leaves the caller's unit as it was. The tenant row is read here too, for the
+    notice that follows a record.
+
+    Args:
+        tenant_id: Tenant scope for all repository queries.
+    """
+
+    audit_logs: AuditLogRepository | None
+    tenant_config: TenantConfigRepository | None
+
+    _REPOSITORIES: ClassVar[Mapping[str, type]] = {
+        "audit_logs": AuditLogRepository,
+        "tenant_config": TenantConfigRepository,
+    }
+
+    def _open_session(self) -> AbstractContextManager[Session]:
+        return get_separate_session()

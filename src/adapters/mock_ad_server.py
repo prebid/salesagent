@@ -1,5 +1,6 @@
 import logging
 import random
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -18,6 +19,7 @@ from src.adapters.base import (
     BaseProductConfig,
     TargetingCapabilities,
 )
+from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
 from src.adapters.utils.pricing import resolve_package_rate
 from src.core.errors.codes import ErrorCode
 from src.core.errors.details import (
@@ -26,7 +28,6 @@ from src.core.errors.details import (
     EntityRefDetails,
     ErrorProblem,
     RejectionReasonDetails,
-    ValidationDetails,
 )
 from src.core.exceptions import (
     AdCPAdapterError,
@@ -34,7 +35,6 @@ from src.core.exceptions import (
     AdCPCreativeRejectedError,
     AdCPMediaBuyNotFoundError,
     AdCPMediaBuyRejectedError,
-    AdCPPackageNotFoundError,
     AdCPServiceUnavailableError,
     AdCPValidationError,
 )
@@ -50,6 +50,8 @@ from src.core.schemas import (
     Snapshot,
 )
 from src.core.security.webhook_egress import deliver_webhook
+from src.core.stored_package import StoredPackage, stored_package
+from src.core.traffic_carrier import AdapterCreativeAsset, CreativesByPackage
 from src.core.validation_helpers import package_field_path
 from src.services.ai.config import SellerAIConfig
 
@@ -217,6 +219,8 @@ class MockAdServer(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
+        *,
+        creatives_by_package: CreativesByPackage,
     ) -> list[ErrorProblem]:
         """Validate media buy request with GAM-like validation rules.
 
@@ -226,7 +230,9 @@ class MockAdServer(AdServerAdapter):
         (salesagent-rys3u.4): the same facts, in fields a machine can read, with the
         sentence coming from CODE_TABLE.
         """
-        problems = super().validate_media_buy_request(request, packages, start_time, end_time, package_pricing_info)
+        problems = super().validate_media_buy_request(
+            request, packages, start_time, end_time, package_pricing_info, creatives_by_package=creatives_by_package
+        )
 
         # Date validation (like GAM)
         if start_time >= end_time:
@@ -333,33 +339,19 @@ class MockAdServer(AdServerAdapter):
             if self.hitl_mode == "mixed":
                 self.log(f"   Operation overrides: {self.operation_modes}")
 
-    def _read_test_behavior(self) -> dict:
-        """Read test_behavior from AdapterConfig for this tenant.
+    @property
+    def _test_behavior(self) -> dict[str, Any]:
+        """The tenant's injected ``test_behavior``, as the adapter factory read it off ``adapter_config``.
 
-        BDD Given steps write test_behavior via AdapterConfigFactory so the
-        Docker-hosted mock adapter can pick up error/failure injection that
-        was previously only possible via in-process mock patching.
-
-        Returns the test_behavior dict, or {} if not configured.
+        BDD Given steps write it via ``AdapterConfigFactory`` so the Docker-hosted mock adapter
+        raises the faults the in-process mock raises through ``side_effect``. It arrives in
+        ``self.config`` (``_simulating_adapter_config``) rather than through a read of the
+        adapter's own: the adapter runs inside the caller's open unit of work, and the first
+        ``get_db_session()`` opened there closes that unit's session (#1644, #2647).
         """
-        if not self.tenant_id:
-            return {}
-        try:
-            from src.core.database.database_session import get_db_session
-            from src.core.database.repositories.adapter_config import AdapterConfigRepository
+        return self.config.get("test_behavior") or {}
 
-            with get_db_session() as session:
-                repo = AdapterConfigRepository(session, self.tenant_id)
-                row = repo.find_by_tenant()
-                if row and isinstance(row.config_json, dict):
-                    result = row.config_json.get("test_behavior", {})
-                    if isinstance(result, dict):
-                        return result
-        except Exception:
-            logger.debug("Failed to load test behavior from DB", exc_info=True)
-        return {}
-
-    def _raise_injected_failure(self, flag: str) -> None:
+    def _raise_injected_failure(self, flag: str, *, update_action: str | None = None) -> None:
         """Raise the DB-injected adapter failure when ``flag`` is set.
 
         BDD Given steps persist failure injection (fail_on_create /
@@ -367,6 +359,13 @@ class MockAdServer(AdServerAdapter):
         AdapterConfig test_behavior so the Docker-hosted adapter reproduces
         the same fault the in-process mock raises via side_effect. No-op when
         the flag is absent.
+
+        ``fail_on_update_action`` names ONE ``update_media_buy`` action to fail, so a
+        request can reach the ad server once and be refused on a later call: the
+        update tool calls the adapter once per package change and once for the
+        campaign pause. *update_action* is the action of the call being made. A value
+        that names no update action is refused rather than never matching, because a
+        knob that silently never fires turns a refusal scenario green for nothing.
 
         The buyer suggestion reaches error.json's top-level position on its own,
         because the raised code resolves it from CODE_TABLE. This used to pass a
@@ -379,15 +378,21 @@ class MockAdServer(AdServerAdapter):
         pin classifies terminal". ``error_details``/``error_message`` from test
         behavior are server-side diagnostics and ride ``internal_detail``.
         """
-        test_behavior = self._read_test_behavior()
-        if not test_behavior.get(flag):
-            return
         from src.core.exceptions import (
             AdCPAdapterError,
             AdCPConfigurationError,
             AdCPRateLimitError,
-            AdCPValidationError,
         )
+
+        test_behavior = self._test_behavior
+        fires = bool(test_behavior.get(flag))
+        targeted = test_behavior.get("fail_on_update_action")
+        if update_action is not None and targeted is not None:
+            if targeted not in REQUIRED_UPDATE_ACTIONS:
+                raise AdCPConfigurationError()
+            fires = fires or targeted == update_action
+        if not fires:
+            return
 
         # A throttled ad server is its own fault, not a recovery class: RATE_LIMITED shares
         # ``transient`` with SERVICE_UNAVAILABLE, so the recovery knob below cannot select it.
@@ -444,7 +449,7 @@ class MockAdServer(AdServerAdapter):
         ``_create_media_buy_immediate`` — so it cannot serve a scenario that dispatches an
         immediate create.
         """
-        test_behavior = self._read_test_behavior()
+        test_behavior = self._test_behavior
         if not test_behavior.get("reject_on_create"):
             return
         from src.core.exceptions import AdCPMediaBuyRejectedError
@@ -641,6 +646,8 @@ class MockAdServer(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
+        *,
+        creatives_by_package: CreativesByPackage | None = None,
     ) -> AdapterCreateResult:
         """Simulates the creation of a media buy using GAM-like templates.
 
@@ -770,13 +777,6 @@ class MockAdServer(AdServerAdapter):
                             capability="keywords_any_of", rejected_value=targeting.keywords_any_of
                         )
                     )
-
-        # GAM-like validation (based on real GAM behavior)
-        validation_errors = self.validate_media_buy_request(
-            request, packages, start_time, end_time, package_pricing_info
-        )
-        if validation_errors:
-            raise AdCPValidationError(details=ValidationDetails(reasons=validation_errors))
 
         # If no AI scenario or scenario accepts, proceed with normal flow
         # HITL Mode Processing
@@ -972,7 +972,7 @@ class MockAdServer(AdServerAdapter):
         return self._build_create_success(media_buy_id, packages)
 
     def add_creative_assets(
-        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
+        self, media_buy_id: str, assets: list[AdapterCreativeAsset], today: datetime
     ) -> list[AssetStatus]:
         """Simulates adding creatives with HITL support."""
 
@@ -991,7 +991,7 @@ class MockAdServer(AdServerAdapter):
         return self._add_creative_assets_immediate(media_buy_id, assets, today)
 
     def _add_creative_assets_async(
-        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
+        self, media_buy_id: str, assets: list[AdapterCreativeAsset], today: datetime
     ) -> list[AssetStatus]:
         """Add creative assets in async HITL mode."""
         self.log("🤖 Processing add_creative_assets in ASYNC mode")
@@ -1042,7 +1042,7 @@ class MockAdServer(AdServerAdapter):
         return results
 
     def _add_creative_assets_sync_with_delay(
-        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
+        self, media_buy_id: str, assets: list[AdapterCreativeAsset], today: datetime
     ) -> list[AssetStatus]:
         """Add creative assets in sync HITL mode with configurable delay."""
         self.log(f"🤖 Processing add_creative_assets in SYNC mode ({self.sync_delay_ms}ms delay)")
@@ -1093,7 +1093,7 @@ class MockAdServer(AdServerAdapter):
         return self._add_creative_assets_immediate(media_buy_id, approved_assets, today)
 
     def _add_creative_assets_immediate(
-        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
+        self, media_buy_id: str, assets: list[AdapterCreativeAsset], today: datetime
     ) -> list[AssetStatus]:
         """Add creative assets immediately (original behavior)."""
         from src.adapters.test_scenario_parser import has_test_keywords, parse_test_scenario
@@ -1440,6 +1440,8 @@ class MockAdServer(AdServerAdapter):
         package_id: str | None,
         budget: int | None,
         today: datetime,
+        *,
+        packages: Sequence[StoredPackage],
     ) -> AdapterUpdateResult:
         """Apply the update in the simulated ad server and report the package it changed.
 
@@ -1452,22 +1454,18 @@ class MockAdServer(AdServerAdapter):
         packages". This method used to return ``[]`` unconditionally — including out of
         the branch that had just rewritten a package's budget.
 
-        The mock's simulated ad server IS the stored package: ``paused`` in
-        ``package_config`` is what ``get_media_buys`` serves back (``media_buy_list.py:343``).
-        The two package-level actions report that package, and the actions that touch no
-        package report the empty array the pin permits, because for them it is true:
+        The mock's simulated ad server keeps no state of its own, and it writes nothing: the
+        update tool records the package's ``budget`` and ``paused`` inside the request's unit
+        of work once this call returns, so both roll back with a later refusal. The mock used
+        to commit ``paused`` in a session of its own, which survived the refusal of the same
+        request (#2647). It reads the package from *packages*, which the tool passes. The two
+        package-level actions report that package, and the actions that touch no package
+        report the empty array the pin permits, because for them it is true:
 
-        * ``update_package_budget`` — writes NOTHING and reports that package with the
-          budget it was called with. The update tool writes ``media_packages.budget``
-          inside the request's unit of work after this call returns, so the write rolls
-          back with a later refusal; a second write here, committed in its own session,
-          survived that rollback and could store a different value (``budget`` arrives
-          as an ``int``).
-        * ``pause_package`` / ``resume_package`` — write ``paused``, report that package.
-          Nothing recorded a package's pause state on update before this (no update path
-          under ``src/`` wrote ``package_config["paused"]``), so a pause neither stuck nor
-          could be reported; GAM, Kevel and Broadstreet all report the resulting state
-          here, and the mock was the one adapter that did not.
+        * ``update_package_budget`` — reports that package with the budget it was called
+          with and the pause state the seller recorded.
+        * ``pause_package`` / ``resume_package`` — report that package with the pause state
+          this call applies and the budget the seller recorded.
         * ``pause_media_buy`` / ``resume_media_buy`` — the tool persists the buy's own
           ``is_paused``; no package record changes, so ``[]``. The pin's own worked example
           for a campaign-level ``paused: true`` returns exactly that
@@ -1485,70 +1483,30 @@ class MockAdServer(AdServerAdapter):
             success=True,
             details={"media_buy_id": media_buy_id, "action": action, "package_id": package_id},
         )
-        import logging
-
-        from sqlalchemy.orm import attributes
-
-        from src.core.database.database_session import get_db_session
-        from src.core.database.repositories.media_buy import MediaBuyRepository
-
-        logger = logging.getLogger(__name__)
-
-        assert self.tenant_id is not None, "tenant_id required for DB operations"
-
         # Check DB-driven test_behavior (injected by BDD Given steps for E2E)
-        self._raise_injected_failure("fail_on_update")
+        self._raise_injected_failure("fail_on_update", update_action=action)
 
-        # One place decides which package this action reports and whether the mock writes
-        # its pause state, so the write and the report below cannot disagree.
-        paused_value: bool | None = None
+        reported_budget: float | None
         if action == "update_package_budget" and package_id and budget is not None:
-            changed_package_id = package_id
+            changed = stored_package(packages, media_buy_id, package_id)
+            paused, reported_budget = changed.paused, float(budget)
         elif action in ("pause_package", "resume_package") and package_id:
-            changed_package_id = package_id
-            paused_value = action == "pause_package"
+            changed = stored_package(packages, media_buy_id, package_id)
+            paused, reported_budget = action == "pause_package", changed.budget
         else:
             return AdapterUpdateResult(media_buy_id=media_buy_id, affected_packages=[])
 
-        with get_db_session() as session:
-            repo = MediaBuyRepository(session, self.tenant_id)
-            media_package = repo.get_package(media_buy_id, changed_package_id)
-            if media_package is None:
-                # A refusal, not a logged warning followed by a successful-looking result:
-                # the three real adapters all raise AdCPPackageNotFoundError for this exact
-                # condition (google_ad_manager.py:1289, kevel.py:461,
-                # broadstreet/adapter.py:620), the tool's budget path already pre-checks it
-                # with get_package_or_raise and raises the same code, and reporting success
-                # for a package that does not exist is the quiet failure CLAUDE.md bans.
-                raise AdCPPackageNotFoundError(
-                    details=EntityRefDetails(package_id=changed_package_id, media_buy_id=media_buy_id)
+        return AdapterUpdateResult(
+            media_buy_id=media_buy_id,
+            affected_packages=[
+                AffectedPackage(
+                    package_id=changed.package_id,
+                    paused=paused,
+                    budget=reported_budget,
+                    product_id=changed.product_id,
                 )
-
-            if paused_value is not None:
-                media_package.package_config["paused"] = paused_value
-                # Flag the JSON field as modified so SQLAlchemy persists it
-                attributes.flag_modified(media_package, "package_config")
-                session.commit()
-                logger.info(f"[MockAdapter] Set package {changed_package_id} paused to {paused_value}")
-
-            return AdapterUpdateResult(
-                media_buy_id=media_buy_id,
-                affected_packages=[
-                    AffectedPackage(
-                        package_id=changed_package_id,
-                        # Read off the record, never a plausible default: a budget update
-                        # reports the pause state the package really has, and a pause
-                        # reports the value this call stored.
-                        paused=bool(media_package.package_config.get("paused", False)),
-                        # A budget update reports the budget it was called with (the tool
-                        # writes the record); a pause reports the stored one.
-                        budget=float(budget)
-                        if budget is not None
-                        else (float(media_package.budget) if media_package.budget is not None else None),
-                        product_id=media_package.package_config.get("product_id"),
-                    )
-                ],
-            )
+            ],
+        )
 
     def validate_product_config(self, config: dict[str, Any]) -> tuple[bool, str | None]:
         """Validate mock adapter configuration."""

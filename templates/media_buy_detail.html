@@ -211,17 +211,13 @@
                     <span class="value">{{ item.package.package_config.name }}</span>
                 </div>
                 {% endif %}
-                {% if item.package.package_config.get('budget') %}
+                {# The budget column is the seller's record of the package's budget, which
+                   update_media_buy writes and get_media_buys serves; package_config keeps
+                   the budget the package was created with. #}
+                {% if item.package.budget is not none %}
                 <div class="detail-row">
                     <span class="label">Budget:</span>
-                    <span class="value">
-                        {# Handle both Budget object (dict) and legacy float #}
-                        {% if item.package.package_config.budget is mapping %}
-                            ${{ "%.2f"|format(item.package.package_config.budget.total) }}
-                        {% else %}
-                            ${{ "%.2f"|format(item.package.package_config.budget) }}
-                        {% endif %}
-                    </span>
+                    <span class="value">${{ "%.2f"|format(item.package.budget) }}</span>
                 </div>
                 {% endif %}
                 {% if item.product %}

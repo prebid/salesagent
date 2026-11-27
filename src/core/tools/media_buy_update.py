@@ -25,6 +25,7 @@ from src.core.tools.media_buy_list import _compute_status
 
 if TYPE_CHECKING:
     from src.core.database.models import MediaBuy
+    from src.core.format_resolver import FormatContract
 
 
 from src.core.exceptions import (
@@ -40,6 +41,7 @@ from src.core.exceptions import (
     AdCPNotCancellableError,
     AdCPValidationError,
 )
+from src.core.format_resolver import seller_format_catalogue
 from src.core.format_satisfaction import FormatSatisfaction, creative_refusal, creative_satisfies
 from src.core.webhook_validator import reject_unsafe_webhook_registration_url, webhook_url_for_log
 from src.core.webhooks.registration import accept_push_notification_config
@@ -60,6 +62,7 @@ from src.core.database.models import (
     Product as DBProduct,
 )
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
+from src.core.database.repositories.media_buy import stored_package_of
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.errors.details import (
     AdapterFailureDetails,
@@ -71,7 +74,7 @@ from src.core.errors.details import (
     InvalidStateDetails,
     ValidationDetails,
 )
-from src.core.helpers.adapter_helpers import get_adapter
+from src.core.helpers.adapter_helpers import build_adapter
 from src.core.resolved_identity import AccountIdentity, ResolvedIdentity
 from src.core.schemas import (
     AdCPPackageUpdate,
@@ -84,6 +87,7 @@ from src.core.schemas import (
     UpdateMediaBuySubmitted,
     UpdateMediaBuySuccess,
 )
+from src.core.stored_package import StoredPackage
 from src.core.tools.creatives import sync_creatives
 from src.core.tools.creatives._assignments import assignments_by_package, require_package_covered
 from src.core.tools.financial_validation import (
@@ -272,7 +276,7 @@ def _affected_package(
     # ``_package_product``), so by here a package they touched has one.
     stored = uow.media_buys.get_package(media_buy_id, package_id)
     config = (stored.package_config or {}) if stored is not None else {}
-    stored_budget = float(stored.budget) if stored is not None and stored.budget is not None else None
+    projected = stored_package_of(stored) if stored is not None else None
     stored_bid_price = float(stored.bid_price) if stored is not None and stored.bid_price is not None else None
     assert uow.assignments is not None
     assignments = assignments_by_package(uow.assignments.get_by_media_buy_and_package(media_buy_id, package_id)).get(
@@ -280,13 +284,13 @@ def _affected_package(
     )
     return AffectedPackage(
         package_id=package_id,
-        paused=bool(config.get("paused", False)) if changes.paused is None else changes.paused,
-        budget=stored_budget if changes.budget is None else changes.budget,
+        paused=(projected.paused if projected is not None else False) if changes.paused is None else changes.paused,
+        budget=(projected.budget if projected is not None else None) if changes.budget is None else changes.budget,
         bid_price=stored_bid_price,
         # Re-read rather than carried: ``update_package_fields`` writes the column inside
         # THIS session, so the row already answers with what this update applied.
         pacing=stored.pacing if stored is not None else None,
-        product_id=config.get("product_id"),
+        product_id=projected.product_id if projected is not None else None,
         pricing_option_id=config.get("pricing_option_id"),
         creative_assignments=assignments,
         # Written by create_media_buy from the validated request and by the catalogs branch
@@ -541,21 +545,40 @@ def _patched_overlay(package: MediaPackage | None, overlay: TargetingInput) -> T
     return TargetingInput.model_validate(kept | {name: getattr(overlay, name) for name in overlay.model_fields_set})
 
 
-def _package_product(uow: "MediaBuyUoW", media_buy_id: str, package_id: str, pkg_index: int) -> "DBProduct | None":
-    """The product a held package was bought on, or None when its config names none.
+def _stored_packages(uow: "MediaBuyUoW", media_buy_id: str) -> list[StoredPackage]:
+    """Every package of the buy as this request's unit of work holds it, for the adapter.
+
+    Read before each adapter call rather than once, so a call sees the writes the request
+    made before it. The adapter takes them instead of reading the rows itself: a session of
+    its own, opened inside this unit, would close the unit's session (#1644, #2647).
+    """
+    assert uow.media_buys is not None
+    return uow.media_buys.get_stored_packages(media_buy_id)
+
+
+def _package_product(
+    uow: "MediaBuyUoW", media_buy_id: str, package_id: str, pkg_index: int
+) -> "tuple[DBProduct | None, FormatContract | None]":
+    """The product a held package was bought on and the contract it was booked on; (None, None) when it names none.
 
     One lookup for the three branches that replace a package's creatives: each grades the
-    creatives against this product and then asks it whether the package is still covered.
+    creatives against this contract and then asks whether the package is still covered. The
+    contract is the package's own (``format_resolver.booked_format_contract``), never the
+    product as it is now: tracker-execution-contracts.mdx (v3.2.7) "Package assignment ...
+    revalidate[s] the selected manifest against the immutable package snapshot".
     A package the buy does not hold is refused PACKAGE_NOT_FOUND naming the entry's
     ``package_id``: each branch writes assignment rows for it, and an assignment's package
     is a foreign key to the buy's own packages.
     """
+    from src.core.format_resolver import booked_format_contract
+
     assert uow.media_buys is not None and uow.products is not None
     package = uow.media_buys.get_package_or_raise(
         media_buy_id, package_id, field=package_field_path("package_id", pkg_index)
     )
     product_id = package.package_config.get("product_id") if package.package_config else None
-    return uow.products.get_by_id(product_id) if product_id else None
+    product = uow.products.get_by_id(product_id) if product_id else None
+    return product, booked_format_contract(package) if product is not None else None
 
 
 def _validate_creatives_for_assignment(
@@ -564,6 +587,7 @@ def _validate_creatives_for_assignment(
     uow: "MediaBuyUoW",
     principal_id: str,
     product: "DBProduct | None",
+    contract: "FormatContract | None",
     field: str,
     product_name: str | None = None,
 ) -> None:
@@ -600,6 +624,8 @@ def _validate_creatives_for_assignment(
         principal_id: The requesting buyer's principal (from ResolvedIdentity).
         product: The package's product ORM record (or ``None`` if the package
             has no resolvable product, in which case the format check is skipped).
+        contract: The format contract the package was booked on, set whenever
+            ``product`` is (``_package_product``).
         field: JSON pointer to the array parameter the ids came from — the two
             callers pass different ones (``packages[i].creative_ids`` vs
             ``packages[i].creative_assignments``), and the spec asks the pointer
@@ -667,8 +693,10 @@ def _validate_creatives_for_assignment(
     # against ``product_format_identities`` alone, which could only see the DEPRECATED arm:
     # a product declaring ``format_options[]`` imposed no restriction here at all, and a
     # creative carrying no legacy assertion was REFUSED here while the create path skipped
-    # it. ``creative_satisfies`` reads both arms off the product and decides which lane applies.
-    contract = product.format_contract
+    # it. ``creative_satisfies`` reads both arms off the contract and decides which lane applies.
+    # The contract is the one the package was booked on (``_package_product``), not the product
+    # as it is now.
+    assert contract is not None, "a package on a product has the contract it was booked on"
     first_refusal: FormatSatisfaction | None = None
     incompatible: list[str] = []
     for creative in creatives_list:
@@ -924,19 +952,48 @@ def _update_media_buy_impl(
     _refuse_unsupported_actions(req)
 
     # ── Workflow-step bookkeeping fence ──────────────────────────────────
-    # Hoist ``ctx_manager`` and ``step`` out of the try below so the
-    # AdCPSalesAgentError / Exception handlers at the function end can mark the step
-    # as ``failed``. Without this, a raise from any validation site
-    # (property_targeting, geo, budget, …) leaves the workflow step
-    # orphaned in ``in_progress`` forever, which suppresses the
-    # buyer-facing ``status="failed"`` push notification fired from
-    # ``context_manager.update_workflow_step``, which fires it through
-    # ``_send_push_notifications``.
-    # Mirrors ``media_buy_create``'s own workflow-step construction exactly.
+    # ``ctx_manager`` and ``step`` are bound before the fence below, which marks the step
+    # ``failed`` when any raise escapes it, so a refused request never leaves its step
+    # ``in_progress``. A refused update sends no push notification: its step has no object
+    # mapping, so ``_send_push_notifications`` skips it, as webhooks.mdx (v3.2.7) asks of an
+    # inline terminal response: "sellers MUST NOT synthesize a task webhook by inventing a
+    # `task_id` or replaying the inline result to `push_notification_config.url`".
     ctx_manager = get_context_manager()
     step = None
 
     with ctx_manager.audit_workflow_step_failure_ctx(lambda: step):
+        # The context, the workflow step and the format catalogue come before the unit opens,
+        # because each one ends an open unit's transaction. ``get_or_create_context`` and
+        # ``create_workflow_step`` commit and close the ContextManager's cached session, which
+        # can be the unit's own session (#2682). The catalogue is read through
+        # ``get_db_session()``, whose exit closes the unit's session (#1644). Inside the unit,
+        # either one released the revision lock ``_refuse_stale_revision`` takes before any
+        # write it guards, and the catalogue read rolled back the writes flushed before it
+        # (#2647). A request the unit refuses therefore leaves a workflow step, which the
+        # fence above marks failed.
+        persistent_ctx = ctx_manager.get_or_create_context(
+            tenant_id=tenant.tenant_id,
+            principal_id=principal_id,
+            context_id=None,
+            is_async=True,
+        )
+        # In the async path this is only None when a buyer-supplied context_id does not
+        # resolve: a not-found condition, not a transient adapter outage.
+        if persistent_ctx is None:
+            raise AdCPContextNotFoundError(details=EntityRefDetails(context_id=None), field="context_id")
+        step = ctx_manager.create_workflow_step(
+            context_id=persistent_ctx.context_id,
+            step_type="tool_call",
+            owner="principal",
+            status="in_progress",
+            tool_name="update_media_buy",
+            request_data=req,
+        )
+        # Only a package's inline creatives read it (the joined sync_creatives below).
+        inline_creative_catalogue = (
+            seller_format_catalogue(tenant.tenant_id) if any(pkg.creatives for pkg in req.packages or ()) else None
+        )
+
         # Single UoW for entire update operation — one session, one transaction
         with MediaBuyUoW(tenant.tenant_id) as uow:
             assert uow.media_buys is not None
@@ -978,7 +1035,7 @@ def _update_media_buy_impl(
                 )
 
             # After the terminal refusal, which keeps its own answer for a re-cancel, and before
-            # the workflow step and any adapter call.
+            # any adapter call.
             _refuse_cancellation(req, _current_status)
 
             _requested = _requested_actions(req)
@@ -994,38 +1051,16 @@ def _update_media_buy_impl(
                         field="media_buy_id",
                     )
 
-            # Create or get persistent context and workflow step
-            # (ctx_manager + step were hoisted before the try block so the
-            # AdCPSalesAgentError / Exception handlers can mark the step as failed)
-            ctx_id = None
-            persistent_ctx = None
-
-            persistent_ctx = ctx_manager.get_or_create_context(
-                tenant_id=tenant.tenant_id,
-                principal_id=principal_id,  # Now guaranteed to be str
-                context_id=ctx_id,
-                is_async=True,
-            )
-
-            # Verify persistent_ctx is not None. In the async path this is
-            # only None when a buyer-supplied context_id does not resolve —
-            # a not-found condition, not a transient adapter outage.
-            if persistent_ctx is None:
-                raise AdCPContextNotFoundError(details=EntityRefDetails(context_id=ctx_id), field="context_id")
-
-            # Create workflow step for this tool call
-            step = ctx_manager.create_workflow_step(
-                context_id=persistent_ctx.context_id,  # Now safe to access
-                step_type="tool_call",
-                owner="principal",
-                status="in_progress",
-                tool_name="update_media_buy",
-                request_data=req,
-            )
-
             principal = identity.principal
 
-            adapter = get_adapter(identity)
+            # The config row is read on this unit's session. get_adapter would read it in a
+            # session of its own, and the first get_db_session() inside an open unit closes the
+            # unit's session: the revision lock _refuse_stale_revision took would go with it,
+            # before any write it guards (#1644, #2647). The step's result is still recorded
+            # inside the unit, after the last write: on the thread whose cached ContextManager
+            # session is the unit's session, that record commits and closes it (#2682).
+            assert uow.adapter_configs is not None
+            adapter = build_adapter(identity, uow.adapter_configs.find_by_tenant())
             today = date.today()
 
             # spec (core/product.json `property_targeting_allowed`): reject property_list targeting
@@ -1222,12 +1257,13 @@ def _update_media_buy_impl(
 
                         # Validate creatives (existence, status, format) via the
                         # shared helper so the rules match the creative_assignments path.
-                        product = _package_product(uow, actual_media_buy_id, pkg_update.package_id, pkg_index)
+                        product, contract = _package_product(uow, actual_media_buy_id, pkg_update.package_id, pkg_index)
                         _validate_creatives_for_assignment(
                             pkg_update.creative_ids,
                             uow=uow,
                             principal_id=principal_id,
                             product=product,
+                            contract=contract,
                             field=package_field_path("creative_ids", pkg_index),
                         )
 
@@ -1270,6 +1306,7 @@ def _update_media_buy_impl(
                             actual_media_buy_id,
                             pkg_update.package_id,
                             product,
+                            contract,
                             field=package_field_path("creative_ids", pkg_index),
                         )
 
@@ -1285,7 +1322,9 @@ def _update_media_buy_impl(
                         # The package first, in THIS buy: the sync below finds a package by its
                         # id across the tenant, and would assign the creatives to another buy's.
                         inline_media_buy_id = uow.media_buys.get_by_id_or_raise(req.media_buy_id).media_buy_id
-                        inline_product = _package_product(uow, inline_media_buy_id, pkg_update.package_id, pkg_index)
+                        inline_product, inline_contract = _package_product(
+                            uow, inline_media_buy_id, pkg_update.package_id, pkg_index
+                        )
 
                         # Sync creatives (upload/update)
                         # Built through the SAME builder the three transports use, rather
@@ -1330,6 +1369,7 @@ def _update_media_buy_impl(
                             principal_id=principal_id,
                             tenant=tenant,
                             uow=uow.join(CreativeUoW),
+                            catalogue=inline_creative_catalogue,
                         )
 
                         # Check for sync errors
@@ -1387,6 +1427,7 @@ def _update_media_buy_impl(
                             inline_media_buy_id,
                             pkg_update.package_id,
                             inline_product,
+                            inline_contract,
                             field=package_field_path("creatives", pkg_index),
                         )
 
@@ -1408,12 +1449,15 @@ def _update_media_buy_impl(
                         # building any assignment rows — otherwise a not-found creative_id
                         # would surface as a composite-FK IntegrityError. Same rules as the
                         # creative_ids path via the shared helper.
-                        ca_product = _package_product(uow, actual_media_buy_id, pkg_update.package_id, pkg_index)
+                        ca_product, ca_contract = _package_product(
+                            uow, actual_media_buy_id, pkg_update.package_id, pkg_index
+                        )
                         _validate_creatives_for_assignment(
                             [ca.creative_id for ca in pkg_update.creative_assignments],
                             uow=uow,
                             principal_id=principal_id,
                             product=ca_product,
+                            contract=ca_contract,
                             field=package_field_path("creative_assignments", pkg_index),
                         )
 
@@ -1513,6 +1557,7 @@ def _update_media_buy_impl(
                             actual_media_buy_id,
                             pkg_update.package_id,
                             ca_product,
+                            ca_contract,
                             field=package_field_path("creative_assignments", pkg_index),
                         )
 
@@ -1609,6 +1654,17 @@ def _update_media_buy_impl(
                             package_id=pkg_update.package_id,
                             budget=None,
                             today=utc_flight_start(today),
+                            packages=_stored_packages(uow, req.media_buy_id),
+                        )
+
+                        # The seller's record of the pause, written here inside this unit of
+                        # work once the ad server has accepted it, as the budget below is:
+                        # get_media_buys serves package_config["paused"], and the write rolls
+                        # back with a later refusal of the same request. The mock used to
+                        # commit it in a session of its own, which survived that refusal, and
+                        # GAM, Kevel and Triton recorded no pause at all (#2647).
+                        uow.media_buys.set_package_config_keys(
+                            req.media_buy_id, pkg_update.package_id, paused=pkg_update.paused
                         )
 
                         # This branch modified a package, so the response says which one
@@ -1634,22 +1690,19 @@ def _update_media_buy_impl(
                             package_id=pkg_update.package_id,
                             budget=int(budget_amount),
                             today=utc_flight_start(today),
+                            packages=_stored_packages(uow, req.media_buy_id),
                         )
 
                         # The seller's budget column is written HERE, inside this request's
                         # unit of work, once the ad server has accepted the change, and
-                        # nowhere else: no adapter writes media_packages.budget. It was left
-                        # to each adapter, and they disagreed: Kevel wrote nothing, GAM and
-                        # Broadstreet wrote only package_config["budget"] while get_media_buys
-                        # reads the column, and the mock wrote both in its own session. Pinned
+                        # nowhere else: no adapter writes a package's record (#2647). Pinned
                         # update_media_buy.mdx (v3.2.7) makes the request "one atomic mutation"
                         # in which no package field from a rejected update may change, and
                         # "every mutating update increments revision": update_package_fields
                         # writes the column and moves the revision, and both roll back with
-                        # the UoW. The UoW owns only that: the adapter call above has already
-                        # reached the ad server when a later branch refuses, and GAM and
-                        # Broadstreet still commit package_config["budget"] in their own
-                        # sessions.
+                        # the UoW. What the UoW cannot roll back is the ad server itself: the
+                        # adapter call above has already reached it when a later branch
+                        # refuses.
                         uow.media_buys.update_package_fields(
                             req.media_buy_id,
                             pkg_update.package_id,
@@ -1725,15 +1778,12 @@ def _update_media_buy_impl(
                     if pkg_update.catalogs is not None:
                         if not pkg_update.package_id:
                             raise AdCPValidationError(field=package_field_path("package_id", pkg_index))
-                        catalog_pkg = uow.media_buys.get_package_or_raise(req.media_buy_id, pkg_update.package_id)
                         # Through the repository's own writer rather than a mutate +
-                        # flag_modified pair: it replaces the document, bumps the buy's
+                        # flag_modified pair: it replaces the catalogs key, bumps the buy's
                         # revision (the buyer's optimistic-concurrency token, which an
                         # applied update owes them) and flushes, in one call.
-                        uow.media_buys.update_package_config(
-                            req.media_buy_id,
-                            pkg_update.package_id,
-                            {**(catalog_pkg.package_config or {}), "catalogs": pkg_update.catalogs},
+                        uow.media_buys.set_package_config_keys(
+                            req.media_buy_id, pkg_update.package_id, catalogs=pkg_update.catalogs
                         )
                         _package_changes(changes_by_package, pkg_update.package_id)
 
@@ -1757,6 +1807,7 @@ def _update_media_buy_impl(
                     package_id=None,
                     budget=None,
                     today=utc_flight_start(today),
+                    packages=_stored_packages(uow, req.media_buy_id),
                 )
                 # A package the adapter paused with the buy goes through the one assembly
                 # point below like any other modified package, so it is reported as a full

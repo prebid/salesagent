@@ -209,8 +209,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     # TenantManagementConfigRepository, the caller's User row through TenantConfigRepository
     ("src/admin/utils/helpers.py", "get_tenant_config_from_db"),
     # ── Core ──
-    ("src/core/audit_logger.py", "log_operation"),
-    ("src/core/audit_logger.py", "log_security_violation"),
+    # audit_logger fixed — every read and write it makes goes through AuditUoW.
     # config_loader's tenant lookups fixed — every lookup it still has delegates to
     # TenantLookupRepository, which owns every cross-tenant query on ``tenants`` (#2263).
     # ensure_default_tenant_exists still CREATES the row; only its lookup moved.

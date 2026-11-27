@@ -103,7 +103,7 @@ def _run(req):
         patch("src.core.tools.media_buy_update.MediaBuyUoW", return_value=_uow(_row())),
         patch("src.core.tools.media_buy_update.get_audit_logger", return_value=MagicMock()),
         patch("src.core.tools.media_buy_update._verify_principal"),
-        patch("src.core.tools.media_buy_update.get_adapter", return_value=_adapter()),
+        patch("src.core.tools.media_buy_update.build_adapter", return_value=_adapter()),
         patch("src.core.tools.media_buy_update._applied_instant", return_value=APPLIED_AT),
     ):
         return _update_media_buy_impl(req=req, identity=_account_identity())

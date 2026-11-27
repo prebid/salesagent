@@ -14,6 +14,7 @@ Entity Mapping:
 """
 
 import logging
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -73,6 +74,8 @@ from src.core.schemas import (
     Principal,
     ReportingPeriod,
 )
+from src.core.stored_package import StoredPackage, stored_package
+from src.core.traffic_carrier import AdapterCreativeAsset, CreativesByPackage
 
 logger = logging.getLogger(__name__)
 
@@ -346,6 +349,8 @@ class BroadstreetAdapter(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
+        *,
+        creatives_by_package: CreativesByPackage | None = None,
     ) -> AdapterCreateResult:
         """Create a new media buy (campaign) in Broadstreet.
 
@@ -462,7 +467,7 @@ class BroadstreetAdapter(AdServerAdapter):
         )
 
     def add_creative_assets(
-        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
+        self, media_buy_id: str, assets: list[AdapterCreativeAsset], today: datetime
     ) -> list[AssetStatus]:
         """Add creative assets to a media buy.
 
@@ -480,8 +485,11 @@ class BroadstreetAdapter(AdServerAdapter):
 
         results: list[AssetStatus] = []
 
-        # Use advertisement manager to create ads
-        ad_infos = self.advertisement_manager.create_advertisements(media_buy_id, assets)
+        # Use advertisement manager to create ads.
+        # FIXME(#2416): the manager reads keys the core never sets (format, html, media_url), so
+        # it reads each asset as a plain dict until it reads the carrier.
+        unread_assets: list[dict[str, Any]] = [dict(asset) for asset in assets]
+        ad_infos = self.advertisement_manager.create_advertisements(media_buy_id, unread_assets)
 
         for info in ad_infos:
             if info.status == "failed":
@@ -589,13 +597,25 @@ class BroadstreetAdapter(AdServerAdapter):
         )
 
     def update_media_buy(
-        self, media_buy_id: str, action: str, package_id: str | None, budget: int | None, today: datetime
+        self,
+        media_buy_id: str,
+        action: str,
+        package_id: str | None,
+        budget: int | None,
+        today: datetime,
+        *,
+        packages: Sequence[StoredPackage],
     ) -> AdapterUpdateResult:
         """Update a media buy with a specific action.
 
-        Reconstructs state from database (not in-memory caches) so operations
-        work across requests. For pause/resume, toggles the active flag on
-        Broadstreet advertisements via their API.
+        For pause/resume, toggles the active flag on the Broadstreet advertisements the
+        stored packages carry, via the Broadstreet API. The advertisements come from
+        *packages*, which the update tool reads inside its unit of work: this opens no
+        session (#2647).
+
+        Broadstreet has no budget or impressions API, so those two actions change nothing
+        at the ad server and write nothing here: the update tool records the package's
+        budget column itself, and it never sends ``update_package_impressions``.
 
         Args:
             media_buy_id: Media buy (campaign) ID
@@ -603,20 +623,14 @@ class BroadstreetAdapter(AdServerAdapter):
             package_id: Package ID (for package-level actions)
             budget: New budget or impressions (for budget/impression updates)
             today: Current date
+            packages: Every stored package of the buy
 
         Returns:
             Update response
         """
-        from sqlalchemy.orm import attributes
-
-        from src.core.database.database_session import get_db_session
-        from src.core.database.repositories.media_buy import MediaBuyRepository
-
         self.log(f"Broadstreet.update_media_buy for '{media_buy_id}' with action '{action}'")
 
         require_supported_update_action(action)
-
-        assert self.tenant_id is not None, "tenant_id required for DB operations"
 
         is_pause = action in ("pause_media_buy", "pause_package")
         is_resume = action in ("resume_media_buy", "resume_package")
@@ -625,45 +639,20 @@ class BroadstreetAdapter(AdServerAdapter):
         if action in ("pause_media_buy", "resume_media_buy"):
             action_verb = "Pausing" if is_pause else "Resuming"
 
-            with get_db_session() as session:
-                repo = MediaBuyRepository(session, self.tenant_id)
-                db_packages = repo.get_packages(media_buy_id)
+            if not packages:
+                raise AdCPPackageNotFoundError(details=EntityRefDetails(media_buy_id=media_buy_id))
 
-                if not db_packages:
-                    raise AdCPPackageNotFoundError(details=EntityRefDetails(media_buy_id=media_buy_id))
+            # Deduplicate (ads are shared across packages)
+            unique_ad_ids = list({ad_id for pkg in packages for ad_id in pkg.broadstreet_advertisement_ids})
 
-                # Collect all advertisement IDs across packages
-                all_ad_ids: list[str] = []
-                for pkg in db_packages:
-                    ad_ids = pkg.package_config.get("broadstreet_advertisement_ids", [])
-                    all_ad_ids.extend(ad_ids)
+            if unique_ad_ids:
+                self.log(f"{action_verb} {len(unique_ad_ids)} advertisements")
+                self._toggle_or_refuse(media_buy_id, unique_ad_ids, active=is_resume)
+            else:
+                self.log(f"[yellow]No Broadstreet advertisement IDs found for {media_buy_id}[/yellow]")
 
-                # Deduplicate (ads are shared across packages)
-                unique_ad_ids = list(set(all_ad_ids))
-
-                if unique_ad_ids:
-                    self.log(f"{action_verb} {len(unique_ad_ids)} advertisements")
-                    failed = self._toggle_advertisements(unique_ad_ids, active=is_resume)
-                    if failed:
-                        raise AdCPBulkUpdateError(
-                            details=AdapterFailureDetails(
-                                media_buy_id=media_buy_id,
-                                problems=[
-                                    ErrorProblem(
-                                        code=AppErrorCode.AD_SERVER_UPDATE_FAILED,
-                                        subject_type="creative",
-                                        subject_id=str(ad_id),
-                                    )
-                                    for ad_id in failed
-                                ],
-                            ),
-                        )
-                else:
-                    self.log(f"[yellow]No Broadstreet advertisement IDs found for {media_buy_id}[/yellow]")
-
-                affected = [AffectedPackage(package_id=pkg.package_id, paused=is_pause) for pkg in db_packages]
-
-                return AdapterUpdateResult(media_buy_id=media_buy_id, affected_packages=affected)
+            affected = [AffectedPackage(package_id=pkg.package_id, paused=is_pause) for pkg in packages]
+            return AdapterUpdateResult(media_buy_id=media_buy_id, affected_packages=affected)
 
         # Package-level pause/resume
         if action in ("pause_package", "resume_package"):
@@ -671,94 +660,52 @@ class BroadstreetAdapter(AdServerAdapter):
                 raise AdCPValidationError(details=ValidationDetails(rejected_value=action), field="package_id")
 
             action_verb = "Pausing" if is_pause else "Resuming"
+            ad_ids = list(stored_package(packages, media_buy_id, package_id).broadstreet_advertisement_ids)
 
-            with get_db_session() as session:
-                repo = MediaBuyRepository(session, self.tenant_id)
-                db_package = repo.get_package(media_buy_id, package_id)
+            if ad_ids:
+                self.log(f"{action_verb} {len(ad_ids)} advertisements for package {package_id}")
+                self._toggle_or_refuse(media_buy_id, ad_ids, active=is_resume)
+            else:
+                self.log(f"[yellow]No Broadstreet advertisement IDs for package {package_id}[/yellow]")
 
-                if not db_package:
-                    raise AdCPPackageNotFoundError(
-                        details=EntityRefDetails(package_id=package_id, media_buy_id=media_buy_id)
-                    )
+            return AdapterUpdateResult(
+                media_buy_id=media_buy_id,
+                affected_packages=[AffectedPackage(package_id=package_id, paused=is_pause)],
+            )
 
-                ad_ids = db_package.package_config.get("broadstreet_advertisement_ids", [])
-
-                if ad_ids:
-                    self.log(f"{action_verb} {len(ad_ids)} advertisements for package {package_id}")
-                    failed = self._toggle_advertisements(ad_ids, active=is_resume)
-                    if failed:
-                        raise AdCPBulkUpdateError(
-                            details=AdapterFailureDetails(
-                                media_buy_id=media_buy_id,
-                                problems=[
-                                    ErrorProblem(
-                                        code=AppErrorCode.AD_SERVER_UPDATE_FAILED,
-                                        subject_type="creative",
-                                        subject_id=str(ad_id),
-                                    )
-                                    for ad_id in failed
-                                ],
-                            ),
-                        )
-                else:
-                    self.log(f"[yellow]No Broadstreet advertisement IDs for package {package_id}[/yellow]")
-
-                return AdapterUpdateResult(
-                    media_buy_id=media_buy_id,
-                    affected_packages=[AffectedPackage(package_id=package_id, paused=is_pause)],
-                )
-
-        # Budget update: persist to database (Broadstreet has no budget API)
-        if action == "update_package_budget":
+        # Budget and impressions: Broadstreet has no API for either, so nothing changes at
+        # the ad server. The package must exist; the update tool records the budget.
+        if action in ("update_package_budget", "update_package_impressions"):
             if not package_id:
                 raise AdCPValidationError(field="package_id")
             if budget is None:
                 raise AdCPValidationError(field="budget")
-
-            with get_db_session() as session:
-                repo = MediaBuyRepository(session, self.tenant_id)
-                db_package = repo.get_package(media_buy_id, package_id)
-
-                if not db_package:
-                    raise AdCPPackageNotFoundError(details=EntityRefDetails(package_id=package_id))
-
-                db_package.package_config["budget"] = float(budget)
-                attributes.flag_modified(db_package, "package_config")
-                session.commit()
-                self.log(f"Updated budget for package {package_id} to ${budget / 100:.2f}")
-
+            changed = stored_package(packages, media_buy_id, package_id)
             return AdapterUpdateResult(
                 media_buy_id=media_buy_id,
-                affected_packages=[AffectedPackage(package_id=package_id, paused=False)],
-            )
-        # Impressions update: persist to database (Broadstreet has no impressions API)
-        if action == "update_package_impressions":
-            if not package_id:
-                raise AdCPValidationError(field="package_id")
-            if budget is None:
-                raise AdCPValidationError(
-                    field="budget",
-                )
-
-            with get_db_session() as session:
-                repo = MediaBuyRepository(session, self.tenant_id)
-                db_package = repo.get_package(media_buy_id, package_id)
-
-                if not db_package:
-                    raise AdCPPackageNotFoundError(details=EntityRefDetails(package_id=package_id))
-
-                db_package.package_config["impressions"] = budget
-                attributes.flag_modified(db_package, "package_config")
-                session.commit()
-                self.log(f"Updated impressions for package {package_id} to {budget:,}")
-
-            return AdapterUpdateResult(
-                media_buy_id=media_buy_id,
-                affected_packages=[AffectedPackage(package_id=package_id, paused=False)],
+                affected_packages=[AffectedPackage(package_id=package_id, paused=changed.paused)],
             )
 
         # Should not reach here - all actions are handled above
         return AdapterUpdateResult(media_buy_id=media_buy_id, affected_packages=[])
+
+    def _toggle_or_refuse(self, media_buy_id: str, ad_ids: list[str], *, active: bool) -> None:
+        """Toggle *ad_ids*, and refuse with every advertisement Broadstreet did not change."""
+        failed = self._toggle_advertisements(ad_ids, active=active)
+        if failed:
+            raise AdCPBulkUpdateError(
+                details=AdapterFailureDetails(
+                    media_buy_id=media_buy_id,
+                    problems=[
+                        ErrorProblem(
+                            code=AppErrorCode.AD_SERVER_UPDATE_FAILED,
+                            subject_type="creative",
+                            subject_id=str(ad_id),
+                        )
+                        for ad_id in failed
+                    ],
+                ),
+            )
 
     async def get_available_inventory(self) -> dict[str, Any]:
         """Fetch available inventory (zones) from Broadstreet.

@@ -7,12 +7,14 @@ for Google Ad Manager orders.
 
 import logging
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 from googleads import ad_manager
 
+from src.adapters.gam.creative_plan import placed_sizes, placeholder_sizes
 from src.adapters.gam.pricing_compatibility import PricingCompatibility
 from src.adapters.gam.utils.error_handler import map_gam_exception
 from src.adapters.gam.utils.formatters import format_datetime_for_gam
@@ -26,6 +28,8 @@ from src.core.exceptions import (
     AdCPSalesAgentError,
 )
 from src.core.helpers.pricing_helpers import impressions_for_budget, unit_price
+from src.core.schemas import Format, MediaPackage
+from src.core.traffic_carrier import CreativesByPackage, CreativeToTraffic
 from src.core.utils.frequency_cap import suppress_cooldown_minutes
 
 logger = logging.getLogger(__name__)
@@ -74,6 +78,234 @@ def _line_item_flight(start_time: datetime, end_time: datetime, time_zone: str) 
     else:
         flight["startDateTime"] = format_datetime_for_gam(start_time, time_zone)
     return flight
+
+
+def _legacy_format_placeholder(
+    format_id_obj: LibraryFormatId,
+    package: MediaPackage,
+    impl_config: dict[str, Any],
+    tenant_id: str | None,
+    log: Callable[[str], None],
+) -> dict[str, Any]:
+    """The GAM placeholder for one of a package's deprecated ``format_ids``, read off the format it resolves to."""
+    from src.core.format_resolver import format_display as spell_format
+    from src.core.format_resolver import format_id_identity, get_format
+
+    # Validate format types against product supported types
+    supported_format_types = impl_config.get("supported_format_types", ["display", "video", "native"])
+
+    # format_id_obj is a FormatId object with agent_url and id fields
+    # Extract the ID string and agent_url for format lookup
+    format_id_str = format_id_obj.id
+    agent_url = format_id_obj.agent_url
+
+    # How this format is spelled in every refusal below, asked of the ONE
+    # renderer rather than rebuilt here. The local f-string this replaces
+    # joined the RAW agent_url, so a canonical URL with an empty path --
+    # which the canonicalization leaves ending in "/" -- rendered
+    # "https://x.org//display_300x250" in the capability refusals at the
+    # bottom of this loop, spelled differently from the identity the request
+    # was actually compared on. ``format_display``'s docstring exists to make
+    # one format spell the same way in every refusal; shadowing its name with
+    # a different rule in this file defeated that (audit P3).
+    format_display = spell_format(format_id_identity(format_id_obj))
+
+    try:
+        # Pass product_id (not package_id) to enable format_overrides lookup
+        product_id_for_format = package.product_id if hasattr(package, "product_id") else package.package_id
+        format_obj = get_format(
+            format_id_str, agent_url=agent_url, tenant_id=tenant_id, product_id=product_id_for_format
+        )
+    except (AdCPNotFoundError, AdCPAdapterError):
+        # Already typed by get_format. Re-raise rather than flatten:
+        # wrapping it in a builtin cost the buyer the very code that
+        # says whether the format is unknown or the agent is down.
+        log(f"[red]Error: format lookup failed for '{format_display}'[/red]")
+        raise
+
+    _refuse_legacy_format_type(
+        _legacy_format_type(format_obj), supported_format_types, str(format_display), package.package_id, log
+    )
+
+    # Check if format has GAM-specific config
+    platform_cfg = format_obj.platform_config or {}
+    gam_cfg = platform_cfg.get("gam", {})
+    placeholder_cfg = gam_cfg.get("creative_placeholder", {})
+
+    # Check for GAM custom creative template (1x1 placeholder)
+    if "creative_template_id" in placeholder_cfg:
+        log(f"  Custom template placeholder: 1x1 with template_id={placeholder_cfg['creative_template_id']}")
+        # Use 1x1 placeholder with custom template
+        return {
+            "expectedCreativeCount": 1,
+            "size": {"width": 1, "height": 1, "isAspectRatio": False},
+            "creativeTemplateId": placeholder_cfg["creative_template_id"],
+        }
+
+    width, height, creative_size_type = _legacy_format_dimensions(
+        format_obj, format_id_obj, format_id_str, placeholder_cfg, log
+    )
+    if not (width and height):
+        # For formats without dimensions
+        error_msg = (
+            f"Format '{format_display}' has no width/height configuration for GAM. "
+            f"For parameterized formats like 'display_image', specify width/height in the FormatId "
+            f"(e.g., {{'id': 'display_image', 'width': 300, 'height': 250}}), "
+            f"or add 'platform_config.gam.creative_placeholder' to the format definition."
+        )
+        log(f"[red]Error: {error_msg}[/red]")
+        raise AdCPConfigurationError()
+
+    # Log video-specific info
+    if "video" in format_id_str.lower():
+        aspect_ratio = format_obj.requirements.get("aspect_ratio", "unknown") if format_obj.requirements else "unknown"
+        log(f"  Video placeholder: {width}x{height} ({aspect_ratio} aspect ratio)")
+    return {
+        "expectedCreativeCount": 1,
+        "size": {"width": width, "height": height},
+        "creativeSizeType": creative_size_type,
+    }
+
+
+def _legacy_format_type(format_obj: Format) -> str:
+    """The creative family of a resolved deprecated format: the pinned SDK removed Format.type, so read off its id."""
+    fid_str = format_obj.format_id.id if hasattr(format_obj.format_id, "id") else str(format_obj.format_id)
+    if "video" in fid_str:
+        return "video"
+    if "native" in fid_str:
+        return "native"
+    if "audio" in fid_str:
+        return "audio"
+    return "display"
+
+
+def _refuse_legacy_format_type(
+    format_type_str: str,
+    supported_format_types: list[str],
+    format_display: str,
+    package_id: str | None,
+    log: Callable[[str], None],
+) -> None:
+    """Refuse a deprecated format whose family the product does not support, or audio, which GAM cannot place."""
+    if format_type_str not in supported_format_types:
+        error_msg = (
+            f"Format '{format_display}' (type: {format_type_str}) is not supported by product {package_id}. "
+            f"Product supports: {', '.join(supported_format_types)}. "
+            f"Configure 'supported_format_types' in product implementation_config if this should be supported."
+        )
+        log(f"[red]Error: {error_msg}[/red]")
+        raise AdCPCapabilityNotSupportedError(
+            details=CapabilityRefusalDetails(
+                capability="format",
+                rejected_value=format_display,
+                accepted_values=sorted(supported_format_types),
+            )
+        )
+
+    # Audio formats are not supported in GAM (no creative placeholders)
+    if format_type_str == "audio":
+        error_msg = (
+            f"Audio format '{format_display}' is not supported. "
+            f"GAM does not support standalone audio line items. "
+            f"Audio can only be used as companion creatives to video ads. "
+            f"To deliver audio ads, use a different ad server (e.g., Triton, Kevel) that supports audio."
+        )
+        log(f"[red]Error: {error_msg}[/red]")
+        raise AdCPCapabilityNotSupportedError(
+            details=CapabilityRefusalDetails(capability="format", rejected_value=format_display)
+        )
+
+
+def _legacy_format_dimensions(
+    format_obj: Format,
+    format_id_obj: LibraryFormatId,
+    format_id_str: str,
+    placeholder_cfg: dict[str, Any],
+    log: Callable[[str], None],
+) -> tuple[Any, Any, str]:
+    """(width, height, creativeSizeType) of a deprecated format; a missing dimension is falsy."""
+    # Use platform config if available, otherwise fall back to requirements
+    if placeholder_cfg:
+        width = placeholder_cfg.get("width")
+        height = placeholder_cfg.get("height")
+        creative_size_type = placeholder_cfg.get("creative_size_type", "PIXEL")
+    else:
+        # Fallback to requirements (legacy formats)
+        requirements = format_obj.requirements or {}
+        width = requirements.get("width")
+        height = requirements.get("height")
+        # Infer creative size type from format_id name since Format.type was removed in the pinned SDK
+        creative_size_type = "NATIVE" if "native" in format_id_str.lower() else "PIXEL"
+
+    # Check FormatId parameters (parameterized formats)
+    # The buyer can specify width/height directly in the FormatId object
+    if not (width and height):
+        width, height = _format_id_dimensions(format_id_obj, log, default=(width, height))
+
+    # Last resort: Try to extract dimensions from format_id (e.g., "display_970x250_image")
+    if not (width and height):
+        import re
+
+        match = re.search(r"(\d+)x(\d+)", format_id_str)
+        if match:
+            width = int(match.group(1))
+            height = int(match.group(2))
+            log(f"  [yellow]Extracted dimensions from format ID: {width}x{height}[/yellow]")
+    return width, height, creative_size_type
+
+
+def _format_id_dimensions(
+    format_id_obj: LibraryFormatId, log: Callable[[str], None], *, default: tuple[Any, Any]
+) -> tuple[Any, Any]:
+    """The width and height a parameterized FormatId states, or *default* when it states not both."""
+    # Handle both FormatId objects and dicts (from database JSONB)
+    if hasattr(format_id_obj, "width") and hasattr(format_id_obj, "height"):
+        if format_id_obj.width and format_id_obj.height:
+            log(
+                f"  [blue]Using dimensions from FormatId parameters: {format_id_obj.width}x{format_id_obj.height}[/blue]"
+            )
+            return format_id_obj.width, format_id_obj.height
+    elif isinstance(format_id_obj, dict):
+        # Fallback for dict format (shouldn't happen after fix, but defensive)
+        dict_width = format_id_obj.get("width")
+        dict_height = format_id_obj.get("height")
+        if dict_width and dict_height:
+            log(f"  [blue]Using dimensions from FormatId dict: {int(dict_width)}x{int(dict_height)}[/blue]")
+            return int(dict_width), int(dict_height)
+    return default
+
+
+def _fit_to_creatives(
+    creative_placeholders: list[dict[str, Any]],
+    creatives: Sequence[CreativeToTraffic],
+    log: Callable[[str], None],
+) -> list[dict[str, Any]]:
+    """The placeholders narrowed to the sizes the package's creatives are planned at; built from theirs when there are none.
+
+    The creatives are the carriers core read for the package, and the matching is the plan's
+    own (``creative_plan.placed_sizes``), so the line item takes the sizes its creatives are
+    created at and no other: one placeholder per size, which keeps GAM from waiting on a
+    creative for a size none of them serves. A 1x1 placeholder is a size like any other. When
+    no placeholder is one a creative is planned at, they are kept as they are, and the plan
+    refuses each creative against them, naming why.
+    """
+    if not creatives:
+        return creative_placeholders
+    if not creative_placeholders:
+        sizes = dict.fromkeys(size for ctt in creatives for size in ctt.sizes)
+        built = [_gam_placeholder({"width": size.width, "height": size.height}) for size in sizes]
+        log(f"  [blue]Created {len(built)} placeholders from the package's creative sizes (no format_ids)[/blue]")
+        return built
+    placed = placed_sizes(creatives, placeholder_sizes(creative_placeholders))
+    filtered = [placeholder for placeholder in creative_placeholders if placeholder_sizes([placeholder])[0] in placed]
+    if not filtered:
+        return creative_placeholders
+    if len(filtered) < len(creative_placeholders):
+        log(
+            f"  [blue]Filtered placeholders from {len(creative_placeholders)} to {len(filtered)} "
+            f"by the package's creative sizes[/blue]"
+        )
+    return filtered
 
 
 class GAMOrdersManager:
@@ -415,6 +647,89 @@ class GAMOrdersManager:
         statement_builder.WithBindVariable("orderId", order_id)
         return statement_builder.ToStatement()
 
+    def line_item_placeholders(
+        self,
+        package: MediaPackage,
+        impl_config: dict[str, Any],
+        creatives: Sequence[CreativeToTraffic],
+        *,
+        tenant_id: str | None,
+        log: Callable[[str], None],
+    ) -> list[dict[str, Any]]:
+        """The ``creativePlaceholders`` the line item for *package* is created with.
+
+        The one computation: ``create_line_items`` writes them, and
+        ``GoogleAdManager.validate_media_buy_request`` plans each creative against them
+        before anything is written, so the size a creative is refused or created at is the
+        size its line item takes. *creatives* are the package's creatives as core read them
+        for it, which narrow the placeholders (:func:`_fit_to_creatives`); nothing here reads
+        a stored creative.
+        """
+        # --- Creative placeholders, canonical arm first ----------------------------
+        #
+        # THE PACKAGE'S OWN RECORDED CONTRACT ANSWERS BEFORE THE DEPRECATED ARM.
+        # ``core/package.json`` calls ``formats_to_provide`` the package's "immutable
+        # canonical creative contracts" and says "the live Product is never substituted
+        # for the package snapshot", and each snapshot states its slot in ``params``,
+        # where width and height are first-class. So this needs no format lookup, no
+        # type inference from an id substring, and no regex: it reads what the seller
+        # selected when the request was graded.
+        #
+        # WHY THE PRECEDENCE MATTERS RATHER THAN BEING TIDIER. A canonical-only
+        # declaration -- one asserting no ``v1_format_ref`` -- cannot be expressed in
+        # ``package.format_ids`` at all, so such a package used to arrive here with an
+        # empty legacy arm and fall through to ``impl_config["creative_placeholders"]``
+        # at the bottom of this block: the PRODUCT's seeded slot, trafficked for a
+        # package whose own declaration may state a different size. That is the one
+        # substitution the snapshot exists to prevent.
+        #
+        # ``declared_gam_slots`` is the same reader that seeds that config, so a
+        # declaration reaching GAM through a package and the same declaration reaching
+        # it through a seeded product cannot disagree (CLAUDE.md § DRY). A declaration
+        # stating only a RANGE, or one of the four kinds GAM has no creative family for,
+        # yields no slot -- and then the two branches below answer exactly as before.
+        from src.services.gam_product_config_service import declared_gam_slots
+
+        # The operator's gate runs on BOTH arms, which is the reason the kind -> family
+        # table exists rather than a bare native check. Letting the canonical arm answer
+        # ahead of the deprecated one would otherwise BYPASS this gate for a package
+        # carrying both: the check below used to be reachable only inside the
+        # ``package.format_ids`` branch, so a dual-armed package would have stopped being
+        # gated the moment the snapshot answered first. The gate reads the same way on
+        # either arm; what differs is the input, and on this arm it is the kind the seller
+        # recorded rather than a substring of a format's name.
+        self._refuse_unsupported_declared_families(package, impl_config, log)
+
+        creative_placeholders: list[dict[str, Any]] = [
+            _gam_placeholder(slot) for slot in declared_gam_slots(package.formats_to_provide or ())
+        ]
+        if creative_placeholders:
+            log(
+                f"  [blue]{len(creative_placeholders)} placeholder(s) from the package's "
+                f"recorded format declarations[/blue]"
+            )
+
+        if not creative_placeholders and package.format_ids:
+            creative_placeholders = [
+                _legacy_format_placeholder(format_id_obj, package, impl_config, tenant_id, log)
+                for format_id_obj in package.format_ids
+            ]
+
+        # Fall back to the PRODUCT's seeded slots only when the package declared none
+        # of its own on either arm. ``gam_product_config_service`` seeds them in the
+        # same vocabulary ``_gam_placeholder`` translates, which is why this is now one
+        # call rather than a second spelling of the same three keys.
+        if not creative_placeholders and impl_config.get("creative_placeholders"):
+            creative_placeholders.extend(_gam_placeholder(slot) for slot in impl_config["creative_placeholders"])
+
+        if creatives:
+            creative_placeholders = _fit_to_creatives(creative_placeholders, creatives, log)
+        # No creatives in package - placeholders are optional
+        # Allow empty array if no format_ids and no creatives
+        elif not creative_placeholders:
+            log("  [yellow]No creatives and no format_ids - line item will have no creative placeholders[/yellow]")
+        return creative_placeholders
+
     @timeout(seconds=300)  # 5 minutes timeout for batch line item creation
     def create_line_items(
         self,
@@ -430,6 +745,7 @@ class GAMOrdersManager:
         package_pricing_info: dict[str, dict] | None = None,
         package_targeting: dict[str, dict] | None = None,
         line_item_name_template: str | None = None,
+        creatives_by_package: CreativesByPackage | None = None,
     ) -> list[str]:
         """Create line items for an order.
 
@@ -448,6 +764,9 @@ class GAMOrdersManager:
             package_targeting: Pre-built GAM targeting dicts per package
                 Maps package_id → GAM targeting dict (built by adapter from targeting_overlay
                 and the product's custom_targeting_keys)
+            creatives_by_package: Each package's creatives as core read them for it, the
+                carriers the pre-booking check planned: they narrow each line item's
+                placeholders exactly as they did there (``line_item_placeholders``).
 
         Returns:
             List of created line item IDs
@@ -530,309 +849,13 @@ class GAMOrdersManager:
                 log(f"[red]Error: {error_msg}[/red]")
                 raise AdCPConfigurationError()
 
-            # --- Creative placeholders, canonical arm first ----------------------------
-            #
-            # THE PACKAGE'S OWN RECORDED CONTRACT ANSWERS BEFORE THE DEPRECATED ARM.
-            # ``core/package.json`` calls ``formats_to_provide`` the package's "immutable
-            # canonical creative contracts" and says "the live Product is never substituted
-            # for the package snapshot", and each snapshot states its slot in ``params``,
-            # where width and height are first-class. So this needs no format lookup, no
-            # type inference from an id substring, and no regex: it reads what the seller
-            # selected when the request was graded.
-            #
-            # WHY THE PRECEDENCE MATTERS RATHER THAN BEING TIDIER. A canonical-only
-            # declaration -- one asserting no ``v1_format_ref`` -- cannot be expressed in
-            # ``package.format_ids`` at all, so such a package used to arrive here with an
-            # empty legacy arm and fall through to ``impl_config["creative_placeholders"]``
-            # at the bottom of this block: the PRODUCT's seeded slot, trafficked for a
-            # package whose own declaration may state a different size. That is the one
-            # substitution the snapshot exists to prevent.
-            #
-            # ``declared_gam_slots`` is the same reader that seeds that config, so a
-            # declaration reaching GAM through a package and the same declaration reaching
-            # it through a seeded product cannot disagree (CLAUDE.md § DRY). A declaration
-            # stating only a RANGE, or one of the four kinds GAM has no creative family for,
-            # yields no slot -- and then the two branches below answer exactly as before.
-            from src.services.gam_product_config_service import declared_gam_slots
-
-            # The operator's gate runs on BOTH arms, which is the reason the kind -> family
-            # table exists rather than a bare native check. Letting the canonical arm answer
-            # ahead of the deprecated one would otherwise BYPASS this gate for a package
-            # carrying both: the check below used to be reachable only inside the
-            # ``package.format_ids`` branch, so a dual-armed package would have stopped being
-            # gated the moment the snapshot answered first. The gate reads the same way on
-            # either arm; what differs is the input, and on this arm it is the kind the seller
-            # recorded rather than a substring of a format's name.
-            self._refuse_unsupported_declared_families(package, impl_config, log)
-
-            creative_placeholders: list[dict[str, Any]] = [
-                _gam_placeholder(slot) for slot in declared_gam_slots(package.formats_to_provide or ())
-            ]
-            if creative_placeholders:
-                log(
-                    f"  [blue]{len(creative_placeholders)} placeholder(s) from the package's "
-                    f"recorded format declarations[/blue]"
-                )
-
-            if not creative_placeholders and package.format_ids:
-                from src.core.format_resolver import format_display as spell_format
-                from src.core.format_resolver import format_id_identity, get_format
-
-                # Validate format types against product supported types
-                supported_format_types = impl_config.get("supported_format_types", ["display", "video", "native"])
-
-                for format_id_obj in package.format_ids:
-                    # format_id_obj is a FormatId object with agent_url and id fields
-                    # Extract the ID string and agent_url for format lookup
-                    format_id_str = format_id_obj.id
-                    agent_url = format_id_obj.agent_url
-
-                    # How this format is spelled in every refusal below, asked of the ONE
-                    # renderer rather than rebuilt here. The local f-string this replaces
-                    # joined the RAW agent_url, so a canonical URL with an empty path --
-                    # which the canonicalization leaves ending in "/" -- rendered
-                    # "https://x.org//display_300x250" in the capability refusals at the
-                    # bottom of this loop, spelled differently from the identity the request
-                    # was actually compared on. ``format_display``'s docstring exists to make
-                    # one format spell the same way in every refusal; shadowing its name with
-                    # a different rule in this file defeated that (audit P3).
-                    format_display = spell_format(format_id_identity(format_id_obj))
-
-                    try:
-                        # Pass product_id (not package_id) to enable format_overrides lookup
-                        product_id_for_format = (
-                            package.product_id if hasattr(package, "product_id") else package.package_id
-                        )
-                        format_obj = get_format(
-                            format_id_str, agent_url=agent_url, tenant_id=tenant_id, product_id=product_id_for_format
-                        )
-                    except (AdCPNotFoundError, AdCPAdapterError):
-                        # Already typed by get_format. Re-raise rather than flatten:
-                        # wrapping it in a builtin cost the buyer the very code that
-                        # says whether the format is unknown or the agent is down.
-                        log(f"[red]Error: format lookup failed for '{format_display}'[/red]")
-                        raise
-
-                    # Check if format type is supported by product
-                    # the pinned SDK: Format.type removed. Infer from format_id string.
-                    fid_str = (
-                        format_obj.format_id.id if hasattr(format_obj.format_id, "id") else str(format_obj.format_id)
-                    )
-                    if "video" in fid_str:
-                        format_type_str = "video"
-                    elif "native" in fid_str:
-                        format_type_str = "native"
-                    elif "audio" in fid_str:
-                        format_type_str = "audio"
-                    else:
-                        format_type_str = "display"
-                    if format_type_str not in supported_format_types:
-                        error_msg = (
-                            f"Format '{format_display}' (type: {format_type_str}) is not supported by product {package.package_id}. "
-                            f"Product supports: {', '.join(supported_format_types)}. "
-                            f"Configure 'supported_format_types' in product implementation_config if this should be supported."
-                        )
-                        log(f"[red]Error: {error_msg}[/red]")
-                        raise AdCPCapabilityNotSupportedError(
-                            details=CapabilityRefusalDetails(
-                                capability="format",
-                                rejected_value=str(format_display),
-                                accepted_values=sorted(supported_format_types),
-                            )
-                        )
-
-                    # Audio formats are not supported in GAM (no creative placeholders)
-                    if format_type_str == "audio":
-                        error_msg = (
-                            f"Audio format '{format_display}' is not supported. "
-                            f"GAM does not support standalone audio line items. "
-                            f"Audio can only be used as companion creatives to video ads. "
-                            f"To deliver audio ads, use a different ad server (e.g., Triton, Kevel) that supports audio."
-                        )
-                        log(f"[red]Error: {error_msg}[/red]")
-                        raise AdCPCapabilityNotSupportedError(
-                            details=CapabilityRefusalDetails(capability="format", rejected_value=str(format_display))
-                        )
-
-                    # Check if format has GAM-specific config
-                    platform_cfg = format_obj.platform_config or {}
-                    gam_cfg = platform_cfg.get("gam", {})
-                    placeholder_cfg = gam_cfg.get("creative_placeholder", {})
-
-                    # Build creative placeholder
-                    placeholder: dict[str, Any] = {
-                        "expectedCreativeCount": 1,
-                    }
-
-                    # Check for GAM custom creative template (1x1 placeholder)
-                    if "creative_template_id" in placeholder_cfg:
-                        # Use 1x1 placeholder with custom template
-                        placeholder["size"] = {
-                            "width": 1,
-                            "height": 1,
-                            "isAspectRatio": False,
-                        }
-                        placeholder["creativeTemplateId"] = placeholder_cfg["creative_template_id"]
-                        log(
-                            f"  Custom template placeholder: 1x1 with template_id={placeholder_cfg['creative_template_id']}"
-                        )
-
-                    else:
-                        # Use platform config if available, otherwise fall back to requirements
-                        if placeholder_cfg:
-                            width = placeholder_cfg.get("width")
-                            height = placeholder_cfg.get("height")
-                            creative_size_type = placeholder_cfg.get("creative_size_type", "PIXEL")
-                        else:
-                            # Fallback to requirements (legacy formats)
-                            requirements = format_obj.requirements or {}
-                            width = requirements.get("width")
-                            height = requirements.get("height")
-                            # Infer creative size type from format_id name since Format.type was removed in the pinned SDK
-                            creative_size_type = "NATIVE" if "native" in format_id_str.lower() else "PIXEL"
-
-                        # Check FormatId parameters (parameterized formats)
-                        # The buyer can specify width/height directly in the FormatId object
-                        if not (width and height):
-                            # Handle both FormatId objects and dicts (from database JSONB)
-                            if hasattr(format_id_obj, "width") and hasattr(format_id_obj, "height"):
-                                if format_id_obj.width and format_id_obj.height:
-                                    width = format_id_obj.width
-                                    height = format_id_obj.height
-                                    log(f"  [blue]Using dimensions from FormatId parameters: {width}x{height}[/blue]")
-                            elif isinstance(format_id_obj, dict):
-                                # Fallback for dict format (shouldn't happen after fix, but defensive)
-                                dict_width = format_id_obj.get("width")
-                                dict_height = format_id_obj.get("height")
-                                if dict_width and dict_height:
-                                    width = int(dict_width)
-                                    height = int(dict_height)
-                                    log(f"  [blue]Using dimensions from FormatId dict: {width}x{height}[/blue]")
-
-                        # Last resort: Try to extract dimensions from format_id (e.g., "display_970x250_image")
-                        if not (width and height):
-                            import re
-
-                            match = re.search(r"(\d+)x(\d+)", format_id_str)
-                            if match:
-                                width = int(match.group(1))
-                                height = int(match.group(2))
-                                log(f"  [yellow]Extracted dimensions from format ID: {width}x{height}[/yellow]")
-
-                        if width and height:
-                            placeholder["size"] = {"width": width, "height": height}
-                            placeholder["creativeSizeType"] = creative_size_type
-
-                            # Log video-specific info
-                            if "video" in format_id_str.lower():
-                                aspect_ratio = (
-                                    format_obj.requirements.get("aspect_ratio", "unknown")
-                                    if format_obj.requirements
-                                    else "unknown"
-                                )
-                                log(f"  Video placeholder: {width}x{height} ({aspect_ratio} aspect ratio)")
-                        else:
-                            # For formats without dimensions
-                            error_msg = (
-                                f"Format '{format_display}' has no width/height configuration for GAM. "
-                                f"For parameterized formats like 'display_image', specify width/height in the FormatId "
-                                f"(e.g., {{'id': 'display_image', 'width': 300, 'height': 250}}), "
-                                f"or add 'platform_config.gam.creative_placeholder' to the format definition."
-                            )
-                            log(f"[red]Error: {error_msg}[/red]")
-                            raise AdCPConfigurationError()
-
-                    creative_placeholders.append(placeholder)
-
-            # Fall back to the PRODUCT's seeded slots only when the package declared none
-            # of its own on either arm. ``gam_product_config_service`` seeds them in the
-            # same vocabulary ``_gam_placeholder`` translates, which is why this is now one
-            # call rather than a second spelling of the same three keys.
-            if not creative_placeholders and impl_config.get("creative_placeholders"):
-                creative_placeholders.extend(_gam_placeholder(slot) for slot in impl_config["creative_placeholders"])
-
-            # If package has creatives, filter placeholders to match actual creative sizes
-            # This prevents "X out of Y expected" issues and ensures one placeholder per unique size
-            if package.creative_ids:
-                from src.core.database.database_session import get_db_session
-
-                # Collect unique creative sizes from uploaded creatives
-                creative_sizes = set()
-
-                # Get creative sizes from database if using creative_ids
-                if package.creative_ids:
-                    with get_db_session() as session:
-                        from src.core.database.repositories.creative import CreativeRepository
-
-                        # No tenant, no rows: the raw query this replaced compared
-                        # tenant_id against NULL and matched nothing.
-                        db_creatives = (
-                            CreativeRepository(session, tenant_id).admin_get_by_ids(list(package.creative_ids))
-                            if tenant_id
-                            else []
-                        )
-
-                        for db_creative in db_creatives:
-                            creative_data = db_creative.data or {}
-                            # Try to get dimensions from creative data
-                            width = creative_data.get("width")
-                            height = creative_data.get("height")
-
-                            # Also check in assets (AdCP v2.4 structure)
-                            if not (width and height) and creative_data.get("assets"):
-                                for _asset_id, asset in creative_data["assets"].items():
-                                    if isinstance(asset, dict):
-                                        width = asset.get("width")
-                                        height = asset.get("height")
-                                        if width and height:
-                                            break
-
-                            if width and height:
-                                creative_sizes.add((int(width), int(height)))
-
-                # Build or filter placeholders based on actual creative sizes
-                if creative_sizes:
-                    if not creative_placeholders:
-                        # No format_ids specified - create placeholders directly from creative sizes
-                        # One placeholder per unique size
-                        for width, height in sorted(creative_sizes):
-                            creative_placeholders.append(
-                                {
-                                    "size": {"width": width, "height": height},
-                                    "expectedCreativeCount": 1,
-                                    "creativeSizeType": "PIXEL",
-                                }
-                            )
-                        log(
-                            f"  [blue]Created {len(creative_placeholders)} placeholders from actual creative sizes (no format_ids)[/blue]"
-                        )
-                    else:
-                        # Filter existing placeholders to only include sizes that have creatives
-                        filtered_placeholders = []
-                        for placeholder in creative_placeholders:
-                            placeholder_width = placeholder.get("size", {}).get("width")
-                            placeholder_height = placeholder.get("size", {}).get("height")
-
-                            # 1x1 placeholders are special (templates, native) - always include
-                            if placeholder_width == 1 and placeholder_height == 1:
-                                filtered_placeholders.append(placeholder)
-                            # Include if we have creatives of this size
-                            elif (placeholder_width, placeholder_height) in creative_sizes:
-                                filtered_placeholders.append(placeholder)
-
-                        if filtered_placeholders:
-                            original_count = len(creative_placeholders)
-                            creative_placeholders = filtered_placeholders
-                            if len(creative_placeholders) < original_count:
-                                log(
-                                    f"  [blue]Filtered placeholders from {original_count} to {len(creative_placeholders)} based on actual creative sizes[/blue]"
-                                )
-                        # If filtering removed all placeholders, keep originals (fail-safe)
-                        # This shouldn't happen if creatives have valid dimensions
-            # No creatives in package - placeholders are optional
-            # Allow empty array if no format_ids and no creatives
-            elif not creative_placeholders:
-                log("  [yellow]No creatives and no format_ids - line item will have no creative placeholders[/yellow]")
+            creative_placeholders = self.line_item_placeholders(
+                package,
+                impl_config,
+                (creatives_by_package or {}).get(package.package_id, ()),
+                tenant_id=tenant_id,
+                log=log,
+            )
 
             # Apply line item naming template
             from src.adapters.gam.utils.constants import GAM_NAME_LIMITS

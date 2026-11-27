@@ -1,8 +1,8 @@
 """Unit tests for Broadstreet adapter."""
 
-from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -11,8 +11,10 @@ from adcp.types.canonical_creative import CanonicalFormatKind
 from src.adapters.base import AdapterCreateRequest, AdapterUpdateResult
 from src.adapters.broadstreet import BroadstreetAdapter
 from src.adapters.broadstreet.config_schema import BROADSTREET_TEMPLATES
+from src.core.database.repositories.media_buy import stored_package_of
 from src.core.exceptions import AdCPConfigurationError
 from src.core.schemas import FormatId, MediaPackage
+from src.core.stored_package import StoredPackage
 from tests.helpers.broadstreet_client import stub_broadstreet_client, zone_payload
 
 
@@ -277,30 +279,10 @@ class TestBroadstreetAdapterCreatives:
         client.create_placement.assert_not_called()
 
 
-def _make_mock_db_package(package_id="pkg_1", media_buy_id="bs_12345", ad_ids=None):
-    """Create a mock DB MediaPackage with package_config."""
-    pkg = MagicMock()
-    pkg.package_id = package_id
-    pkg.media_buy_id = media_buy_id
-    pkg.package_config = {"broadstreet_advertisement_ids": ad_ids or ["ad_100", "ad_200"]}
-    return pkg
-
-
-@contextmanager
-def _mock_db_session(packages):
-    """Context manager that mocks get_db_session returning given packages."""
-    mock_session = MagicMock()
-    mock_scalars = MagicMock()
-    mock_scalars.all.return_value = packages
-    mock_scalars.first.return_value = packages[0] if packages else None
-    mock_session.scalars.return_value = mock_scalars
-
-    @contextmanager
-    def fake_get_db_session():
-        yield mock_session
-
-    with patch("src.core.database.database_session.get_db_session", fake_get_db_session):
-        yield mock_session
+def _stored_package(package_id="pkg_1", ad_ids=None) -> StoredPackage:
+    """A stored package as the update tool passes it (``packages=``), read by the repository's projection."""
+    config = {"broadstreet_advertisement_ids": ad_ids or ["ad_100", "ad_200"]}
+    return stored_package_of(SimpleNamespace(package_id=package_id, package_config=config, budget=None))
 
 
 class TestBroadstreetAdapterUpdates:
@@ -316,16 +298,16 @@ class TestBroadstreetAdapterUpdates:
         """
         adapter, client = _adapter_over_vendor(mock_principal, mock_config)
 
-        db_pkgs = [_make_mock_db_package(ad_ids=["ad_100", "ad_200"])]
+        packages = [_stored_package(ad_ids=["ad_100", "ad_200"])]
 
-        with _mock_db_session(db_pkgs):
-            result = adapter.update_media_buy(
-                media_buy_id="bs_12345",
-                action="pause_media_buy",
-                package_id=None,
-                budget=None,
-                today=datetime.now(UTC),
-            )
+        result = adapter.update_media_buy(
+            media_buy_id="bs_12345",
+            action="pause_media_buy",
+            package_id=None,
+            budget=None,
+            today=datetime.now(UTC),
+            packages=packages,
+        )
 
         assert isinstance(result, AdapterUpdateResult)
         assert len(result.affected_packages) == 1
@@ -339,16 +321,16 @@ class TestBroadstreetAdapterUpdates:
         """A resume reactivates the same advertisements — ``active: 1`` on each."""
         adapter, client = _adapter_over_vendor(mock_principal, mock_config)
 
-        db_pkgs = [_make_mock_db_package(ad_ids=["ad_100", "ad_200"])]
+        packages = [_stored_package(ad_ids=["ad_100", "ad_200"])]
 
-        with _mock_db_session(db_pkgs):
-            result = adapter.update_media_buy(
-                media_buy_id="bs_12345",
-                action="resume_media_buy",
-                package_id=None,
-                budget=None,
-                today=datetime.now(UTC),
-            )
+        result = adapter.update_media_buy(
+            media_buy_id="bs_12345",
+            action="resume_media_buy",
+            package_id=None,
+            budget=None,
+            today=datetime.now(UTC),
+            packages=packages,
+        )
 
         assert isinstance(result, AdapterUpdateResult)
         assert len(result.affected_packages) == 1
@@ -368,31 +350,31 @@ class TestBroadstreetAdapterUpdates:
 
         from src.core.exceptions import AdCPPackageNotFoundError
 
-        with _mock_db_session([]):
-            with pytest.raises(AdCPPackageNotFoundError) as exc_info:
-                adapter.update_media_buy(
-                    media_buy_id="bs_12345",
-                    action="pause_media_buy",
-                    package_id=None,
-                    budget=None,
-                    today=datetime.now(UTC),
-                )
+        with pytest.raises(AdCPPackageNotFoundError) as exc_info:
+            adapter.update_media_buy(
+                media_buy_id="bs_12345",
+                action="pause_media_buy",
+                package_id=None,
+                budget=None,
+                today=datetime.now(UTC),
+                packages=(),
+            )
         assert exc_info.value.error_code == "PACKAGE_NOT_FOUND"
 
     def test_update_media_buy_pause_package(self, mock_principal, mock_config):
         """A package pause deactivates only that package's advertisements."""
         adapter, client = _adapter_over_vendor(mock_principal, mock_config)
 
-        db_pkgs = [_make_mock_db_package(package_id="pkg_1", ad_ids=["ad_100"])]
+        packages = [_stored_package(package_id="pkg_1", ad_ids=["ad_100"])]
 
-        with _mock_db_session(db_pkgs):
-            result = adapter.update_media_buy(
-                media_buy_id="bs_12345",
-                action="pause_package",
-                package_id="pkg_1",
-                budget=None,
-                today=datetime.now(UTC),
-            )
+        result = adapter.update_media_buy(
+            media_buy_id="bs_12345",
+            action="pause_package",
+            package_id="pkg_1",
+            budget=None,
+            today=datetime.now(UTC),
+            packages=packages,
+        )
 
         assert isinstance(result, AdapterUpdateResult)
         assert result.affected_packages[0].package_id == "pkg_1"
@@ -418,6 +400,7 @@ class TestBroadstreetAdapterUpdates:
                 package_id=None,
                 budget=None,
                 today=datetime.now(UTC),
+                packages=(),
             )
         assert exc_info.value.error_code == "UNSUPPORTED_FEATURE"
 
@@ -473,17 +456,17 @@ class TestBroadstreetAdapterBulkUpdateRaiseSites:
         from src.core.exceptions import AdCPBulkUpdateError
 
         adapter = self._build_live_adapter(mock_principal, mock_config)
-        db_pkgs = [_make_mock_db_package(ad_ids=["ad_100"])]
+        packages = [_stored_package(ad_ids=["ad_100"])]
 
-        with _mock_db_session(db_pkgs):
-            with pytest.raises(AdCPBulkUpdateError) as exc_info:
-                adapter.update_media_buy(
-                    media_buy_id="bs_12345",
-                    action="pause_media_buy",
-                    package_id=None,
-                    budget=None,
-                    today=datetime.now(UTC),
-                )
+        with pytest.raises(AdCPBulkUpdateError) as exc_info:
+            adapter.update_media_buy(
+                media_buy_id="bs_12345",
+                action="pause_media_buy",
+                package_id=None,
+                budget=None,
+                today=datetime.now(UTC),
+                packages=packages,
+            )
 
         assert exc_info.value.error_code == "PARTIAL_FAILURE"
 
@@ -493,17 +476,17 @@ class TestBroadstreetAdapterBulkUpdateRaiseSites:
         from src.core.exceptions import AdCPBulkUpdateError
 
         adapter = self._build_live_adapter(mock_principal, mock_config)
-        db_pkgs = [_make_mock_db_package(package_id="pkg_1", ad_ids=["ad_100"])]
+        packages = [_stored_package(package_id="pkg_1", ad_ids=["ad_100"])]
 
-        with _mock_db_session(db_pkgs):
-            with pytest.raises(AdCPBulkUpdateError) as exc_info:
-                adapter.update_media_buy(
-                    media_buy_id="bs_12345",
-                    action="pause_package",
-                    package_id="pkg_1",
-                    budget=None,
-                    today=datetime.now(UTC),
-                )
+        with pytest.raises(AdCPBulkUpdateError) as exc_info:
+            adapter.update_media_buy(
+                media_buy_id="bs_12345",
+                action="pause_package",
+                package_id="pkg_1",
+                budget=None,
+                today=datetime.now(UTC),
+                packages=packages,
+            )
 
         assert exc_info.value.error_code == "PARTIAL_FAILURE"
 

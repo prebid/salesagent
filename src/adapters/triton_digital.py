@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -10,6 +11,7 @@ from src.adapters.base import (
     AdapterUpdateResult,
     AdServerAdapter,
     CreativeEngineAdapter,
+    StoredPackage,
 )
 from src.adapters.constants import require_supported_update_action
 from src.adapters.utils.pricing import resolve_package_rate
@@ -22,6 +24,7 @@ from src.core.exceptions import (
 )
 from src.core.schemas import *
 from src.core.security.outbound_http import OperatorEndpoint, OutboundError, send
+from src.core.traffic_carrier import CreativesByPackage
 
 
 class TritonDigital(AdServerAdapter):
@@ -134,6 +137,8 @@ class TritonDigital(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict[str, Any]] | None = None,
+        *,
+        creatives_by_package: CreativesByPackage | None = None,
     ) -> AdapterCreateResult:
         """Creates a new Campaign and Flights in the Triton TAP API."""
         # Log operation
@@ -223,7 +228,7 @@ class TritonDigital(AdServerAdapter):
         return self._build_create_success(media_buy_id, packages)
 
     def add_creative_assets(
-        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
+        self, media_buy_id: str, assets: Sequence[Mapping[str, Any]], today: datetime
     ) -> list[AssetStatus]:
         """Uploads creatives and associates them with flights in a campaign."""
         self.log(f"TritonDigital.add_creative_assets for media buy '{media_buy_id}'")
@@ -412,6 +417,8 @@ class TritonDigital(AdServerAdapter):
         package_id: str | None,
         budget: int | None,
         today: datetime,
+        *,
+        packages: Sequence[StoredPackage],
     ) -> AdapterUpdateResult:
         """Updates a media buy in Triton Digital using standardized actions."""
         self.log(f"TritonDigital.update_media_buy for {media_buy_id} with action {action}")

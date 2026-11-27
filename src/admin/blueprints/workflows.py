@@ -7,12 +7,13 @@ from flask import Blueprint, flash, jsonify, redirect, render_template, session,
 from sqlalchemy import select
 
 from src.admin.form_validation import json_object_body
-from src.admin.utils import approve_media_buy_through_writer, require_tenant_access
+from src.admin.utils import approval_refusal, approve_media_buy_through_writer, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Context
 from src.core.database.repositories import MediaBuyRepository
 from src.core.database.repositories.principal import PrincipalRepository
+from src.core.database.repositories.uow import MediaBuyUoW, WorkflowUoW
 from src.core.database.repositories.workflow import WorkflowRepository
 from src.core.tools.media_buy_create import ApprovalOutcome
 from src.core.webhooks.write_only import scrub_webhook_secrets
@@ -20,10 +21,6 @@ from src.core.webhooks.write_only import scrub_webhook_secrets
 logger = logging.getLogger(__name__)
 
 workflows_bp = Blueprint("workflows", __name__)
-
-
-class MediaBuyApprovalFailed(Exception):
-    """An approved media buy could not be created in the ad server: a failure, answered with a log reference."""
 
 
 @workflows_bp.route("/<tenant_id>/workflows")
@@ -152,59 +149,54 @@ def review_workflow_step(tenant_id, workflow_id, step_id):
 @log_admin_action("approve_workflow_step")
 def approve_workflow_step(tenant_id, workflow_id, step_id):
     """Approve a workflow step."""
-    with get_db_session() as db:
-        # Get and update the workflow step via repository (tenant-scoped)
-        workflow_repo = WorkflowRepository(db, tenant_id)
+    user_info = session.get("user", {})
+    user_email = user_info.get("email", "system") if isinstance(user_info, dict) else str(user_info)
 
-        user_info = session.get("user", {})
-        user_email = user_info.get("email", "system") if isinstance(user_info, dict) else str(user_info)
-
-        workflow_repo.require(workflow_repo.update_status, step_id, status="approved")
-
-        db.commit()
+    # The step's approval commits when this unit closes, before the media buy's approval opens a
+    # unit of its own: opened inside this one, it would run on this unit's session and close it.
+    with WorkflowUoW(tenant_id) as uow:
+        assert uow.workflows is not None
+        uow.workflows.require(uow.workflows.update_status, step_id, status="approved")
 
         # Check if this is a media buy creation workflow step
-        mappings = workflow_repo.get_mappings_for_step(step_id)
-        mapping = next((m for m in mappings if m.object_type == "media_buy"), None)
+        media_buy_id = next(
+            (m.object_id for m in uow.workflows.get_mappings_for_step(step_id) if m.object_type == "media_buy"), None
+        )
+        media_buy_status = None
+        if media_buy_id:
+            media_buys = uow.join(MediaBuyUoW).media_buys
+            assert media_buys is not None
+            media_buy = media_buys.get_by_id(media_buy_id)
+            media_buy_status = media_buy.status if media_buy else None
 
-        logger.info(f"[APPROVAL] Checking for ObjectWorkflowMapping: step_id={step_id}, found={mapping is not None}")
-        if mapping:
-            logger.info(f"[APPROVAL] Found mapping: object_type={mapping.object_type}, object_id={mapping.object_id}")
+    logger.info(f"[APPROVAL] Checking for ObjectWorkflowMapping: step_id={step_id}, found={media_buy_id is not None}")
 
-        if mapping:
-            media_buy_id = mapping.object_id
-            logger.info(f"[APPROVAL] Workflow step {step_id} approved for media buy {media_buy_id}")
+    if media_buy_id:
+        logger.info(f"[APPROVAL] Workflow step {step_id} approved for media buy {media_buy_id}")
+        logger.info(f"[APPROVAL] Media buy lookup: status={media_buy_status or 'N/A'}")
 
-            # Get the media buy
-            media_buy_repo = MediaBuyRepository(db, tenant_id)
-            media_buy = media_buy_repo.get_by_id(media_buy_id)
+        if media_buy_status == "pending_approval":
+            approval = approve_media_buy_through_writer(media_buy_id, tenant_id, approved_by=user_email)
 
-            logger.info(
-                f"[APPROVAL] Media buy lookup: found={media_buy is not None}, status={media_buy.status if media_buy else 'N/A'}"
-            )
+            if approval.outcome is ApprovalOutcome.HELD_PENDING_CREATIVES:
+                return jsonify({"success": True}), 200
 
-            if media_buy and media_buy.status == "pending_approval":
-                approval = approve_media_buy_through_writer(media_buy_id, tenant_id, approved_by=user_email)
+            if not approval.ok and approval.error is not None:
+                # A failed approval always carries its error (ApprovalResult.failed); the check
+                # narrows the type. The typed error decides the refusal's class and status, and
+                # its lines are the refusal's details; the admin error handler writes the answer.
+                # Its cause stays in internal_detail.
+                raise approval_refusal(media_buy_id, approval.error)
 
-                if approval.outcome is ApprovalOutcome.HELD_PENDING_CREATIVES:
-                    return jsonify({"success": True}), 200
-
-                if not approval.ok:
-                    # error_msg can carry an adapter's exception text: it goes to the log, under
-                    # the reference the admin error handler answers with.
-                    raise MediaBuyApprovalFailed(f"Media buy {media_buy_id}: {approval.error_msg}")
-
-                logger.info(f"[APPROVAL] Media buy {media_buy_id} successfully created in adapter")
-                flash("Workflow step approved and media buy created successfully", "success")
-            else:
-                logger.warning(
-                    f"[APPROVAL] Media buy not executed: media_buy={media_buy is not None}, status={media_buy.status if media_buy else 'N/A'}"
-                )
-                flash("Workflow step approved successfully", "success")
+            logger.info(f"[APPROVAL] Media buy {media_buy_id} successfully created in adapter")
+            flash("Workflow step approved and media buy created successfully", "success")
         else:
+            logger.warning(f"[APPROVAL] Media buy not executed: status={media_buy_status or 'N/A'}")
             flash("Workflow step approved successfully", "success")
+    else:
+        flash("Workflow step approved successfully", "success")
 
-        return jsonify({"success": True}), 200
+    return jsonify({"success": True}), 200
 
 
 @workflows_bp.route("/<tenant_id>/workflows/<workflow_id>/steps/<step_id>/reject", methods=["POST"])

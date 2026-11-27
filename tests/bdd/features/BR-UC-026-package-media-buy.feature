@@ -128,7 +128,11 @@ Feature: BR-UC-026 Package Media Buy
     Then the response is compliant with the update_media_buy success spec
     And the response should contain the package with paused=true
     And the package should not deliver impressions
+    And the response revision should be above the revision the media buy was created at
     # POST-S4: Paused state updated to true
+    # LOCAL CORRECTION: the response and the stored record both carry the pause, and the
+    # revision moves (update_media_buy.mdx @ v3.2.7 line 274: "Every mutating update
+    # increments `revision`"). The record read is in the paused Then (prebid/salesagent#2647).
 
   @T-UC-026-alt-resume @alt-flow @resume @post-s4
   Scenario: Resume a paused package
@@ -141,7 +145,11 @@ Feature: BR-UC-026 Package Media Buy
     Then the response is compliant with the update_media_buy success spec
     And the response should contain the package with paused=false
     And the package should resume delivering impressions
+    And the response revision should be above the revision the media buy was created at
     # POST-S4: Paused state updated to false
+    # LOCAL CORRECTION: the response and the stored record both carry the pause, and the
+    # revision moves (update_media_buy.mdx @ v3.2.7 line 274: "Every mutating update
+    # increments `revision`"). The record read is in the paused Then (prebid/salesagent#2647).
 
   @T-UC-026-alt-cancel @alt-flow @cancel @post-s7
   Scenario: Cancel a package via canceled=true

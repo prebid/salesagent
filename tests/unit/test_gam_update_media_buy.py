@@ -1,19 +1,32 @@
 """Unit tests for GAM adapter update_media_buy method.
 
-Tests that package budget updates are persisted to the database
-and that unsupported actions return explicit errors (no silent failures).
+Tests that package budget and pause updates reach the GAM line items, read from the
+stored packages the update tool passes in, and that unsupported actions return
+explicit errors (no silent failures).
 """
 
 from datetime import UTC, datetime
-from unittest.mock import MagicMock, Mock, patch
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
 from src.adapters.base import AdapterUpdateResult
+from src.core.database.repositories.media_buy import stored_package_of
+from src.core.stored_package import StoredPackage
 
 
-def test_update_package_budget_persists_to_database():
-    """Test that update_package_budget action actually updates the database."""
+def _stored(package_id: str, package_config: dict) -> StoredPackage:
+    """The stored package the update tool passes the adapter (``packages=``), read by the repository's projection."""
+    return stored_package_of(SimpleNamespace(package_id=package_id, package_config=package_config, budget=None))
+
+
+def test_update_package_budget_syncs_the_line_item():
+    """update_package_budget changes the package's GAM line item and writes nothing itself.
+
+    The seller's record of the budget is the package's budget column, which the update
+    tool writes inside its unit of work; the adapter opens no session (#2647).
+    """
     from src.adapters.google_ad_manager import GoogleAdManager
 
     media_buy_id = "mb_test123"
@@ -27,7 +40,9 @@ def test_update_package_budget_persists_to_database():
         "budget": 19000,
         "product_id": "prod_1",
         "platform_line_item_id": "123456",  # Add platform ID for GAM sync
-        "pricing": {"model": "cpm", "currency": "USD"},  # Add pricing info
+        # The terms the create path stores (pricing_helpers): a CPC package in EUR, so a
+        # read of any other key falls back to cpm/USD and the assertion below fails.
+        "pricing_info": {"pricing_model": "cpc", "currency": "EUR"},
     }
 
     # Create a minimal mock adapter with orders_manager
@@ -41,49 +56,29 @@ def test_update_package_budget_persists_to_database():
     mock_adapter.orders_manager = Mock()
     mock_adapter.orders_manager.update_line_item_budget = Mock(return_value=True)
 
-    with (
-        patch("src.core.database.database_session.get_db_session") as mock_db,
-        patch("sqlalchemy.orm.attributes.flag_modified") as mock_flag_modified,
-    ):
-        mock_session = MagicMock()
-        mock_db.return_value.__enter__.return_value = mock_session
+    # Call the actual method (bind to real class)
+    result = GoogleAdManager.update_media_buy(
+        mock_adapter,
+        media_buy_id=media_buy_id,
+        action="update_package_budget",
+        package_id=package_id,
+        budget=new_budget,
+        today=datetime.now(UTC),
+        packages=[_stored(package_id, mock_package.package_config)],
+    )
 
-        # Mock the query to return our test package
-        mock_scalars = Mock()
-        mock_scalars.first.return_value = mock_package
-        mock_session.scalars.return_value = mock_scalars
+    # Verify GAM sync was called
+    mock_adapter.orders_manager.update_line_item_budget.assert_called_once_with(
+        line_item_id="123456",
+        new_budget=float(new_budget),
+        pricing_model="cpc",
+        currency="EUR",
+    )
 
-        # Call the actual method (bind to real class)
-        result = GoogleAdManager.update_media_buy(
-            mock_adapter,
-            media_buy_id=media_buy_id,
-            action="update_package_budget",
-            package_id=package_id,
-            budget=new_budget,
-            today=datetime.now(UTC),
-        )
-
-        # Verify GAM sync was called
-        mock_adapter.orders_manager.update_line_item_budget.assert_called_once_with(
-            line_item_id="123456",
-            new_budget=float(new_budget),
-            pricing_model="cpm",
-            currency="USD",
-        )
-
-        # Verify flag_modified was called
-        mock_flag_modified.assert_called_once_with(mock_package, "package_config")
-
-        # The adapter hands back its own carrier; the tool builds the buyer's
-        # UpdateMediaBuySuccess from the re-read row (src/adapters/base.py).
-        assert isinstance(result, AdapterUpdateResult)
-        assert result.media_buy_id == media_buy_id
-
-        # Verify database was updated
-        assert mock_package.package_config["budget"] == float(new_budget)
-
-        # Verify session.commit() was called
-        mock_session.commit.assert_called_once()
+    # The adapter hands back its own carrier; the tool builds the buyer's
+    # UpdateMediaBuySuccess from the re-read row (src/adapters/base.py).
+    assert isinstance(result, AdapterUpdateResult)
+    assert result.media_buy_id == media_buy_id
 
 
 def test_update_package_budget_returns_error_when_package_not_found():
@@ -102,29 +97,19 @@ def test_update_package_budget_returns_error_when_package_not_found():
     mock_adapter._requires_manual_approval = Mock(return_value=False)
     mock_adapter.workflow_manager = Mock()
 
-    with patch("src.core.database.database_session.get_db_session") as mock_db:
-        mock_session = MagicMock()
-        mock_db.return_value.__enter__.return_value = mock_session
+    from src.core.exceptions import AdCPPackageNotFoundError
 
-        # Mock the query to return None (package not found)
-        mock_scalars = Mock()
-        mock_scalars.first.return_value = None
-        mock_session.scalars.return_value = mock_scalars
-
-        from src.core.exceptions import AdCPPackageNotFoundError
-
-        with pytest.raises(AdCPPackageNotFoundError):
-            GoogleAdManager.update_media_buy(
-                mock_adapter,
-                media_buy_id=media_buy_id,
-                action="update_package_budget",
-                package_id=package_id,
-                budget=new_budget,
-                today=datetime.now(UTC),
-            )
-
-        # Verify commit was NOT called (no changes to persist)
-        mock_session.commit.assert_not_called()
+    # The buy holds no package with this id.
+    with pytest.raises(AdCPPackageNotFoundError):
+        GoogleAdManager.update_media_buy(
+            mock_adapter,
+            media_buy_id=media_buy_id,
+            action="update_package_budget",
+            package_id=package_id,
+            budget=new_budget,
+            today=datetime.now(UTC),
+            packages=[],
+        )
 
 
 def test_unsupported_action_returns_explicit_error():
@@ -149,6 +134,7 @@ def test_unsupported_action_returns_explicit_error():
             package_id=None,
             budget=None,
             today=datetime.now(),
+            packages=(),
         )
     # The identifier is STRUCTURED now: it lives in details/field, not in prose.
 
@@ -181,53 +167,47 @@ def test_pause_resume_package_actions_work():
     mock_adapter.orders_manager.pause_line_item = Mock(return_value=True)
     mock_adapter.orders_manager.resume_line_item = Mock(return_value=True)
 
-    with patch("src.core.database.database_session.get_db_session") as mock_db:
-        mock_session = MagicMock()
-        mock_db.return_value.__enter__.return_value = mock_session
+    packages = [_stored(package_id, mock_package.package_config)]
 
-        # Mock the query to return our test package
-        mock_scalars = Mock()
-        mock_scalars.first.return_value = mock_package
-        mock_session.scalars.return_value = mock_scalars
+    # Test pause_package
+    result = GoogleAdManager.update_media_buy(
+        mock_adapter,
+        media_buy_id=media_buy_id,
+        action="pause_package",
+        package_id=package_id,
+        budget=None,
+        today=datetime.now(UTC),
+        packages=packages,
+    )
 
-        # Test pause_package
-        result = GoogleAdManager.update_media_buy(
-            mock_adapter,
-            media_buy_id=media_buy_id,
-            action="pause_package",
-            package_id=package_id,
-            budget=None,
-            today=datetime.now(UTC),
-        )
+    # Verify pause was called
+    mock_adapter.orders_manager.pause_line_item.assert_called_once_with("123456")
 
-        # Verify pause was called
-        mock_adapter.orders_manager.pause_line_item.assert_called_once_with("123456")
+    # Verify success response
+    assert isinstance(result, AdapterUpdateResult), "pause_package should return success"
+    assert result.media_buy_id == media_buy_id
 
-        # Verify success response
-        assert isinstance(result, AdapterUpdateResult), "pause_package should return success"
-        assert result.media_buy_id == media_buy_id
+    # Reset mocks for next test
+    mock_adapter.orders_manager.pause_line_item.reset_mock()
+    mock_adapter.orders_manager.resume_line_item.reset_mock()
 
-        # Reset mocks for next test
-        mock_adapter.orders_manager.pause_line_item.reset_mock()
-        mock_adapter.orders_manager.resume_line_item.reset_mock()
-        mock_scalars.first.return_value = mock_package  # Reset package query
+    # Test resume_package
+    result = GoogleAdManager.update_media_buy(
+        mock_adapter,
+        media_buy_id=media_buy_id,
+        action="resume_package",
+        package_id=package_id,
+        budget=None,
+        today=datetime.now(UTC),
+        packages=packages,
+    )
 
-        # Test resume_package
-        result = GoogleAdManager.update_media_buy(
-            mock_adapter,
-            media_buy_id=media_buy_id,
-            action="resume_package",
-            package_id=package_id,
-            budget=None,
-            today=datetime.now(UTC),
-        )
+    # Verify resume was called
+    mock_adapter.orders_manager.resume_line_item.assert_called_once_with("123456")
 
-        # Verify resume was called
-        mock_adapter.orders_manager.resume_line_item.assert_called_once_with("123456")
-
-        # Verify success response
-        assert isinstance(result, AdapterUpdateResult), "resume_package should return success"
-        assert result.media_buy_id == media_buy_id
+    # Verify success response
+    assert isinstance(result, AdapterUpdateResult), "resume_package should return success"
+    assert result.media_buy_id == media_buy_id
 
 
 def test_pause_resume_media_buy_actions_work():
@@ -257,108 +237,51 @@ def test_pause_resume_media_buy_actions_work():
     mock_adapter.orders_manager.pause_line_item = Mock(return_value=True)
     mock_adapter.orders_manager.resume_line_item = Mock(return_value=True)
 
-    with patch("src.core.database.database_session.get_db_session") as mock_db:
-        mock_session = MagicMock()
-        mock_db.return_value.__enter__.return_value = mock_session
+    packages = [_stored(p.package_id, p.package_config) for p in (mock_package1, mock_package2)]
 
-        # Mock the query to return multiple packages
-        mock_scalars = Mock()
-        mock_scalars.all.return_value = [mock_package1, mock_package2]
-        mock_session.scalars.return_value = mock_scalars
+    # Test pause_media_buy
+    result = GoogleAdManager.update_media_buy(
+        mock_adapter,
+        media_buy_id=media_buy_id,
+        action="pause_media_buy",
+        package_id=None,
+        budget=None,
+        today=datetime.now(UTC),
+        packages=packages,
+    )
 
-        # Test pause_media_buy
-        result = GoogleAdManager.update_media_buy(
-            mock_adapter,
-            media_buy_id=media_buy_id,
-            action="pause_media_buy",
-            package_id=None,
-            budget=None,
-            today=datetime.now(UTC),
-        )
+    # Verify pause was called for both packages
+    assert mock_adapter.orders_manager.pause_line_item.call_count == 2
+    mock_adapter.orders_manager.pause_line_item.assert_any_call("111")
+    mock_adapter.orders_manager.pause_line_item.assert_any_call("222")
 
-        # Verify pause was called for both packages
-        assert mock_adapter.orders_manager.pause_line_item.call_count == 2
-        mock_adapter.orders_manager.pause_line_item.assert_any_call("111")
-        mock_adapter.orders_manager.pause_line_item.assert_any_call("222")
+    # Verify success response
+    assert isinstance(result, AdapterUpdateResult), "pause_media_buy should return success"
+    assert result.media_buy_id == media_buy_id
 
-        # Verify success response
-        assert isinstance(result, AdapterUpdateResult), "pause_media_buy should return success"
-        assert result.media_buy_id == media_buy_id
+    # Reset mocks for next test
+    mock_adapter.orders_manager.pause_line_item.reset_mock()
+    mock_adapter.orders_manager.resume_line_item.reset_mock()
 
-        # Reset mocks for next test
-        mock_adapter.orders_manager.pause_line_item.reset_mock()
-        mock_adapter.orders_manager.resume_line_item.reset_mock()
-        mock_scalars.all.return_value = [mock_package1, mock_package2]  # Reset package query
+    # Test resume_media_buy
+    result = GoogleAdManager.update_media_buy(
+        mock_adapter,
+        media_buy_id=media_buy_id,
+        action="resume_media_buy",
+        package_id=None,
+        budget=None,
+        today=datetime.now(UTC),
+        packages=packages,
+    )
 
-        # Test resume_media_buy
-        result = GoogleAdManager.update_media_buy(
-            mock_adapter,
-            media_buy_id=media_buy_id,
-            action="resume_media_buy",
-            package_id=None,
-            budget=None,
-            today=datetime.now(UTC),
-        )
+    # Verify resume was called for both packages
+    assert mock_adapter.orders_manager.resume_line_item.call_count == 2
+    mock_adapter.orders_manager.resume_line_item.assert_any_call("111")
+    mock_adapter.orders_manager.resume_line_item.assert_any_call("222")
 
-        # Verify resume was called for both packages
-        assert mock_adapter.orders_manager.resume_line_item.call_count == 2
-        mock_adapter.orders_manager.resume_line_item.assert_any_call("111")
-        mock_adapter.orders_manager.resume_line_item.assert_any_call("222")
-
-        # Verify success response
-        assert isinstance(result, AdapterUpdateResult), "resume_media_buy should return success"
-        assert result.media_buy_id == media_buy_id
-
-
-def test_update_package_budget_rejects_budget_below_delivery():
-    """Test that update_package_budget rejects budget less than current spend."""
-    from src.adapters.google_ad_manager import GoogleAdManager
-
-    media_buy_id = "mb_test123"
-    package_id = "pkg_test456"
-    current_spend = 15000.0
-    new_budget = 10000  # Less than current spend
-
-    # Mock database session and MediaPackage with delivery metrics
-    mock_package = Mock()
-    mock_package.package_id = package_id
-    mock_package.package_config = {
-        "budget": 19000,
-        "product_id": "prod_1",
-        "delivery_metrics": {"spend": current_spend, "impressions_delivered": 50000},
-    }
-
-    # Create a minimal mock adapter
-    mock_adapter = Mock(spec=GoogleAdManager)
-    mock_adapter.log = Mock()
-    mock_adapter.tenant_id = "tenant_test123"
-    mock_adapter._is_admin_principal = Mock(return_value=False)
-    mock_adapter._requires_manual_approval = Mock(return_value=False)
-    mock_adapter.workflow_manager = Mock()
-
-    with patch("src.core.database.database_session.get_db_session") as mock_db:
-        mock_session = MagicMock()
-        mock_db.return_value.__enter__.return_value = mock_session
-
-        # Mock the query to return our test package
-        mock_scalars = Mock()
-        mock_scalars.first.return_value = mock_package
-        mock_session.scalars.return_value = mock_scalars
-
-        from src.core.exceptions import AdCPBudgetExceededError
-
-        with pytest.raises(AdCPBudgetExceededError) as exc_info:
-            GoogleAdManager.update_media_buy(
-                mock_adapter,
-                media_buy_id=media_buy_id,
-                action="update_package_budget",
-                package_id=package_id,
-                budget=new_budget,
-                today=datetime.now(UTC),
-            )
-
-        # Verify commit was NOT called (budget rejected)
-        mock_session.commit.assert_not_called()
+    # Verify success response
+    assert isinstance(result, AdapterUpdateResult), "resume_media_buy should return success"
+    assert result.media_buy_id == media_buy_id
 
 
 class TestGAMUpdateMediaBuyTaxonomyRaiseSites:
@@ -407,6 +330,7 @@ class TestGAMUpdateMediaBuyTaxonomyRaiseSites:
                 package_id=None,
                 budget=None,
                 today=datetime.now(UTC),
+                packages=(),
             )
 
         assert exc_info.value.error_code == "ACTIVATION_WORKFLOW_FAILED"
@@ -422,32 +346,23 @@ class TestGAMUpdateMediaBuyTaxonomyRaiseSites:
         mock_package.package_config = {
             "budget": 19000,
             "platform_line_item_id": "123456",
-            "pricing": {"model": "cpm", "currency": "USD"},
+            "pricing_info": {"pricing_model": "cpm", "currency": "USD"},
         }
 
         mock_adapter = self._build_mock_adapter()
         # GAM sync reports failure (returns falsy) -> production raises.
         mock_adapter.orders_manager.update_line_item_budget = Mock(return_value=False)
 
-        with patch("src.core.database.database_session.get_db_session") as mock_db:
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
-            mock_scalars = Mock()
-            mock_scalars.first.return_value = mock_package
-            mock_session.scalars.return_value = mock_scalars
-
-            with pytest.raises(AdCPGamUpdateError) as exc_info:
-                GoogleAdManager.update_media_buy(
-                    mock_adapter,
-                    media_buy_id="mb_test123",
-                    action="update_package_budget",
-                    package_id=package_id,
-                    budget=30000,
-                    today=datetime.now(UTC),
-                )
-
-            # Budget change must NOT be persisted when the GAM sync fails.
-            mock_session.commit.assert_not_called()
+        with pytest.raises(AdCPGamUpdateError) as exc_info:
+            GoogleAdManager.update_media_buy(
+                mock_adapter,
+                media_buy_id="mb_test123",
+                action="update_package_budget",
+                package_id=package_id,
+                budget=30000,
+                today=datetime.now(UTC),
+                packages=[_stored(package_id, mock_package.package_config)],
+            )
 
         assert exc_info.value.error_code == "AD_SERVER_UPDATE_FAILED"
 
@@ -468,21 +383,15 @@ class TestGAMUpdateMediaBuyTaxonomyRaiseSites:
         # First line item pauses, second fails -> at least one failed item -> production raises.
         mock_adapter.orders_manager.pause_line_item = Mock(side_effect=[True, False])
 
-        with patch("src.core.database.database_session.get_db_session") as mock_db:
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
-            mock_scalars = Mock()
-            mock_scalars.all.return_value = [mock_pkg1, mock_pkg2]
-            mock_session.scalars.return_value = mock_scalars
-
-            with pytest.raises(AdCPBulkUpdateError) as exc_info:
-                GoogleAdManager.update_media_buy(
-                    mock_adapter,
-                    media_buy_id="mb_test123",
-                    action="pause_media_buy",
-                    package_id=None,
-                    budget=None,
-                    today=datetime.now(UTC),
-                )
+        with pytest.raises(AdCPBulkUpdateError) as exc_info:
+            GoogleAdManager.update_media_buy(
+                mock_adapter,
+                media_buy_id="mb_test123",
+                action="pause_media_buy",
+                package_id=None,
+                budget=None,
+                today=datetime.now(UTC),
+                packages=[_stored(p.package_id, p.package_config) for p in (mock_pkg1, mock_pkg2)],
+            )
 
         assert exc_info.value.error_code == "PARTIAL_FAILURE"

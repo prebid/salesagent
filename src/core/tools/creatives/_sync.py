@@ -16,7 +16,7 @@ from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPGoneError, 
 from src.core.format_resolver import seller_format_catalogue
 from src.core.helpers import enum_value, log_tool_activity
 from src.core.resolved_identity import AccountIdentity, ResolvedIdentity
-from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
+from src.core.schemas import Format, SyncCreativeResult, SyncCreativesResponse
 from src.core.schemas.creative import SyncCreativeAsset, SyncCreativesRequest
 from src.core.tenant_context import TenantContext
 from src.core.validation_helpers import format_validation_error
@@ -82,6 +82,7 @@ def sync_creatives(
     tenant: TenantContext,
     assigned_by_caller: bool = False,
     uow: CreativeUoW | None = None,
+    catalogue: list[Format] | None = None,
 ) -> SyncCreativesResponse:
     """Sync creative assets to the centralized creative library.
 
@@ -105,6 +106,12 @@ def sync_creatives(
     mutation" and says "No package, assignment, library creative, or MediaBuy field from
     the rejected update may change". A joined sync is never a preview: the caller's
     transaction decides whether anything persists.
+
+    ``catalogue`` is the seller's format catalogue (``seller_format_catalogue``), which a
+    joined sync takes from its caller, fetched before the caller's unit opened. The fetch
+    opens ``get_db_session()``, and the first one opened inside an open unit closes the
+    unit's session: the caller's flushed writes roll back and its row locks go (#1644,
+    #2647). A sync that opens its own unit fetches the catalogue itself.
     """
 
     # ``creatives`` is aliased because it is NARROWED below by the creative_ids filter.
@@ -117,6 +124,7 @@ def sync_creatives(
     dry_run = bool(req.dry_run)
     joined = uow is not None
     assert not (joined and dry_run), "a joined sync commits with its caller and cannot be a preview"
+    assert not joined or catalogue is not None, "a joined sync takes the catalogue its caller fetched"
     # Strict is the one mode this seller serves, and it is refused here, before anything is
     # stored. sync-creatives-request.json: "'lenient' processes valid creatives and reports
     # errors", which this seller does not implement (GH #2515).
@@ -203,7 +211,7 @@ def sync_creatives(
     from src.core.creative_agent_registry import get_creative_agent_registry
 
     registry = get_creative_agent_registry()
-    all_formats = seller_format_catalogue(tenant.tenant_id)
+    all_formats = catalogue if catalogue is not None else seller_format_catalogue(tenant.tenant_id)
 
     # ONE write path for both branches: dry_run rolls this transaction back on clean
     # exit instead of committing it (BaseUoW), so preview and live run identical

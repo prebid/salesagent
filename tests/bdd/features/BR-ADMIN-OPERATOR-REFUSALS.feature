@@ -533,3 +533,34 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
     And the JSON issues are:
       | field        | text                         |
       | network_code | Network code must be numeric |
+
+  # Approving a media buy books it at the ad server. When the approval stops on a typed error,
+  # the operator gets a refusal whose details are that error's lines: its code and message,
+  # the request field it names, and one line per problem. The class is decided by the error.
+  # A refusal before booking leaves the buy awaiting approval, and the buy's own state is what
+  # conflicts with booking it (409). An ad server that fails the booking is another system
+  # that failed (502).
+
+  @T-ADMIN-REFUSAL-045 @json @media-buy-approval
+  Scenario: A media buy whose creative its product refuses is refused at approval with the creative's error lines
+    Given another tenant of this seller, holding a media buy awaiting approval whose product accepts images of 728x90
+    And that media buy's package is assigned the approved 300x250 image creative "cr_approval_misfit"
+    When the workflow page approves that media buy's approval step
+    Then the page returns status 409
+    And the JSON response has "success" as false
+    And the JSON error is the "MediaBuyApprovalRefused" refusal
+    And the JSON details are the "CREATIVE_SIZE_MISMATCH" error's line, then:
+      | text                                               |
+      | field packages[0].creative_ids[0]                  |
+      | creative cr_approval_misfit CREATIVE_SIZE_MISMATCH |
+    And that media buy still awaits approval
+
+  @T-ADMIN-REFUSAL-043 @json @media-buy-approval
+  Scenario: A media buy the ad server fails to book is refused at approval as the ad server's failure
+    Given another tenant of this seller, holding a media buy awaiting approval
+    And that tenant's ad server fails every media buy it is asked to create
+    When the workflow page approves that media buy's approval step
+    Then the page returns status 502
+    And the JSON response has "success" as false
+    And the JSON error is the "MediaBuyBookingFailed" refusal
+    And the JSON details are only the "SERVICE_UNAVAILABLE" error's line

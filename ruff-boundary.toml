@@ -75,6 +75,10 @@ select = ["TID251"]
 "src/app.py" = ["TID251"]
 # The request and response schemas DECLARE the context field, so they name its type.
 "src/core/schemas/*.py" = ["TID251"]
+# The one caller of get_separate_session: AuditUoW, the unit an audit record is written in. The
+# record is written while the caller's unit of work is open and must outlive a refusal of that
+# request, so its unit runs on a session of its own.
+"src/core/database/repositories/uow.py" = ["TID251"]
 
 [lint.flake8-tidy-imports.banned-api]
 "src.core.tools.accounts._list_accounts_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
@@ -163,6 +167,13 @@ select = ["TID251"]
 # already in the table above. The tools that manage accounts as DATA (list_accounts,
 # sync_accounts) use AccountRepository and never import it.
 "src.core.database.repositories.account_lookup".msg = "A request's account is resolved by the resolver alone (src/core/resolved_identity._resolve_identity), which builds the identity with it inside. Read identity.account; do not resolve an AccountReference here."
+
+# A session outside the thread's scoped registry exists for ONE unit: AuditUoW
+# (src/core/database/repositories/uow.py), whose audit record is written while a request's
+# unit of work is open and kept when that request is refused (#2647). Anything else opening
+# one reads or writes outside every unit and repository, which the get_db_session guards
+# cannot see under this name.
+"src.core.database.database_session.get_separate_session".msg = "A session outside the scoped registry is opened by AuditUoW alone (src/core/database/repositories/uow.py). Read and write through a repository inside a unit of work instead."
 
 # The remaining OWNERSHIP bans -- the principal and account repositories, the resolver's
 # primitives and AccountUoW -- live in ruff-ownership.toml, a config of their own, so the

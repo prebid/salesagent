@@ -5,13 +5,20 @@ Implements the AdServerAdapter interface for Microsoft's Xandr platform.
 """
 
 import logging
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from dateutil import parser as dateutil_parser
 from pydantic import JsonValue
 
-from src.adapters.base import AdapterCreateRequest, AdapterCreateResult, AdapterUpdateResult, AdServerAdapter
+from src.adapters.base import (
+    AdapterCreateRequest,
+    AdapterCreateResult,
+    AdapterUpdateResult,
+    AdServerAdapter,
+    StoredPackage,
+)
 from src.adapters.utils.pricing import resolve_package_rate
 from src.adapters.vendor_http import VendorHttpClient, require_vendor
 from src.core.exceptions import AdCPAdapterError, AdCPConfigurationError, AdCPInternalError
@@ -25,6 +32,7 @@ from src.core.schemas import (
     ReportingPeriod,
 )
 from src.core.security.outbound_http import OutboundError
+from src.core.traffic_carrier import CreativesByPackage
 
 # NOTE: Xandr adapter needs full refactor - it's using old schemas and patterns
 # The other methods (get_media_buy_status, get_media_buy_delivery, etc.) still use old schemas
@@ -498,6 +506,8 @@ class XandrAdapter(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
+        *,
+        creatives_by_package: CreativesByPackage | None = None,
     ) -> AdapterCreateResult:
         """Create insertion order and line items in Xandr."""
         if self._requires_manual_approval("create_media_buy"):
@@ -641,6 +651,8 @@ class XandrAdapter(AdServerAdapter):
         package_id: str | None,
         budget: int | None,
         today: datetime,
+        *,
+        packages: Sequence[StoredPackage],
     ) -> AdapterUpdateResult:
         """Update insertion order in Xandr."""
         # NOTE: This is a stub implementation - needs full refactor to match current API
