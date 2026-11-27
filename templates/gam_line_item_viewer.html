@@ -447,7 +447,7 @@ function displayTargeting(targeting) {
             targetingHtml += '<ul class="list-unstyled">';
             adUnits.forEach(targetedUnit => {
                 const descendants = targetedUnit.includeDescendants ? ' (+ descendants)' : '';
-                targetingHtml += `<li>Ad Unit ID: <code>${escapeHtml(orNA(targetedUnit.adUnitId))}</code>${descendants}</li>`;
+                targetingHtml += `<li>Ad Unit ID: <code>${escapeHtml(orNA(targetedUnit.adUnitId))}</code>${escapeHtml(descendants)}</li>`;
             });
             targetingHtml += '</ul>';
             targetingHtml += '</div>';
@@ -574,9 +574,9 @@ function displayDeliverySettings(lineItem) {
     settingsHtml += '<h6>Delivery Configuration</h6>';
     settingsHtml += '<ul class="list-unstyled">';
     settingsHtml += `<li><strong>Delivery Rate Type:</strong> ${escapeHtml(orNA(lineItem.delivery_rate_type))}</li>`;
-    settingsHtml += `<li><strong>Skip Inventory Check:</strong> ${yesNo(lineItem.skip_inventory_check)}</li>`;
-    settingsHtml += `<li><strong>Allow Overbook:</strong> ${yesNo(lineItem.allow_overbook)}</li>`;
-    settingsHtml += `<li><strong>Reserve Inventory:</strong> ${yesNo(lineItem.reserve_at_creation)}</li>`;
+    settingsHtml += `<li><strong>Skip Inventory Check:</strong> ${escapeHtml(yesNo(lineItem.skip_inventory_check))}</li>`;
+    settingsHtml += `<li><strong>Allow Overbook:</strong> ${escapeHtml(yesNo(lineItem.allow_overbook))}</li>`;
+    settingsHtml += `<li><strong>Reserve Inventory:</strong> ${escapeHtml(yesNo(lineItem.reserve_at_creation))}</li>`;
     settingsHtml += '</ul>';
     settingsHtml += '</div>';
 
