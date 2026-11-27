@@ -25,6 +25,7 @@ from src.core.tools.media_buy_list import _compute_status
 
 if TYPE_CHECKING:
     from src.core.database.models import MediaBuy
+    from src.core.format_resolver import FormatContract
 
 
 from src.core.exceptions import (
@@ -555,21 +556,29 @@ def _stored_packages(uow: "MediaBuyUoW", media_buy_id: str) -> list[StoredPackag
     return uow.media_buys.get_stored_packages(media_buy_id)
 
 
-def _package_product(uow: "MediaBuyUoW", media_buy_id: str, package_id: str, pkg_index: int) -> "DBProduct | None":
-    """The product a held package was bought on, or None when its config names none.
+def _package_product(
+    uow: "MediaBuyUoW", media_buy_id: str, package_id: str, pkg_index: int
+) -> "tuple[DBProduct | None, FormatContract | None]":
+    """The product a held package was bought on and the contract it was booked on; (None, None) when it names none.
 
     One lookup for the three branches that replace a package's creatives: each grades the
-    creatives against this product and then asks it whether the package is still covered.
+    creatives against this contract and then asks whether the package is still covered. The
+    contract is the package's own (``format_resolver.booked_format_contract``), never the
+    product as it is now: tracker-execution-contracts.mdx (v3.2.7) "Package assignment ...
+    revalidate[s] the selected manifest against the immutable package snapshot".
     A package the buy does not hold is refused PACKAGE_NOT_FOUND naming the entry's
     ``package_id``: each branch writes assignment rows for it, and an assignment's package
     is a foreign key to the buy's own packages.
     """
+    from src.core.format_resolver import booked_format_contract
+
     assert uow.media_buys is not None and uow.products is not None
     package = uow.media_buys.get_package_or_raise(
         media_buy_id, package_id, field=package_field_path("package_id", pkg_index)
     )
     product_id = package.package_config.get("product_id") if package.package_config else None
-    return uow.products.get_by_id(product_id) if product_id else None
+    product = uow.products.get_by_id(product_id) if product_id else None
+    return product, booked_format_contract(package) if product is not None else None
 
 
 def _validate_creatives_for_assignment(
@@ -578,6 +587,7 @@ def _validate_creatives_for_assignment(
     uow: "MediaBuyUoW",
     principal_id: str,
     product: "DBProduct | None",
+    contract: "FormatContract | None",
     field: str,
     product_name: str | None = None,
 ) -> None:
@@ -614,6 +624,8 @@ def _validate_creatives_for_assignment(
         principal_id: The requesting buyer's principal (from ResolvedIdentity).
         product: The package's product ORM record (or ``None`` if the package
             has no resolvable product, in which case the format check is skipped).
+        contract: The format contract the package was booked on, set whenever
+            ``product`` is (``_package_product``).
         field: JSON pointer to the array parameter the ids came from — the two
             callers pass different ones (``packages[i].creative_ids`` vs
             ``packages[i].creative_assignments``), and the spec asks the pointer
@@ -681,8 +693,10 @@ def _validate_creatives_for_assignment(
     # against ``product_format_identities`` alone, which could only see the DEPRECATED arm:
     # a product declaring ``format_options[]`` imposed no restriction here at all, and a
     # creative carrying no legacy assertion was REFUSED here while the create path skipped
-    # it. ``creative_satisfies`` reads both arms off the product and decides which lane applies.
-    contract = product.format_contract
+    # it. ``creative_satisfies`` reads both arms off the contract and decides which lane applies.
+    # The contract is the one the package was booked on (``_package_product``), not the product
+    # as it is now.
+    assert contract is not None, "a package on a product has the contract it was booked on"
     first_refusal: FormatSatisfaction | None = None
     incompatible: list[str] = []
     for creative in creatives_list:
@@ -1243,12 +1257,13 @@ def _update_media_buy_impl(
 
                         # Validate creatives (existence, status, format) via the
                         # shared helper so the rules match the creative_assignments path.
-                        product = _package_product(uow, actual_media_buy_id, pkg_update.package_id, pkg_index)
+                        product, contract = _package_product(uow, actual_media_buy_id, pkg_update.package_id, pkg_index)
                         _validate_creatives_for_assignment(
                             pkg_update.creative_ids,
                             uow=uow,
                             principal_id=principal_id,
                             product=product,
+                            contract=contract,
                             field=package_field_path("creative_ids", pkg_index),
                         )
 
@@ -1291,6 +1306,7 @@ def _update_media_buy_impl(
                             actual_media_buy_id,
                             pkg_update.package_id,
                             product,
+                            contract,
                             field=package_field_path("creative_ids", pkg_index),
                         )
 
@@ -1306,7 +1322,9 @@ def _update_media_buy_impl(
                         # The package first, in THIS buy: the sync below finds a package by its
                         # id across the tenant, and would assign the creatives to another buy's.
                         inline_media_buy_id = uow.media_buys.get_by_id_or_raise(req.media_buy_id).media_buy_id
-                        inline_product = _package_product(uow, inline_media_buy_id, pkg_update.package_id, pkg_index)
+                        inline_product, inline_contract = _package_product(
+                            uow, inline_media_buy_id, pkg_update.package_id, pkg_index
+                        )
 
                         # Sync creatives (upload/update)
                         # Built through the SAME builder the three transports use, rather
@@ -1409,6 +1427,7 @@ def _update_media_buy_impl(
                             inline_media_buy_id,
                             pkg_update.package_id,
                             inline_product,
+                            inline_contract,
                             field=package_field_path("creatives", pkg_index),
                         )
 
@@ -1430,12 +1449,15 @@ def _update_media_buy_impl(
                         # building any assignment rows — otherwise a not-found creative_id
                         # would surface as a composite-FK IntegrityError. Same rules as the
                         # creative_ids path via the shared helper.
-                        ca_product = _package_product(uow, actual_media_buy_id, pkg_update.package_id, pkg_index)
+                        ca_product, ca_contract = _package_product(
+                            uow, actual_media_buy_id, pkg_update.package_id, pkg_index
+                        )
                         _validate_creatives_for_assignment(
                             [ca.creative_id for ca in pkg_update.creative_assignments],
                             uow=uow,
                             principal_id=principal_id,
                             product=ca_product,
+                            contract=ca_contract,
                             field=package_field_path("creative_assignments", pkg_index),
                         )
 
@@ -1535,6 +1557,7 @@ def _update_media_buy_impl(
                             actual_media_buy_id,
                             pkg_update.package_id,
                             ca_product,
+                            ca_contract,
                             field=package_field_path("creative_assignments", pkg_index),
                         )
 

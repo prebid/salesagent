@@ -16,6 +16,7 @@ from src.core.exceptions import (
     AdCPPackageNotFoundError,
     AdCPValidationError,
 )
+from src.core.format_resolver import FormatContract, booked_format_contract
 from src.core.format_satisfaction import creative_refusal, creative_satisfies, require_covered
 from src.core.logging_config import log_safe
 from src.core.schemas import SyncCreativeResult
@@ -92,6 +93,7 @@ def require_package_covered(
     media_buy_id: str,
     package_id: str,
     product: Any,
+    contract: FormatContract | None,
     *,
     field: str,
 ) -> None:
@@ -105,13 +107,15 @@ def require_package_covered(
     (``creative_ids``, ``creative_assignments`` and the inline ``creatives``), which is every
     gate that changes an existing package's creatives. The caller's unit of work rolls
     back on the raise. No product means no format restriction, as at every creative gate.
+    *contract* is the one the package was booked on (``format_resolver.booked_format_contract``).
     """
     if product is None:
         return
+    assert contract is not None, "a package on a product has the contract it was booked on"
     require_covered(
         assignment_repo.package_creative_set(media_buy_id, package_id),
         product,
-        contract=product.format_contract,
+        contract=contract,
         field=field,
         package_id=package_id,
         product_id=product.product_id,
@@ -152,16 +156,18 @@ def _assignment_terms(assignments: dict | list | None) -> dict | None:
 
 
 def _refuse_format_the_product_does_not_take(
-    creative_row: Any, product: Any, creative_id: str, package_id: str
+    creative_row: Any, contract: FormatContract, creative_id: str, package_id: str
 ) -> None:
-    """Refuse an assignment whose format its product does not take.
+    """Refuse an assignment whose format the contract its package was booked on does not take.
 
     THE ONE creative validator, which the two create gates and update_media_buy also ask -- so no
     two of the four can disagree about whether a creative satisfies what the product declares,
     its manifest included (creative-manifests.mdx § Validation: "Sellers perform final acceptance
-    during sync_creatives").
+    during sync_creatives"). *contract* is ``format_resolver.booked_format_contract`` of the
+    package: tracker-execution-contracts.mdx (v3.2.7) "Package assignment ... revalidate[s] the
+    selected manifest against the immutable package snapshot".
     """
-    verdict = creative_satisfies(creative_row, product.format_contract)
+    verdict = creative_satisfies(creative_row, contract)
     if verdict:
         return
     if verdict.creative_coded:
@@ -208,10 +214,10 @@ def _process_assignments(
     assignments_by_creative: dict[str, list[str]] = {}  # creative_id -> [package_ids]
     assignment_errors_by_creative: dict[str, dict[str, str]] = {}  # creative_id -> {package_id: error}
     media_buys_with_new_assignments: dict[str, Any] = {}  # media_buy_id -> MediaBuy object
-    # (media_buy_id, package_id) -> the package's product, for every package this request
-    # assigned to: its whole creative set is graded for placement coverage once the
-    # request's assignments are in place.
-    packages_to_cover: dict[tuple[str, str], Any] = {}
+    # (media_buy_id, package_id) -> the package's product and the contract it was booked on, for
+    # every package this request assigned to: its whole creative set is graded for placement
+    # coverage once the request's assignments are in place.
+    packages_to_cover: dict[tuple[str, str], tuple[Any, FormatContract | None]] = {}
     # (creative_id, media_buy_id) -> the packages to traffic into the ad server once committed
     ad_server_pushes: dict[tuple[str, str], list[str]] = {}
 
@@ -299,8 +305,9 @@ def _process_assignments(
                 # Get product_id from package_config
                 product_id = db_package.package_config.get("product_id") if db_package.package_config else None
                 product = assignment_repo.get_product_by_id(product_id) if product_id else None
-                if product is not None:
-                    _refuse_format_the_product_does_not_take(creative_row, product, creative_id, package_id)
+                contract = booked_format_contract(db_package) if product is not None else None
+                if contract is not None:
+                    _refuse_format_the_product_does_not_take(creative_row, contract, creative_id, package_id)
 
                 # actual_package_id is always set when media_buy_id is set (guard above)
                 assert actual_package_id is not None
@@ -356,7 +363,7 @@ def _process_assignments(
                     )
 
                 if product is not None:
-                    packages_to_cover[(media_buy_id, actual_package_id)] = product
+                    packages_to_cover[(media_buy_id, actual_package_id)] = (product, contract)
 
                 # An approved creative assigned to a package booked as a line item is
                 # trafficked once this unit commits (#2381); the ad server answers whether it is
@@ -396,8 +403,8 @@ def _process_assignments(
         # silently omitted". Asked of each package's WHOLE set -- the creatives already
         # assigned and the ones this request added, each with the placement_ids that
         # routes it -- because coverage is a property of the set, not of one creative.
-        for (mb_id, pkg_id), pkg_product in packages_to_cover.items():
-            require_package_covered(assignment_repo, mb_id, pkg_id, pkg_product, field="assignments")
+        for (mb_id, pkg_id), (pkg_product, pkg_contract) in packages_to_cover.items():
+            require_package_covered(assignment_repo, mb_id, pkg_id, pkg_product, pkg_contract, field="assignments")
 
         # Update media buy status if needed (draft -> pending_creatives).
         assert uow.media_buys is not None

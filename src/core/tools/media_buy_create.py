@@ -1168,7 +1168,7 @@ def execute_approved_media_buy(
                     # holds it to: what it selected, or the product's contract at create when it
                     # selected nothing. Never the product as it is now (create_media_buy.mdx,
                     # v3.2.7: "never mutable Product discovery").
-                    contract = booked_format_contract(package_config, package_id=package_id)
+                    contract = booked_format_contract(db_pkg)
 
                     # Convert formats to FormatId objects with comprehensive validation
                     format_ids_list: list[FormatId] = []
@@ -1315,7 +1315,7 @@ def execute_approved_media_buy(
                 tenant_id,
                 buy_principal_id,
                 session=session,
-                stored={db_pkg.package_id: dict(db_pkg.package_config) for db_pkg in db_packages},
+                stored={db_pkg.package_id: db_pkg for db_pkg in db_packages},
             )
 
         # Resolution from stored ids: this job acts as the buy's owner, on the buy's
