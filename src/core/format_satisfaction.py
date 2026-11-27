@@ -99,7 +99,7 @@ from dataclasses import field as dataclass_field
 from decimal import Decimal, InvalidOperation
 from enum import Enum, StrEnum
 from functools import lru_cache
-from typing import Any, TypeGuard, get_args
+from typing import TYPE_CHECKING, Any, TypeGuard, get_args
 
 from adcp.canonical_formats import formats_are_equivalent, upgrade_legacy_format_id
 from adcp.canonical_formats.format_options import FormatKindNotInClosedSetError
@@ -132,6 +132,9 @@ from src.core.exceptions import (
 from src.core.operator_errors import OperatorRefusal
 from src.core.schemas import Format, FormatOptionIdentity, FormatSelector
 from src.core.traffic_carrier import TrafficSize, TrafficSizeRange
+
+if TYPE_CHECKING:
+    from src.core.format_resolver import FormatContract
 
 logger = logging.getLogger(__name__)
 
@@ -2796,7 +2799,7 @@ def _fills(
 
 
 def creatives_uncovered(
-    creatives: Sequence[tuple[Any, Collection[str] | None]], product: Any
+    creatives: Sequence[tuple[Any, Collection[str] | None]], product: Any, *, contract: FormatContract
 ) -> FormatSatisfaction | None:
     """The first included placement a package's creative set leaves uncovered, or None.
 
@@ -2812,8 +2815,10 @@ def creatives_uncovered(
     *creatives* is that set: each stored creative row with the ``placement_ids`` its
     assignment routes it to, None for an assignment that names none ("When omitted, the
     creative is eligible for all placements", ``sync-creatives-request.json``). *product* is
-    the product ORM row: its ``format_contract`` and its stored ``placements`` documents, the
-    two things the create-time selector gate reads off the same row.
+    the product ORM row, whose stored ``placements`` documents the create-time selector gate
+    reads too. *contract* is the format contract the package is held to: the product's
+    ``format_contract`` when it is being booked or assigned now, the contract it was booked on
+    when an approval or a push replays it (``format_resolver.booked_format_contract``).
 
     A creative covers a placement when it is routed there and satisfies the placement's
     effective set, asked of :func:`creative_satisfies` -- the one creative validator, manifest
@@ -2836,7 +2841,6 @@ def creatives_uncovered(
     # The product's upper bound and included placements, read exactly as a package selector
     # reads them -- which is what makes this the selector rule's twin rather than a second
     # reading of the product.
-    contract = product.format_contract
     bound = resolve_routes(
         (),
         contract.format_options,
@@ -3613,6 +3617,7 @@ def require_covered(
     creatives: Sequence[tuple[Any, Collection[str] | None]],
     product: Any,
     *,
+    contract: FormatContract,
     field: str | None = None,
     **entity: Any,
 ) -> None:
@@ -3623,7 +3628,7 @@ def require_covered(
     ``sync_creatives`` assignments, and ``update_media_buy``'s ``creative_ids`` and
     ``creative_assignments``. ``entity`` names the package and product the refusal is about.
     """
-    verdict = creatives_uncovered(creatives, product)
+    verdict = creatives_uncovered(creatives, product, contract=contract)
     if verdict is not None:
         raise creative_refusal(verdict, field=field, **entity)
 

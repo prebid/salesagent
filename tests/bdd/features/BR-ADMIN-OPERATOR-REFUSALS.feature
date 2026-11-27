@@ -541,7 +541,7 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
   # conflicts with booking it (409). An ad server that fails the booking is another system
   # that failed (502).
 
-  @T-ADMIN-REFUSAL-044 @json @media-buy-approval
+  @T-ADMIN-REFUSAL-045 @json @media-buy-approval
   Scenario: A media buy whose creative its product refuses is refused at approval with the creative's error lines
     Given another tenant of this seller, holding a media buy awaiting approval whose product accepts images of 728x90
     And that media buy's package is assigned the approved 300x250 image creative "cr_approval_misfit"

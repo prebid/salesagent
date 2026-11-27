@@ -1954,6 +1954,34 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # create path, so a transport that persisted a malformed one would be caught. It is not
     # four approval executions, and nothing here pretends otherwise.
 
+  @T-UC-FORMAT-SATISFACTION-approval-books-creative-on-booked-contract @format_satisfaction @requires_db
+  Scenario Outline: approving a parked buy books its creative against the contract it was booked on - <selector>
+    Given the seller declares a canonical format option "fixed_300x250"
+    And the tenant requires manual approval
+    And the buyer's package selects "<selector>"
+    And the buyer assigns canonical "image" creative "cr_mrec" carrying the "image_300x250" manifest
+    And the Buyer Agent sent the create_media_buy request
+    And the seller then republishes that option fixed at 728x90
+    When the publisher approves the parked buy
+    Then the approval executes the order
+    And the ad server's creative manager receives creative "cr_mrec" sized "300x250"
+
+    # create_media_buy.mdx (v3.2.7) line 339: "validation and serving use the package-time
+    # contract, never mutable Product discovery". get-media-buys-response.json line 655:
+    # "readback, assignment, and serving never fall back to a mutable live Product
+    # declaration". The creative fits the 300x250 option the buy was booked on, and not the
+    # 728x90 the product was republished at, so checking it against the live product
+    # refuses the approval.
+    #
+    # Both rows hold: a package that selected the option records it in formats_to_provide,
+    # and a package that named no selector ("omitting both selects all formats supported
+    # by the product", media-buy/package-request.json) records the product's whole contract
+    # internally, off the wire.
+    Examples:
+      | selector           |
+      | product_option_ref |
+      | no_selector        |
+
   @T-UC-FORMAT-SATISFACTION-approval-unsnapshotted-canonical-only @format_satisfaction @requires_db
   Scenario: approving a parked buy with no recorded snapshot places a canonical-only product on its declarations
     Given the seller declares a canonical format option "fixed_300x250" and no format_ids
