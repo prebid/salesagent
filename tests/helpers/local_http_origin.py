@@ -29,6 +29,22 @@ from threading import Thread
 from time import sleep as _sleep
 from typing import Any, ClassVar
 
+
+def guarded_origin[OriginValue](
+    guard: Callable[[str, Callable[[], None]], None],
+    label: str,
+    context: contextlib.AbstractContextManager[OriginValue],
+) -> OriginValue:
+    """Enter one origin and register its release with the owning harness."""
+    origin = context.__enter__()
+
+    def close() -> None:
+        context.__exit__(None, None, None)
+
+    guard(label, close)
+    return origin
+
+
 # Default body for a programmable origin that a test never configures.
 _DEFAULT_BODY = b'{"ok": true}'
 
@@ -268,6 +284,7 @@ class LocalOrigin:
     host: str = "127.0.0.1"
     port: int = 0
     scheme: str = "http"
+    public_host: str | None = None
     requests: list[OriginRequest] = field(default_factory=list)
 
     # Programmable response state. ``mode`` selects which branch the handler takes.
@@ -283,13 +300,14 @@ class LocalOrigin:
     sequence: list[OriginResponse] = field(default_factory=list)
 
     @property
+    def address(self) -> str:
+        """The advertised host and port, independent of the listening interface."""
+        return f"{self.public_host or self.host}:{self.port}"
+
+    @property
     def base_url(self) -> str:
-        """``{scheme}://host:port`` — no trailing slash. ``scheme`` defaults to plain ``http``;
-        callers running the origin over TLS (see :func:`run_local_origin`'s ``ssl_context``)
-        set it to ``https`` so assertions and URLs built from this origin agree with what
-        actually went over the wire.
-        """
-        return f"{self.scheme}://{self.host}:{self.port}"
+        """The advertised origin URL, without a trailing slash."""
+        return f"{self.scheme}://{self.address}"
 
     @property
     def hits(self) -> int:
@@ -578,7 +596,7 @@ class ProgrammableOriginHandler(BaseHTTPRequestHandler):
 
 @contextlib.contextmanager
 def run_local_origin(
-    *, listen_host: str = "127.0.0.1", ssl_context: ssl.SSLContext | None = None
+    *, listen_host: str = "127.0.0.1", ssl_context: ssl.SSLContext | None = None, public_host: str | None = None
 ) -> Iterator[LocalOrigin]:
     """Run a programmable local origin and yield its control surface.
 
@@ -590,7 +608,9 @@ def run_local_origin(
     report ``https`` accordingly — existing callers that never pass it keep the
     plain-``http`` origin unchanged.
     """
-    origin = LocalOrigin(host=listen_host, scheme="https" if ssl_context is not None else "http")
+    origin = LocalOrigin(
+        host=listen_host, public_host=public_host, scheme="https" if ssl_context is not None else "http"
+    )
     with serve_in_thread(
         ProgrammableOriginHandler,
         listen_host=listen_host,

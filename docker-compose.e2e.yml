@@ -457,6 +457,7 @@ services:
     image: nginx:stable
     environment:
       TLS_UPSTREAM: ${TLS_UPSTREAM:-adcp-server:8080}
+      TLS_SIGNALS_UPSTREAM: ${TLS_SIGNALS_UPSTREAM:-tests:9100}
     volumes:
       - ./config/nginx/nginx-tls-test.conf.template:/etc/nginx/templates/tls-test.conf.template:ro
       - ./.test-tls:/app/.test-tls:ro
@@ -513,6 +514,7 @@ services:
           # correct our documents are. Every other seller-side front keeps its
           # *.adcp.test name; only the one a buyer RESOLVES us by needs this.
           - seller.adcp-e2e.dev
+          - signals.adcp-e2e.dev
           # The storyboard agent, fronted here for A2A's sake. A2A is card-first:
           # the runner reads the RPC endpoint off /.well-known/agent-card.json, and
           # the card renders https for any non-loopback host (src/app.py

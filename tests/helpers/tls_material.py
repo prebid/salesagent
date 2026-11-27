@@ -12,18 +12,19 @@ from __future__ import annotations
 import importlib.util
 import os
 import ssl
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
 
-from tests.helpers.local_http_origin import run_local_origin
+from tests.helpers.local_http_origin import guarded_origin, run_local_origin
 
 if TYPE_CHECKING:
     from http.server import ThreadingHTTPServer
 
     from tests.helpers.local_http_origin import LocalOrigin
+    from tests.helpers.local_mcp_origin import MCPOrigin
 
 Guard = Callable[[str, Callable[[], None]], None]
 
@@ -49,11 +50,11 @@ def server_ssl_context(gen_test_tls: ModuleType) -> ssl.SSLContext:
     return ctx
 
 
-def _ready_server_context() -> ssl.SSLContext:
-    """The shared leaf, generated or refreshed if needed, as a server-side context."""
+def ready_test_tls() -> ModuleType:
+    """Prepare the shared leaf and CA once, using the common generator."""
     gen_test_tls = load_gen_test_tls()
     gen_test_tls.ensure_test_tls()
-    return server_ssl_context(gen_test_tls)
+    return gen_test_tls
 
 
 def trust_test_ca(guard: Guard) -> None:
@@ -77,21 +78,48 @@ def start_tls_capture_service() -> ThreadingHTTPServer:
     """
     from tests.e2e.webhook_capture_service import start_capture_service
 
-    return start_capture_service(host="127.0.0.1", port=0, ssl_context=_ready_server_context())
+    return start_capture_service(host="127.0.0.1", port=0, ssl_context=server_ssl_context(ready_test_tls()))
 
 
-def start_tls_origin(guard: Guard, label: str) -> LocalOrigin:
-    """Start a local origin serving the shared test leaf over TLS, released through *guard*.
+def start_tls_origin(
+    guard: Guard,
+    label: str,
+    *,
+    listen_host: str = "127.0.0.1",
+    public_host: str | None = None,
+) -> LocalOrigin:
+    """Start one HTTP origin using the shared TLS leaf and the harness lifetime."""
+    return guarded_origin(
+        guard,
+        label,
+        run_local_origin(
+            listen_host=listen_host,
+            public_host=public_host or listen_host,
+            ssl_context=server_ssl_context(ready_test_tls()),
+        ),
+    )
 
-    *guard* is a harness env's ``_guard``: the origin is registered on the line it starts,
-    so whichever path releases the env -- a clean exit or a failed enter -- closes it.
-    """
-    context = run_local_origin(ssl_context=_ready_server_context())
-    origin = context.__enter__()
 
-    def close() -> None:
-        # A cleanup returns nothing: __exit__'s verdict would read as "suppressed".
-        context.__exit__(None, None, None)
+def start_tls_mcp_origin(
+    guard: Guard,
+    label: str,
+    *,
+    tools: Mapping[str, Callable[..., Any]],
+    listen_host: str = "127.0.0.1",
+    public_host: str | None = None,
+) -> MCPOrigin:
+    """Start one MCP origin using the shared TLS leaf and the harness lifetime."""
+    from tests.helpers.local_mcp_origin import run_mcp_origin
 
-    guard(label, close)
-    return origin
+    tls = ready_test_tls()
+    return guarded_origin(
+        guard,
+        label,
+        run_mcp_origin(
+            tools=tools,
+            certfile=tls.SERVER_CERT,
+            keyfile=tls.SERVER_KEY,
+            listen_host=listen_host,
+            public_host=public_host or listen_host,
+        ),
+    )

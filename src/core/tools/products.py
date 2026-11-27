@@ -7,7 +7,6 @@ shared implementation pattern from CLAUDE.md.
 import logging
 import time
 from collections.abc import Iterator
-from datetime import UTC, datetime
 from typing import Any, cast
 
 from adcp.types import PropertyListReference
@@ -19,6 +18,7 @@ from adcp.types.legacy import LegacyProduct as LibraryProduct
 # past its local subclass, which is what that FIXME asked for.
 from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger
+from src.core.database.models import Product as ProductModel
 from src.core.errors.codes import ErrorCode
 from src.core.errors.details import ErrorDetails, PolicyViolationDetails
 from src.core.exceptions import (
@@ -81,7 +81,6 @@ def get_recommended_cpm(product: Product) -> float | None:
 
 
 # Import conversion utilities from dedicated module to avoid circular imports
-from src.core.database.repositories.product import offered_products
 from src.core.product_conversion import convert_product_model_to_schema
 
 
@@ -209,6 +208,20 @@ def _format_declaration_findings(products: list[Product]) -> Iterator[tuple[int,
                 declaration_platform_extensions(declaration), bundled_extension_definitions()
             ):
                 yield index, collision
+
+
+def _visible_to_principal(product: ProductModel, principal_id: str | None, catalogue: dict[str, ProductModel]) -> bool:
+    """A variant always follows its parent's current access policy."""
+    if product.is_dynamic_variant:
+        if product.parent_product_id is None:
+            return False
+        owner = catalogue.get(product.parent_product_id)
+    else:
+        owner = product
+    if owner is None:
+        return False
+    allowed = owner.allowed_principal_ids
+    return not allowed or principal_id in allowed
 
 
 async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) -> GetProductsResponse:
@@ -395,18 +408,24 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
     # Resolve adapter type for delivery_measurement defaults
     tenant_adapter_type = tenant.ad_server
 
+    # Match deployments against the URL advertised by the agent card.
+    from src.services.dynamic_products import generate_variants_for_brief
+
+    await generate_variants_for_brief(tenant.tenant_id, brief_text, tenant.agent_url)
+
     # Query products via repository (tenant-scoped)
     from src.core.database.repositories.uow import ProductUoW
 
     with ProductUoW(tenant.tenant_id) as uow:
-        assert uow.publishers is not None
-        # Once per request: dynamic variants resolve their selectors against these too (#1845).
-        publisher_catalog = uow.publishers.catalog(datetime.now(UTC))
+        offers = uow.list_offered()
+        catalogue = {offer.product.product_id: offer.product for offer in offers}
 
         # Convert the offered database Product models to AdCP Product schema
         products = []
-        for offered in uow.list_offered():
+        for offered in offers:
             product_obj = offered.product
+            if not _visible_to_principal(product_obj, principal_id, catalogue):
+                continue
             try:
                 validated_product = convert_product_model_to_schema(
                     product_obj, adapter_type=tenant_adapter_type, publisher_properties=offered.publisher_properties
@@ -424,40 +443,6 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
                 raise AdCPInternalError() from e
 
     logger.info(f"[GET_PRODUCTS] Got {len(products)} products from database for tenant {tenant.tenant_id}")
-
-    # Filter products by principal access control
-    # Products with allowed_principal_ids set are only visible to those specific principals
-    # Products with null/empty allowed_principal_ids are visible to all (default)
-    if principal_id:
-        filtered_by_access = []
-        for product in products:
-            # Check if product has access restrictions
-            allowed_ids = getattr(product, "allowed_principal_ids", None)
-            if allowed_ids is None or len(allowed_ids) == 0:
-                # No restrictions - visible to all
-                filtered_by_access.append(product)
-            elif principal_id in allowed_ids:
-                # Principal is in the allowed list
-                filtered_by_access.append(product)
-            else:
-                # Principal not in allowed list - skip this product
-                logger.debug(f"Product {product.product_id} hidden from principal {principal_id} (not in allowed list)")
-        products = filtered_by_access
-        logger.info(f"[GET_PRODUCTS] After principal access filtering: {len(products)} products")
-    else:
-        # No principal authenticated - only show unrestricted products
-        # This handles anonymous/discovery requests
-        filtered_by_access = []
-        for product in products:
-            allowed_ids = getattr(product, "allowed_principal_ids", None)
-            if allowed_ids is None or len(allowed_ids) == 0:
-                # No restrictions - visible to anonymous users
-                filtered_by_access.append(product)
-            else:
-                # Product has restrictions - hide from anonymous users
-                logger.debug(f"Product {product.product_id} hidden from anonymous user (has access restrictions)")
-        products = filtered_by_access
-        logger.info(f"[GET_PRODUCTS] After anonymous access filtering: {len(products)} products")
 
     # Filter products by buyer property list (if provided)
     # Use isinstance check to safely handle mock objects in tests
@@ -480,51 +465,6 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
             f"[GET_PRODUCTS] After property list filtering: {len(products)} products "
             f"(allowed {len(allowed_set)} properties)"
         )
-
-    # Generate dynamic product variants from signals agents
-    try:
-        from src.services.dynamic_products import generate_variants_for_brief
-
-        # A signals agent records its deployments against a ``destination.agent_url``, which
-        # declares "format": "uri" (core/destination.json), and
-        # ``extract_activation_key`` picks ours by comparing that string to this one. So it
-        # is the URL the agent card publishes — the one accessor, so the two cannot name
-        # different agents — never the bare host, which carries no scheme and may carry a
-        # port and therefore matches no URI at all.
-        #
-        # Ungraded through this tool today: the conversion further down raises
-        # DetachedInstanceError on the rows the generator hands back, so no variant reaches a
-        # response at all (#2291).
-        our_agent_url = tenant.agent_url
-
-        dynamic_variants = await generate_variants_for_brief(tenant.tenant_id, brief_text, our_agent_url)
-        if dynamic_variants:
-            # Convert Product models to Product schemas for response
-
-            for offered_variant in offered_products(dynamic_variants, publisher_catalog):
-                products.append(
-                    convert_product_model_to_schema(
-                        offered_variant.product,
-                        adapter_type=tenant_adapter_type,
-                        publisher_properties=offered_variant.publisher_properties,
-                    )
-                )
-
-            logger.info(f"[GET_PRODUCTS] Added {len(dynamic_variants)} dynamic product variants")
-    except (ImportError, RuntimeError, OSError) as e:
-        # structural-guard: fail-open is conformant at AdCP.
-        # get-products-response.json requires `errors` ONLY in its `if status ==
-        # "failed"` branch; on a completed response the field carries no emission
-        # condition. The nearest grading obligation is
-        # dist/compliance/<pin>/universal/stale-response-advisory.yaml (required_tools:
-        # [get_products]), which puts STALE_RESPONSE in errors[] on a populated success
-        # — but it requires details.served_from_cache + cache_age_seconds and scopes
-        # itself to serving CACHE past its freshness target, which this path does not
-        # do (nothing cached is served; enrichment is simply absent).
-        # If this is ever surfaced, the correct field is `incomplete[]` with
-        # scope="products" ("not all inventory sources were searched"), NOT errors[].
-        # That is a product decision needing its own grounding, not a defect fix.
-        logger.warning(f"Failed to generate dynamic product variants: {e}. Continuing with static products only.")
 
     logger.info(f"[GET_PRODUCTS] Total products (static + dynamic): {len(products)}")
 

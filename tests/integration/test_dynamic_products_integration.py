@@ -28,7 +28,7 @@ from src.services.dynamic_products import (
     generate_variants_for_brief,
     generate_variants_from_signals,
 )
-from tests.factories import InventoryProfileFactory, ProductFactory, TenantFactory
+from tests.factories import InventoryProfileFactory, ProductFactory, SignalFactory, TenantFactory
 from tests.harness._base import IntegrationEnv
 
 # ---------------------------------------------------------------------------
@@ -257,29 +257,14 @@ def _make_signal(
     key: str = "audience",
     value: str = "premium",
 ) -> dict:
-    """Create a realistic signal dict matching signals agent response format."""
-    activation_key = (
-        {"type": key_type, "key": key, "value": value}
-        if key_type == "key_value"
-        else {"type": key_type, "segment_id": value}
+    return SignalFactory.payload(
+        signal_agent_segment_id=segment_id,
+        name=name,
+        agent_url=our_url,
+        key_type=key_type,
+        key=key,
+        value=value,
     )
-    return {
-        "signal_agent_segment_id": segment_id,
-        "name": name,
-        "description": f"Description for {name}",
-        "data_provider": "TestProvider",
-        "coverage_percentage": 85.0,
-        "deployments": [
-            {
-                "type": "platform",
-                "platform": "web",
-                "is_live": True,
-                "deployed_at": "2025-01-01T00:00:00Z",
-                "destination": {"agent_url": our_url},
-                "activation_key": activation_key,
-            }
-        ],
-    }
 
 
 def _make_template(tenant, product_id: str = "template_1"):
@@ -290,7 +275,7 @@ def _make_template(tenant, product_id: str = "template_1"):
         name="Dynamic Template",
         description="Template for variants",
         delivery_measurement={"provider": "publisher", "notes": "Test"},
-        is_dynamic=True,
+        dynamic_template=True,
         signals_agent_ids=["agent_1"],
         max_signals=10,
         variant_ttl_days=30,
@@ -334,6 +319,7 @@ class TestGenerateVariantsFromSignals:
         assert "Premium" in v.name
         assert v.activation_key is not None
         assert v.signal_metadata["signal_agent_segment_id"] == "seg_1"
+        assert v.expires_at - v.last_synced_at == timedelta(days=template.variant_ttl_days)
         factory_env._session.commit()
 
     def test_updates_existing_variant(self, factory_env):
@@ -398,13 +384,13 @@ class TestGenerateVariantsForBrief:
     """generate_variants_for_brief is the top-level pipeline entry point."""
 
     @pytest.mark.asyncio
-    async def test_no_templates_returns_empty(self, factory_env):
-        """Returns empty list when no dynamic templates exist."""
+    async def test_no_templates_persists_nothing(self, factory_env):
+        """Persists nothing when no dynamic templates exist."""
         TenantFactory(tenant_id="test-gvfb-none", subdomain="gvfb-none")
         factory_env._commit_factory_data()
 
         result = await generate_variants_for_brief("test-gvfb-none", "test brief")
-        assert result == []
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_templates_with_signals_creates_variants(self, factory_env):
@@ -415,8 +401,17 @@ class TestGenerateVariantsForBrief:
 
         mock_signals = [_make_signal(name="Auto Intenders")]
 
+        from src.core.database.database_session import get_engine
+
+        pool = get_engine().pool
+        before = pool.checkedout()
+
+        async def external_signals(**kwargs):
+            assert pool.checkedout() == before, "generation held a DB connection during remote I/O"
+            return mock_signals
+
         mock_registry = AsyncMock()
-        mock_registry.get_signals = AsyncMock(return_value=mock_signals)
+        mock_registry.get_signals = AsyncMock(side_effect=external_signals)
 
         with patch(
             "src.services.dynamic_products.get_signals_agent_registry",
@@ -426,8 +421,9 @@ class TestGenerateVariantsForBrief:
                 "test-gvfb-full", "automotive ads", "https://our.example.com/mcp"
             )
 
-        assert len(result) >= 1
-        # Variants are detached from session -- verify via DB read-back
+        mock_registry.get_signals.assert_awaited_once()
+        assert result is None
+        # Generation writes only. Read back persisted variants.
         from sqlalchemy import select
 
         from src.core.database.database_session import get_db_session
@@ -440,26 +436,8 @@ class TestGenerateVariantsForBrief:
             assert any("Auto Intenders" in v.name for v in variants)
 
     @pytest.mark.asyncio
-    async def test_registry_error_returns_empty(self, factory_env):
-        """Pipeline catches registry errors and returns empty list."""
-        tenant = TenantFactory(tenant_id="test-gvfb-err", subdomain="gvfb-err")
-        _make_template(tenant)
-        factory_env._commit_factory_data()
-
-        mock_registry = AsyncMock()
-        mock_registry.get_signals = AsyncMock(side_effect=RuntimeError("Connection refused"))
-
-        with patch(
-            "src.services.dynamic_products.get_signals_agent_registry",
-            return_value=mock_registry,
-        ):
-            result = await generate_variants_for_brief("test-gvfb-err", "brief")
-
-        assert result == []
-
-    @pytest.mark.asyncio
-    async def test_empty_signals_returns_empty(self, factory_env):
-        """Pipeline returns empty list when signals agent returns no signals."""
+    async def test_empty_signals_persists_nothing(self, factory_env):
+        """Pipeline persists nothing when the signals agent returns no signals."""
         tenant = TenantFactory(tenant_id="test-gvfb-empty", subdomain="gvfb-empty")
         _make_template(tenant)
         factory_env._commit_factory_data()
@@ -473,7 +451,7 @@ class TestGenerateVariantsForBrief:
         ):
             result = await generate_variants_for_brief("test-gvfb-empty", "brief")
 
-        assert result == []
+        assert result is None
 
 
 class TestArchiveExpiredVariants:
@@ -558,7 +536,6 @@ class TestCreateVariantFromTemplate:
         assert variant.parent_product_id == "template_1"
         assert variant.activation_key == ak
         assert variant.signal_metadata["name"] == "Premium Users"
-        assert variant.expires_at is not None
 
     def test_a_canonically_authored_template_produces_variants_that_carry_its_declarations(self, factory_env):
         """The variant inherits the CANONICAL format arm, not only the deprecated one.
@@ -593,13 +570,7 @@ class TestCreateVariantFromTemplate:
         assert variant.format_ids is None
 
     def test_a_profile_linked_template_produces_variants_that_carry_its_profiles_declarations(self, factory_env):
-        """The variant takes the template's CONTRACT, which a linked profile supplies.
-
-        A template linked to an inventory profile is served the profile's declarations
-        (``Product.format_contract``), and the variant does not carry the link. The
-        template's own arms differ from the profile's here, so a copy of the template's
-        columns hands the variant a contract the template was never served.
-        """
+        """The persisted variant follows its inherited profile, without a format snapshot."""
         tenant = TenantFactory(tenant_id="test-cvft-profile", subdomain="cvft-profile")
         profile_declarations = [{"format_kind": "image", "params": {"width": 728, "height": 90}}]
         profile = InventoryProfileFactory(tenant=tenant, format_ids=None, format_options=profile_declarations)
@@ -616,5 +587,18 @@ class TestCreateVariantFromTemplate:
             "video ads",
         )
 
-        assert variant.format_options == profile_declarations
-        assert variant.format_ids is None
+        _products(factory_env, template).create(variant)
+        factory_env.get_session().flush()
+        assert variant.inventory_profile_id == profile.id
+        assert list(variant.format_contract.format_options) == profile_declarations
+
+
+def test_generation_propagates_a_foreign_template_tenant_guard(factory_env):
+    """A repository ownership defect cannot become an empty successful catalogue."""
+    own_tenant = factory_env.ensure_tenant()
+    other_tenant = TenantFactory()
+    template = _make_template(other_tenant)
+    repository = ProductRepository(factory_env.get_session(), own_tenant.tenant_id)
+
+    with pytest.raises(ValueError, match="tenant"):
+        generate_variants_from_signals(repository, template, [_make_signal()], "brief", "https://our.example.com/mcp")

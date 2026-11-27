@@ -73,6 +73,16 @@ class ProductFactory(SellsPublishersMixin, factory.alchemy.SQLAlchemyModelFactor
         sqlalchemy_session = None
         sqlalchemy_session_persistence = "commit"
 
+    class Params:
+        properties = factory.LazyFunction(default_publisher_properties)
+        dynamic_template = factory.Trait(
+            is_dynamic=True,
+            signals_agent_ids=factory.LazyFunction(lambda: ["agent_1"]),
+            max_signals=10,
+            variant_ttl_days=30,
+            template_pricing=factory.RelatedFactory("tests.factories.product.PricingOptionFactory", "product"),
+        )
+
     tenant = SubFactory(TenantFactory)
     tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
     product_id = Sequence(lambda n: f"prod_{n:04d}")
@@ -106,9 +116,6 @@ class ProductFactory(SellsPublishersMixin, factory.alchemy.SQLAlchemyModelFactor
     # selection rows, each publisher created first (SellsPublishersMixin).
     publisher_selections = LazyAttribute(lambda o: ProductPublisherSelection.from_selectors(o.tenant_id, o.properties))
 
-    class Params:
-        properties = factory.LazyFunction(default_publisher_properties)
-
     @factory.post_generation
     def authorize_publisher(obj, create, extracted, **kwargs):  # noqa: N805 -- factory_boy hook
         """Store the default publisher's document authorizing the seller, for a product naming it.
@@ -120,6 +127,13 @@ class ProductFactory(SellsPublishersMixin, factory.alchemy.SQLAlchemyModelFactor
         """
         if create and extracted is not False and obj.stored_publisher_properties == default_publisher_properties():
             authorize_publishers(obj.tenant, DEFAULT_PUBLISHER_DOMAIN)
+
+    @classmethod
+    def _adjust_kwargs(cls, **kwargs):
+        # An explicit tenant_id can name an existing tenant without attaching a relationship.
+        if kwargs.get("tenant") is None and kwargs.get("tenant_id") is not None:
+            kwargs.pop("tenant", None)
+        return kwargs
 
 
 def store_channel_residue(product: Product, channels: list[str]) -> None:

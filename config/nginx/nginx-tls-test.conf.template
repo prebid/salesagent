@@ -7,8 +7,9 @@
 # This file is a conf.d SNIPPET rendered by the stock nginx:stable entrypoint
 # (NGINX_ENVSUBST_TEMPLATE_DIR), so the image needs no Dockerfile of its own.
 #
-# ${TLS_UPSTREAM} is the ONLY substitution — nginx's own $variables are written
-# without braces, which envsubst leaves alone. This ONE template serves THREE
+# ${TLS_UPSTREAM} sets the default destination; ${TLS_SIGNALS_UPSTREAM} sets
+# the signals listener. Nginx's own $variables have no braces and remain intact.
+# Every launcher supplies both values. This template serves three
 # call sites (salesagent-amht.2):
 #   - the shared stack's default `tls-proxy` instance — every dotted alias it
 #     carries is routed by the $ssl_server_name map below, not by
@@ -95,6 +96,7 @@ map $ssl_server_name $tls_upstream_named {
 
     webhooks.adcp-e2e.dev      webhook-capture:8080;
     counterparty.adcp-e2e.dev  counterparty-origin:8080;
+    signals.adcp-e2e.dev       tests:9100;
 
     # The SELLER, under the same wildcard and for the same eTLD+1 reason as the
     # counterparty above — a SECOND name for the `proxy.adcp.test` upstream, not a
@@ -162,6 +164,11 @@ server {
     set $tls_upstream $tls_upstream_named;
     if ($tls_upstream = "") {
         set $tls_upstream $tls_upstream_fallback;
+    }
+    # Workers share the runner but each has its own plaintext MCP listener.
+    # Their existing TLS sidecar routes this path to that worker's port.
+    if ($uri = /signals/mcp) {
+        set $tls_upstream "${TLS_SIGNALS_UPSTREAM}";
     }
 
     # Health — proxied to the upstream so it reflects app readiness, not nginx's.

@@ -58,6 +58,7 @@ from tests.factories.request import (
     SyncAccountsRequestFactory,
     SyncCreativesRequestFactory,
 )
+from tests.factories.signal import SignalFactory
 from tests.factories.signing import SigningKeyFactory
 from tests.factories.targeting import (
     CollectionListReferenceFactory,
@@ -148,6 +149,7 @@ __all__ = [
     "PublisherFactory",
     "PushNotificationConfigFactory",
     "SignalsAgentFactory",
+    "SignalFactory",
     "SigningKeyFactory",
     "SyncAccountsRequestFactory",
     "SyncCreativesRequestFactory",

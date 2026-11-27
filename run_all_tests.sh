@@ -713,8 +713,10 @@ if [ "${E2E_WORKERS:-0}" -gt 0 ] 2>/dev/null; then
         # handshake probe below is what turns it into a diagnosable failure
         # instead of a mystery. COMPOSE_PROJECT_NAME never contains a dot, so the
         # name is exactly one label under the leaf's `*.adcp.test` SAN.
+        _signals_port="$(python3 -c 'import sys; from tests.helpers.signals_origin import signals_origin_port; print(signals_origin_port(int(sys.argv[1])))' "$i")"
         dc run -d --no-deps --name "${COMPOSE_PROJECT_NAME}-tls-gw$i.adcp.test" \
-            -e TLS_UPSTREAM="${COMPOSE_PROJECT_NAME}-server-gw$i:8080" tls-proxy >/dev/null
+            -e TLS_UPSTREAM="${COMPOSE_PROJECT_NAME}-server-gw$i:8080" \
+            -e TLS_SIGNALS_UPSTREAM="tests:$_signals_port" tls-proxy >/dev/null
     done
     echo "  waiting for $N per-worker servers to become healthy..."
     # Same fail-fast reasoning as the template-migration check above: a worker

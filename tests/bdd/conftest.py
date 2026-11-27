@@ -112,6 +112,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc_get_products_pricing",
     "tests.bdd.steps.domain.uc_get_products_publisher_domain",
     "tests.bdd.steps.domain.uc001_discovery",
+    "tests.bdd.steps.domain.uc_get_products_dynamic",
     "tests.bdd.steps.domain.uc_get_products_format_options",
     "tests.bdd.steps.domain.uc_get_products_format_id_filter",
     "tests.bdd.steps.domain.uc_get_products_canonical_format_filters",
@@ -5801,12 +5802,25 @@ def e2e_stack():
         postgres_url = (
             f"postgresql://adcp_user:secure_password_change_me@localhost:{os.environ.get('POSTGRES_PORT', '5435')}/adcp"
         )
+    from urllib.parse import urlsplit
+
+    from tests.helpers.signals_origin import signals_origin_port
+
+    worker_index = int(worker[2:]) if os.environ.get("E2E_PER_WORKER") == "1" and worker else None
+    signals_origin = None
+    if tls_base_url:
+        if worker_index is None:
+            signals_origin = f"https://signals.adcp-e2e.dev:{urlsplit(tls_base_url).port or 443}/mcp"
+        else:
+            signals_origin = f"{tls_base_url}/signals/mcp"
     return E2EConfig(
         base_url=base_url,
         postgres_url=postgres_url,
         tls_base_url=tls_base_url,
         ca_bundle=ca_bundle,
         server_host=server_host,
+        signals_origin=signals_origin,
+        signals_port=signals_origin_port(worker_index),
     )
 
 
@@ -6759,6 +6773,11 @@ _UC006_WIRED_SCENARIOS = frozenset(
 )
 
 ENV_ROUTES: list[EnvRoute] = [
+    EnvRoute(
+        tag="dynamic-catalog",
+        when=lambda markers: "dynamic-catalog" in markers,
+        env_builder=_env("tests.harness.dynamic_products.DynamicProductEnv"),
+    ),
     # ── ADMIN (hand-authored admin UI features) ─────────────────────────────
     # T-ADMIN-* detects as the ADMIN bucket (storyboard_spec.detect_uc); the
     # bucket row serves BR-ADMIN-ACCOUNTS. BR-ADMIN-TENANT-SCOPING carries the

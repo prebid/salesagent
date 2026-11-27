@@ -29,8 +29,8 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, MediaPackage, ProductPublisherSelection, Tenant
 from tests.fixtures import TenantFactory
 from tests.helpers.local_http_origin import run_local_origin
-from tests.helpers.local_mcp_origin import MCPOrigin, run_mcp_origin
-from tests.helpers.tls_material import load_gen_test_tls, server_ssl_context
+from tests.helpers.local_mcp_origin import MCPOrigin
+from tests.helpers.tls_material import ready_test_tls, server_ssl_context, start_tls_mcp_origin, trust_test_ca
 from tests.integration.migration_helpers import parse_postgres_url
 from tests.utils.database_helpers import vhost_for
 
@@ -100,8 +100,7 @@ def local_origin_tls(monkeypatch):
     Callers that need a plain-http origin (refusal tests, e.g. verifying a
     URL is never dialled) keep using :func:`local_origin` unchanged.
     """
-    gen_test_tls = load_gen_test_tls()
-    gen_test_tls.ensure_test_tls()
+    gen_test_tls = ready_test_tls()
     monkeypatch.setenv("SSL_CERT_FILE", str(gen_test_tls.COMBINED_CERT))
     with run_local_origin(ssl_context=server_ssl_context(gen_test_tls)) as origin:
         yield origin
@@ -118,20 +117,15 @@ def mcp_origin_tls(monkeypatch):
     own — a fixture cannot know whether the tool under test succeeds, fails, or
     fails only the first time.
     """
-    gen_test_tls = load_gen_test_tls()
-    gen_test_tls.ensure_test_tls()
-    monkeypatch.setenv("SSL_CERT_FILE", str(gen_test_tls.COMBINED_CERT))
-
     with ExitStack() as stack:
 
+        def guard(label, cleanup):
+            stack.callback(cleanup)
+
+        trust_test_ca(guard)
+
         def start(**tools) -> MCPOrigin:
-            return stack.enter_context(
-                run_mcp_origin(
-                    tools=tools,
-                    certfile=gen_test_tls.SERVER_CERT,
-                    keyfile=gen_test_tls.SERVER_KEY,
-                )
-            )
+            return start_tls_mcp_origin(guard, "mcp_origin", tools=tools)
 
         yield start
 

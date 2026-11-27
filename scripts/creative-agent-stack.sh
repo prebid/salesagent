@@ -453,6 +453,7 @@ cmd_up() {
         docker rm -f "$TLS_PROXY" >/dev/null 2>&1 || true
         docker run -d --network "$NET" --name "$TLS_PROXY" -p "${TLS_PORT}:8443" \
             -e TLS_UPSTREAM="${AGENT}:8080" \
+            -e TLS_SIGNALS_UPSTREAM="${AGENT}:8080" \
             -v "$(pwd)/config/nginx/nginx-tls-test.conf.template:/etc/nginx/templates/tls-test.conf.template:ro" \
             -v "$(pwd)/.test-tls:/app/.test-tls:ro" \
             nginx:stable >/dev/null
