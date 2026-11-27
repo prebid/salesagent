@@ -107,8 +107,9 @@ def test_blob_rule_fails_closed_on_a_name_the_model_does_not_declare() -> None:
             "not_a_declared_field",
             model=GetMediaBuysPackage,
             model_field="not_a_declared_field",
-            subject="package 'p' on media buy 'm'",
-            field_path="media_buys[].packages[p].not_a_declared_field",
+            media_buy_id="m",
+            package_id="p",
+            field_path="media_buys[0].packages[0].not_a_declared_field",
             advisories=advisories,
         )
     assert advisories == []

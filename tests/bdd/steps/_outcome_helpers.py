@@ -215,10 +215,24 @@ def assert_by_package_exactly(
                 assert actual == value, f"by_package {package_id!r} {column}: expected {value!r}, got {actual!r}"
 
 
-def _locate_entry(ctx: dict, collection: str, index: int | None, match: dict[str, Any]) -> dict:
+def wire_matching_entries(entries: list, **match: Any) -> list[dict]:
+    """Match captured entries by dotted fields, retaining zero or multiple matches.
+
+    A nested field below a missing or null object is absent, as in ``wire_lookup``.
+    Callers asserting absence keep the list; exact-one readers use ``_locate_entry``.
+    """
+    assert isinstance(entries, list), f"expected a JSON array on the wire: {entries!r}"
+    assert match, "matching wire entries requires a field to match on"
+    return [
+        entry for entry in entries if isinstance(entry, dict) and all(_dig(entry, k) == v for k, v in match.items())
+    ]
+
+
+def _locate_entry(entries: list, collection: str, index: int | None, match: dict[str, Any]) -> dict:
     """The one locator for a per-entry read inside a SUCCESS envelope.
 
-    Sole implementation behind :func:`wire_entry` and :func:`wire_entry_errors` —
+    Sole implementation behind :func:`wire_entry`, :func:`wire_entry_errors` and
+    :func:`wire_advisory` —
     two copies of the "find the row, or say what rows there were" logic is exactly
     the duplication the canonical-helper rule exists to prevent.
 
@@ -227,11 +241,16 @@ def _locate_entry(ctx: dict, collection: str, index: int | None, match: dict[str
     did carry makes an off-by-one identifier or an unexpected partial-failure row
     obvious from the output alone.
     """
-    entries = wire_field(ctx, collection)
     assert isinstance(entries, list), f"{collection!r} is not a JSON array on the wire: {entries!r}"
 
     def _present() -> list:
-        return [{k: e.get(k) for k in ("account_id", "buyer_ref", "creative_id", "action") if k in e} for e in entries]
+        fields = ("account_id", "buyer_ref", "creative_id", "action", *match)
+        return [
+            {key: value for key in fields if (value := _dig(entry, key)) is not WIRE_MISSING}
+            if isinstance(entry, dict)
+            else entry
+            for entry in entries
+        ]
 
     if index is not None:
         assert 0 <= index < len(entries), (
@@ -240,7 +259,7 @@ def _locate_entry(ctx: dict, collection: str, index: int | None, match: dict[str
         entry = entries[index]
     else:
         assert match, f"wire_entry({collection!r}) needs either index= or a field to match on"
-        matched = [e for e in entries if isinstance(e, dict) and all(_dig(e, k) == v for k, v in match.items())]
+        matched = wire_matching_entries(entries, **match)
         assert matched, f"no {collection} entry matching {match!r}; the wire carried: {_present()}"
         assert len(matched) == 1, f"{match!r} matched {len(matched)} {collection} entries, expected exactly one"
         entry = matched[0]
@@ -265,7 +284,7 @@ def wire_entry(ctx: dict, collection: str, *, index: int | None = None, **match:
     the count (``len(wire_field(ctx, "accounts")) == 1``) so index 0 is asserted
     rather than assumed. Built on :func:`wire_field`, so it inherits the loud guard.
     """
-    return _locate_entry(ctx, collection, index, match)
+    return _locate_entry(wire_field(ctx, collection), collection, index, match)
 
 
 def _errors_array(errors: Any, what: str) -> list:
@@ -296,7 +315,7 @@ def wire_entry_errors(ctx: dict, collection: str, *, index: int | None = None, *
     reader is sanctioned to replace. The sentence is a function of the entry's CODE through
     CODE_TABLE, so nothing is lost: assert ``code``, ``recovery``, ``field`` or ``details``.
     """
-    entry = _locate_entry(ctx, collection, index, match)
+    entry = _locate_entry(wire_field(ctx, collection), collection, index, match)
     return _errors_array(entry.get("errors") or [], f"{collection} entry errors")
 
 
@@ -344,6 +363,15 @@ def wire_advisory_errors(ctx: dict) -> list:
     stripped for the same reason it is stripped per entry.
     """
     return _errors_array(_wire_body(ctx).get("errors") or [], "response errors")
+
+
+def wire_advisory(entries: list, **match: Any) -> dict:
+    """Locate exactly one advisory in an already-captured errors array.
+
+    BDD steps pass ``wire_advisory_errors(ctx)``; a wire integration test can pass
+    its raw array to retain the original entry, including its message.
+    """
+    return _locate_entry(entries, "errors", None, match)
 
 
 def wire_absent(ctx: dict, path: str) -> None:

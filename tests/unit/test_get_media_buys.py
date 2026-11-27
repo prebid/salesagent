@@ -294,7 +294,7 @@ class TestFetchTargetMediaBuys:
         assert [b.media_buy_id for b in result] == ["buy_good"]
         assert len(self.advisories) == 1
         advisory = self.advisories[0]
-        assert advisory.code == "CONFIGURATION_ERROR"
+        assert advisory.code == "X_PREBID_PERSISTED_VALUE_UNRENDERABLE"
         assert advisory.recovery == "terminal", (
             "a persisted-state defect cannot be retried into success; the advisory must say so"
         )
@@ -303,12 +303,11 @@ class TestFetchTargetMediaBuys:
         # passes for them (ADR-010), so an assertion on ``message`` would grade the
         # table rather than this advisory — and would pass just as well for an advisory
         # that named no row at all, which is exactly the defect it must catch.
-        assert advisory.details["media_buy_id"] == "buy_corrupt", (
+        assert advisory.details == {"media_buy_id": "buy_corrupt"}, (
             "the advisory must name the row it stands in for; a buyer cannot otherwise "
             "tell whether the buy they are looking for is missing or was never there"
         )
-        assert advisory.details["reasons"] == ["MEDIA_BUY_UNRENDERABLE"]
-        assert advisory.field == "media_buys[]"
+        assert advisory.field == "media_buys"
 
     def test_a_null_revision_is_refused_like_a_below_minimum_one(self):
         """The ``revision is None`` operand has an oracle now.
@@ -649,8 +648,7 @@ class TestTargetingOverlayRoundTrip:
         """A single bad package_config row must not crash the response.
 
         Corrupted row → targeting_overlay=None for THAT package + one advisory on
-        ``response.errors`` whose ``details.reasons`` carries
-        ``targeting_rehydration_failed``. The
+        ``response.errors`` whose field and details identify that package. The
         rest of the buy still renders (round-trip resilience). Catches only
         ``TypeError`` (real corruption) — pydantic ``ValidationError`` is
         intentionally NOT caught so dev/CI canary fires on field-declaration
@@ -659,14 +657,17 @@ class TestTargetingOverlayRoundTrip:
         buy = make_media_buy(start_date=date(2020, 1, 1), end_date=date(2099, 12, 31))
         # Bad row: package_config["targeting_overlay"] is a list, not a dict
         # → Targeting(**raw) raises TypeError. Real corruption case.
-        bad_pkg = make_package(package_config={"product_id": "prod_1", "targeting_overlay": ["bogus"]})
+        bad_pkg = make_package(
+            package_id="pkg-bad", package_config={"product_id": "prod_1", "targeting_overlay": ["bogus"]}
+        )
         good_pkg = make_package(
+            package_id="pkg-good",
             package_config={
                 "product_id": "prod_2",
                 "targeting_overlay": {
                     "property_list": {"agent_url": "https://gov.example", "list_id": "v1"},
                 },
-            }
+            },
         )
         patched_internals.buys.return_value = [buy]
         patched_internals.packages.return_value = {"buy_1": [bad_pkg, good_pkg]}
@@ -683,24 +684,15 @@ class TestTargetingOverlayRoundTrip:
         assert good_response_pkg.targeting_overlay.property_list.list_id == "v1"
 
         # Failure surfaced via the response errors channel — buyer can reconcile.
-        # CONFIGURATION_ERROR / recovery "terminal", not the sibling per-creative
-        # advisory's SERVICE_UNAVAILABLE. Selected by lookup rather than by name: the
-        # pin gives SERVICE_UNAVAILABLE recovery "transient", which advises a retry that
-        # can never succeed against a permanently corrupt stored blob. Both halves are
-        # asserted because the code alone cannot carry the claim -- core/error.json makes
-        # error.recovery authoritative and enumMetadata only its documentary mirror, so a
-        # test checking the code would pass with the buyer still told to retry forever.
+        # The terminal platform advisory preserves the listing's success while
+        # distinguishing a corrupt package from a seller deployment failure.
         assert response.errors is not None
         assert len(response.errors) == 1
         err = response.errors[0]
-        assert err.code == "CONFIGURATION_ERROR"
+        assert err.code == "X_PREBID_PERSISTED_VALUE_UNRENDERABLE"
         assert err.recovery == "terminal", "a row the buyer cannot repair must not invite a retry"
-        # The discriminator is ``details.reasons``, not the message: ``message`` is
-        # derived from CODE_TABLE, so no raise site can stamp a
-        # ``TARGETING_REHYDRATION_FAILED:`` prefix into it (salesagent-3dawm).
-        assert err.details is not None
-        assert "targeting_rehydration_failed" in err.details["reasons"]
-        assert err.field is not None and "targeting_overlay" in err.field
+        assert err.details == {"media_buy_id": "buy_1", "package_id": "pkg-bad"}
+        assert err.field == "media_buys[0].packages[0].targeting_overlay"
 
 
 class TestGetMediaBuysResponseStructure:

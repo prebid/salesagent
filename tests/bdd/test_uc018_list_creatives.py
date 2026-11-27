@@ -104,7 +104,8 @@ from tests.bdd.steps._outcome_helpers import (
     assert_listed_format_option_ref,
     assert_listed_on_canonical_kind,
     error_envelope_or_none,
-    require_payload,
+    wire_advisory,
+    wire_advisory_errors,
     wire_dict,
     wire_field,
 )
@@ -2623,36 +2624,17 @@ def then_creative_returned_with_status(ctx: dict, status: str) -> None:
 
 @then(parsers.re(r'exactly one entry in errors\[\] names that creative with code "(?P<code>[A-Z_]+)"'))
 def then_one_advisory_names_the_creative(ctx: dict, code: str) -> None:
-    """The record that could not be fully described is named in the success envelope.
+    """Identify the unreadable creative exactly once in the captured success wire.
 
-    ``errors[]`` is on the SUCCESS path of list-creatives-response.json for exactly this
-    case, so the substitution is only half the obligation: the buyer also has to be told
-    which creative it applies to, or a fabricated status is indistinguishable from a real
-    one.
-
-    Exactly one, because a per-row advisory emitted twice reads as two defective records.
-    The code is asserted and the recovery is not -- recovery is a read-only property over
-    the code table, so it is right whenever the code is right.
+    The seller's persisted-value code carries terminal recovery in the code table;
+    the cross-transport integration case asserts that policy independently.
     """
     creatives = _wire_creatives(ctx)
     assert len(creatives) == 1, f"expected the one seeded creative, got {len(creatives)}"
     creative_id = creatives[0]["creative_id"]
 
-    advisories = [entry for entry in (require_payload(ctx).errors or []) if creative_id in str(entry)]
-    assert len(advisories) == 1, (
-        f"expected exactly one errors[] entry naming creative {creative_id!r}, got {len(advisories)}: "
-        f"{require_payload(ctx).errors!r}"
-    )
-    # ``.code`` directly. ``core/error.json`` makes it required, and this response's
-    # ``errors[]`` holds the library ``core.error.Error``, whose ``code`` is typed ``str`` --
-    # so there is nothing to unwrap and nothing to tolerate. A getattr with a fallback stood
-    # here, which would have survived a missing code; the absence of a required field is a
-    # crash, not a default.
-    assert advisories[0].code == code, (
-        f"advisory code is {advisories[0].code!r}, expected {code!r} — a code outside the wire-standard "
-        "set collapses to SERVICE_UNAVAILABLE, which tells the buyer to retry a row only the seller "
-        "can repair"
-    )
+    advisory = wire_advisory(wire_advisory_errors(ctx), **{"details.creative_id": creative_id})
+    assert advisory["code"] == code, f"advisory code is {advisory['code']!r}, expected {code!r}"
 
 
 @then(

@@ -55,6 +55,7 @@ import pytest
 from adcp.types import CreativeStatus
 
 from src.core.database.repositories.uow import CreativeUoW
+from tests.bdd.steps._outcome_helpers import wire_advisory
 from tests.factories import seeded_format_identity
 from tests.harness import CreativeListEnv
 from tests.harness.transport import Transport
@@ -175,32 +176,28 @@ class TestUnrecognizedStoredStatus:
             )
 
     @pytest.mark.parametrize("transport", _ALL_WIRE)
-    def test_advisory_is_terminal_configuration_error(self, integration_db, transport):
+    def test_advisory_is_terminal_persisted_value_unrenderable(self, integration_db, transport):
         """The advisory must not tell the buyer to retry a permanently bad row.
 
-        ``normalize_advisory_errors`` collapses any non-standard code to
-        ``SERVICE_UNAVAILABLE`` with ``recovery="transient"`` — i.e. "retry me" — which
-        for a seller-side data defect means polling forever.  AdCP 3.1.1
-        ``enums/error-code.json`` gives ``CONFIGURATION_ERROR`` ``recovery: terminal``
-        and the remediation "surface to a human at the seller".
+        AdCP 3.2.7 permits seller-specific codes and requires recovery on every error.
+        This seller's code table classifies unreadable persisted values as terminal:
+        repairing the stored status requires seller action. The processing fallback
+        remains local policy.
         """
         with CreativeListEnv() as env:
-            creative_id, _stored_status = _seed_creative_with_alien_status(env)
+            creative_id, stored_status = _seed_creative_with_alien_status(env)
 
             result = env.call_via(transport)
 
             assert not result.is_error, f"{transport}: listing errored: {result.error!r}"
-            errors = result.wire_response.get("errors") or []
-            advisories = [entry for entry in errors if creative_id in str(entry)]
-            assert len(advisories) == 1, (
-                f"{transport}: expected exactly one advisory naming creative {creative_id}; got {errors!r}"
-            )
-            advisory = advisories[0]
-            assert advisory["code"] == "CONFIGURATION_ERROR", (
-                f"{transport}: advisory code is {advisory['code']!r}; a code outside the wire-standard "
-                f"set collapses to SERVICE_UNAVAILABLE and instructs the buyer to retry a row only the "
-                f"seller can repair"
-            )
+            record = result.wire_response["creatives"][0]
+            assert record["creative_id"] == creative_id
+            assert record["status"] == "processing"
+            advisory = wire_advisory(result.wire_response["errors"], **{"details.creative_id": creative_id})
+            assert advisory["code"] == "X_PREBID_PERSISTED_VALUE_UNRENDERABLE"
+            assert advisory["details"] == {"creative_id": creative_id}
+            assert stored_status not in advisory["message"]
+            assert stored_status not in str(advisory["details"])
             assert advisory["recovery"] == "terminal", (
                 f"{transport}: advisory recovery is {advisory['recovery']!r}, so the buyer is told to "
                 f"retry; a seller-side data defect is terminal for the buyer"

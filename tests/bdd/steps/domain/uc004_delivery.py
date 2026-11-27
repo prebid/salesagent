@@ -28,6 +28,7 @@ from tests.bdd.steps._outcome_helpers import (
     wire_advisory_errors,
     wire_entry,
     wire_field,
+    wire_matching_entries,
 )
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic._table import rows as table_rows
@@ -2088,7 +2089,7 @@ def then_no_error_for_mb(ctx: dict, mb_id: str) -> None:
     ctx-presence check would report a failure for THIS id whenever another id in the
     same response had one.
     """
-    named = [err for err in wire_advisory_errors(ctx) if (err.get("details") or {}).get("media_buy_id") == mb_id]
+    named = wire_matching_entries(wire_advisory_errors(ctx), **{"details.media_buy_id": mb_id})
     assert not named, f"Response errors[] names media buy {mb_id!r}: {named}"
 
 
