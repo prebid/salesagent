@@ -4,6 +4,7 @@ This test file prevents regressions by ensuring every url_for() call in template
 points to an actual route that exists in the application.
 """
 
+import ast
 import re
 from pathlib import Path
 
@@ -81,6 +82,38 @@ class TestTemplateUrlValidation:
                 params[argument] = f"test_{argument}"
         return params
 
+    def unresolvable(self, endpoint, tenant_id="test") -> str | None:
+        """Return the build refusal, using the same parameters for every scan."""
+        try:
+            url_for(endpoint, **self.placeholder_params(endpoint, tenant_id))
+        except BuildError as error:
+            return str(error)
+        return None
+
+    def test_all_python_url_for_calls_resolve(self):
+        """Every literal endpoint in admin Python must build against the live map."""
+        admin_dir = Path(__file__).resolve().parents[2] / "src" / "admin"
+        errors = []
+        with admin_app.test_request_context():
+            for path in admin_dir.rglob("*.py"):
+                for node in ast.walk(ast.parse(path.read_text())):
+                    if not isinstance(node, ast.Call):
+                        continue
+                    name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", None)
+                    if name != "url_for":
+                        continue
+                    endpoint = (
+                        node.args[0]
+                        if node.args
+                        else next((kw.value for kw in node.keywords if kw.arg == "endpoint"), None)
+                    )
+                    if not isinstance(endpoint, ast.Constant) or not isinstance(endpoint.value, str):
+                        continue
+                    error = self.unresolvable(endpoint.value)
+                    if error is not None:
+                        errors.append(f"{path.relative_to(admin_dir)}:{node.lineno}: {error}")
+        assert not errors, "Unresolvable admin endpoints:\n" + "\n".join(errors)
+
     def test_all_template_url_for_calls_resolve(self, authenticated_admin_session, test_tenant_with_data):
         """Test that every url_for call in templates can be resolved."""
         url_for_calls = self.get_all_template_url_for_calls()
@@ -89,15 +122,10 @@ class TestTemplateUrlValidation:
         with admin_app.test_request_context():
             for template_file, calls in url_for_calls.items():
                 for endpoint, params in calls:
-                    try:
-                        test_params = self.placeholder_params(endpoint, test_tenant_with_data["tenant_id"])
-
-                        # Try to build the URL
-                        url = url_for(endpoint, **test_params)
-
-                    except BuildError as e:
+                    error = self.unresolvable(endpoint, test_tenant_with_data["tenant_id"])
+                    if error is not None:
                         errors.append(
-                            {"template": template_file, "endpoint": endpoint, "params": params, "error": str(e)}
+                            {"template": template_file, "endpoint": endpoint, "params": params, "error": error}
                         )
 
         if errors:
@@ -154,11 +182,9 @@ class TestTemplateUrlValidation:
                 relative_path = template_file.relative_to(template_dir)
                 with admin_app.test_request_context():
                     for endpoint in matches:
-                        try:
-                            test_params = self.placeholder_params(endpoint)
-                            url_for(endpoint, **test_params)
-                        except BuildError as e:
-                            form_errors.append({"template": str(relative_path), "endpoint": endpoint, "error": str(e)})
+                        error = self.unresolvable(endpoint)
+                        if error is not None:
+                            form_errors.append({"template": str(relative_path), "endpoint": endpoint, "error": error})
 
         if form_errors:
             error_msg = "Found forms with invalid action endpoints:\n\n"

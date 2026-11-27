@@ -357,6 +357,7 @@ def tenant_settings(tenant_id, section=None):
 @require_tenant_access(role=UserRole.ADMIN)
 def update(tenant_id):
     """Update tenant settings."""
+    settings_url = url_for("tenants.tenant_settings", tenant_id=tenant_id)
     # Sanitize form data
     form_data = sanitize_form_data(request.form.to_dict())
 
@@ -365,7 +366,7 @@ def update(tenant_id):
     if not is_valid:
         for error in errors:
             flash(error, "error")
-        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
+        return redirect(settings_url)
 
     with get_db_session() as db_session:
         tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
@@ -382,7 +383,7 @@ def update(tenant_id):
         db_session.commit()
         flash("Tenant settings updated successfully", "success")
 
-    return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
+    return redirect(settings_url)
 
 
 class SlackWebhookNotConfigured(StateConflict):

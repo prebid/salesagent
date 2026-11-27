@@ -6,9 +6,9 @@ flow and comes back with the state it was issued" is written once. Since #2205 t
 callback denies anything else before it exchanges the code, so every test that
 wants to reach the exchange has to arrive this way.
 
-``log_in`` states a member session with no tenant — none of the ``test_user`` /
-``test_tenant_id`` keys that ``require_tenant_access`` accepts in test mode — so a
-request that passes did so on membership.
+``log_in`` sets only ``session["user"]``. It sets neither ``test_user`` nor
+``test_tenant_id``, which ``require_tenant_access`` accepts in test mode. A request
+that passes did so on membership.
 """
 
 from __future__ import annotations
@@ -26,20 +26,46 @@ def log_in(client, user) -> None:
     tenant_user_session(client, user.email)
 
 
-def authorize(client, tenant_id: str):
-    return client.get(f"/auth/gam/authorize/{tenant_id}", headers=BROWSER_PAGE_HEADERS)
+def authorize(client, tenant_id: str, *, script_root: str = ""):
+    return client.get(
+        f"/auth/gam/authorize/{tenant_id}", headers=BROWSER_PAGE_HEADERS, environ_overrides={"SCRIPT_NAME": script_root}
+    )
 
 
-def start_flow(client, tenant_id: str) -> str:
+def start_flow(client, tenant_id: str, *, script_root: str = "") -> str:
     """Authorize for *tenant_id* and return the ``state`` that step sent to Google."""
-    response = authorize(client, tenant_id)
+    response = authorize(client, tenant_id, script_root=script_root)
     assert response.status_code == 302, response.status
     location = urlsplit(response.headers["Location"])
     assert location.netloc == "accounts.google.com", location.geturl()
     return parse_qs(location.query)["state"][0]
 
 
-def callback(client, state: str):
+def callback(client, state: str, *, script_root: str = ""):
     return client.get(
-        "/auth/gam/callback", query_string={"code": AUTH_CODE, "state": state}, headers=BROWSER_PAGE_HEADERS
+        "/auth/gam/callback",
+        query_string={"code": AUTH_CODE, "state": state},
+        headers=BROWSER_PAGE_HEADERS,
+        environ_overrides={"SCRIPT_NAME": script_root},
+    )
+
+
+def point_google_token_url_at(origin, monkeypatch) -> None:
+    """Substitute the external Google token origin at its shared injection point."""
+    from src.core.security.egress.destination import VendorConstant
+    from src.services import google_oauth_client
+
+    monkeypatch.setattr(google_oauth_client, "GOOGLE_TOKEN_URL", VendorConstant(url=f"{origin.base_url}/token"))
+
+
+def persisted(session, tenant_id: str) -> tuple[str, bool, str | None]:
+    """The persisted adapter type, row existence and refresh token for one tenant."""
+    from src.core.database.models import AdapterConfig, Tenant
+
+    session.expire_all()
+    adapter_config = session.get(AdapterConfig, tenant_id)
+    return (
+        session.get(Tenant, tenant_id).ad_server,
+        adapter_config is not None,
+        adapter_config.gam_refresh_token if adapter_config else None,
     )
