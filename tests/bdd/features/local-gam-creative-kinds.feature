@@ -157,6 +157,23 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
       | a bundle host that does not answer           |
       | a bundle host that answers with an HTML page |
 
+  # Every bundle the buy names is fetched and checked before the buy is refused, so the one
+  # refusal names every creative whose bundle the seller cannot use, not only the first.
+  @T-UC-002-local-gam-creative-html5-bundle-unusable-every-creative @extension
+  Scenario: Two html5 creatives whose bundles the seller cannot fetch or unpack are both named in one refusal, and GAM holds no order
+    Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '{"format_options": [{"format_kind": "html5", "format_option_id": "html5_300x250", "params": {"width": 300, "height": 250}}]}'
+    And the package references the buyer's approved html5 creative "cr-bundle-silent" bundled by a bundle host that does not answer, with backup image "https://cdn.example.com/backup.png"
+    And the package references the buyer's approved html5 creative "cr-bundle-page" bundled by a bundle host that answers with an HTML page, with backup image "https://cdn.example.com/backup.png"
+    When the Buyer Agent sends the create_media_buy request
+    Then the request is refused on the wire with code "CREATIVE_VALIDATION_FAILED_GENERIC" recovery "correctable" naming field "packages[0].creative_ids[0]"
+    And the CREATIVE_VALIDATION_FAILED_GENERIC refusal's problems are exactly, one per creative:
+      | subject_id       | field | code                               |
+      | cr-bundle-silent |       | CREATIVE_VALIDATION_FAILED_GENERIC |
+      | cr-bundle-page   |       | CREATIVE_VALIDATION_FAILED_GENERIC |
+    And no media buy is persisted for the tenant
+    And Google Ad Manager received no order and no line item
+    And Google Ad Manager created no creative
+
   # A GAM creative has one size for life. The first size the option declares that a line item
   # placeholder takes is the creative's; the association carries every declared size a
   # placeholder takes, the creative's own among them, because its sizes "override" Creative.size.

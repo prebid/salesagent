@@ -774,14 +774,14 @@ def then_refusal_problems_per_creative(ctx: dict, error_code: str, datatable: An
 
     Columns: ``subject_id | field | code``. ``ErrorProblem`` (src/core/errors/details.py) names
     its subject (``subject_type``, ``subject_id``), the manifest path within that subject the
-    problem is about (``field``, e.g. ``assets.image_main.width``) and its code from the code
-    table. Two creatives can fail at the same path, so the problems are told apart by their
-    subject. The whole list is compared, so a missing creative, an invented one, or one
-    creative's problem repeated in place of another's fails it.
+    problem is about (``field``, e.g. ``assets.image_main.width``; an empty cell for a problem
+    that names none) and its code from the code table. Two creatives can fail at the same path,
+    so the problems are told apart by their subject. The whole list is compared, so a missing
+    creative, an invented one, or one creative's problem repeated in place of another's fails it.
     """
     problems = ctx["result"].wire_error_details(error_code).get("problems") or []
     held = sorted(
-        (str(p.get("subject_type")), str(p.get("subject_id")), str(p.get("field")), str(p.get("code")))
+        (str(p.get("subject_type")), str(p.get("subject_id")), str(p.get("field") or ""), str(p.get("code")))
         for p in problems
     )
     expected = sorted(("creative", row["subject_id"], row["field"], row["code"]) for row in table_rows(datatable))

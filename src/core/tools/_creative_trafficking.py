@@ -559,8 +559,14 @@ async def _with_html5_bundles(
 
     The create, the approval replay and the retroactive push call this before the ad server is
     written to, so a bundle the seller cannot fetch or unpack is refused before anything is
-    booked and the upload does no I/O. Each bundle URL is fetched once (:func:`_fetched_bundle`),
-    and the first one refused raises.
+    booked and the upload does no I/O. Each bundle URL is fetched and checked once
+    (:func:`_usable_bundle`), every one before any is refused, so the one refusal names every
+    creative and package whose bundle the seller cannot use: adcp/_schemas/3.2/enums/
+    error-code.json CREATIVE_VALIDATION_FAILED_GENERIC, "The creative failed buyer-correctable
+    validation, but the producer cannot classify the failure with a more specific standard code
+    ... Recovery: correctable". The problem carries no text, so the buyer-facing message names no
+    vendor and no internal id, as the same entry requires. The error points where
+    *named_packages* name the first one (:func:`_adapter_refusal`).
     """
     naming: dict[str, list[CarrierKey]] = {}
     for key, carrier in carriers.items():
@@ -568,52 +574,49 @@ async def _with_html5_bundles(
             naming.setdefault(carrier.representation.url, []).append(key)
     if not naming or not adapter.capabilities.uploads_html5_bundles:
         return carriers
+    bundles = {url: await _usable_bundle(url) for url in naming}
+    problems = [
+        ErrorProblem(
+            code=ErrorCode.CREATIVE_VALIDATION_FAILED_GENERIC,
+            subject_type="creative",
+            subject_id=creative_id,
+            package_id=package_id,
+        )
+        for url, keys in naming.items()
+        if bundles[url] is None
+        for package_id, creative_id in keys
+    ]
+    if problems:
+        raise _adapter_refusal(problems, named_packages)
     filled = dict(carriers)
     for url, keys in naming.items():
-        bundle = await _fetched_bundle(url, keys, named_packages)
         for key in keys:
             representation = filled[key].representation
             filled[key] = filled[key].model_copy(
-                update={"representation": representation.model_copy(update={"bundle": bundle})}
+                update={"representation": representation.model_copy(update={"bundle": bundles[url]})}
             )
     return filled
 
 
-async def _fetched_bundle(url: str, naming: Sequence[CarrierKey], named_packages: Sequence[MediaPackage]) -> bytes:
-    """The zip archive at the buyer's *url*; or the refusal of each creative and package in *naming*.
+async def _usable_bundle(url: str) -> bytes | None:
+    """The zip archive at the buyer's *url*, or None when the seller cannot use what it answered.
 
     Fetched through the egress seam, as the buyer's URL; a URL the seam refuses outright raises
     the seam's own refusal. A body the seam could not deliver, or one that is no zip archive whose
-    every member reads back intact (an empty body, an HTML page, a corrupt archive), is refused:
-    adcp/_schemas/3.2/formats/canonical/html5.json, "Interactive HTML5 banner delivered as a zip
-    archive ... Receivers unpack the zip, validate internal structure, and serve from CDN". Each
-    is a problem on each creative and package naming the URL: adcp/_schemas/3.2/enums/
-    error-code.json CREATIVE_VALIDATION_FAILED_GENERIC, "The creative failed buyer-correctable
-    validation, but the producer cannot classify the failure with a more specific standard code
-    ... Recovery: correctable". The problem carries no text, so the buyer-facing message names no
-    vendor and no internal id, as the same entry requires. The error points where
-    *named_packages* name the first one (:func:`_adapter_refusal`).
+    every member reads back intact (an empty body, an HTML page, a corrupt archive), is not a
+    bundle: adcp/_schemas/3.2/formats/canonical/html5.json, "Interactive HTML5 banner delivered
+    as a zip archive ... Receivers unpack the zip, validate internal structure, and serve from
+    CDN".
     """
     try:
         content = (await asend(url, method="GET", provenance=CounterpartyUrl())).content
     except OutboundDeliveryFailed as failure:
         logger.warning(log_safe(f"[HTML5] Bundle {url} could not be fetched: {failure}"))
-    else:
-        if _is_intact_zip(content):
-            return content
-        logger.warning(log_safe(f"[HTML5] Bundle {url} is not an intact zip archive"))
-    raise _adapter_refusal(
-        [
-            ErrorProblem(
-                code=ErrorCode.CREATIVE_VALIDATION_FAILED_GENERIC,
-                subject_type="creative",
-                subject_id=creative_id,
-                package_id=package_id,
-            )
-            for package_id, creative_id in naming
-        ],
-        named_packages,
-    )
+        return None
+    if _is_intact_zip(content):
+        return content
+    logger.warning(log_safe(f"[HTML5] Bundle {url} is not an intact zip archive"))
+    return None
 
 
 def _is_intact_zip(content: bytes) -> bool:
