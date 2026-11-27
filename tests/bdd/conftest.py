@@ -6555,6 +6555,7 @@ _UC003_INLINE_CREATIVES_READBACK_TAGS = frozenset(
         "T-UC-003-local-atomic-two-package-budgets",
         "T-UC-003-local-atomic-budget-and-campaign-pause",
         "T-UC-003-local-atomic-refused-midway",
+        "T-UC-003-local-atomic-assignments-and-inline-creatives",
     }
 )
 
