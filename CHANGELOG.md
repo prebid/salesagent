@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.1](https://github.com/prebid/salesagent/compare/v3.1.0...v3.1.1) (2026-11-27)
+
+
+### Bug Fixes
+
+* **admin:** check a local redirect path in one place ([#2671](https://github.com/prebid/salesagent/issues/2671)) ([2f548fd](https://github.com/prebid/salesagent/commit/2f548fd710e7e689113838865142f0ac1c55599e))
+* **admin:** give the common-intersection format rule one typed refusal ([#2677](https://github.com/prebid/salesagent/issues/2677)) ([0bb1050](https://github.com/prebid/salesagent/commit/0bb105090353cc14a5071b74b8f662c40f7281e1))
+* **admin:** refuse a missing record by its class through one require() ([#2669](https://github.com/prebid/salesagent/issues/2669)) ([1de5a0f](https://github.com/prebid/salesagent/commit/1de5a0f1615eed084e9f505b226ae85bde772b76))
+* **admin:** the Policy page and the tenant API edit advertising_policy, and policy_settings is dropped ([#2725](https://github.com/prebid/salesagent/issues/2725)) ([182d9fa](https://github.com/prebid/salesagent/commit/182d9fa1aff994758e1b8bdcbdd01a69bcfb9473))
+* **get_products:** refuse a buying_mode outside the pinned enum ([#2717](https://github.com/prebid/salesagent/issues/2717)) ([114e0ac](https://github.com/prebid/salesagent/commit/114e0ac1d6beddb929f5cdf2b27b58b128f18033))
+* merge the two Alembic heads on main ([#2733](https://github.com/prebid/salesagent/issues/2733)) ([fd90772](https://github.com/prebid/salesagent/commit/fd90772262e21b145c7dc176a3f0ff0b0f71d3e4))
+* **security:** remove the base image's pip from the runtime image ([#2705](https://github.com/prebid/salesagent/issues/2705)) ([7c39f02](https://github.com/prebid/salesagent/commit/7c39f025164e75620153edaa0da016f6c56b8447))
+* **security:** resolve tenant favicon dir with a recognised path check ([#2703](https://github.com/prebid/salesagent/issues/2703)) ([23a75cf](https://github.com/prebid/salesagent/commit/23a75cfd26b73e61c20439148c9ebd640f992c55))
+* update_media_buy refuses a creative assignment for a package its buy does not hold ([#2664](https://github.com/prebid/salesagent/issues/2664)) ([5ca25fe](https://github.com/prebid/salesagent/commit/5ca25febdec1a3f18d900bf1f8a568831e883a5e))
+
+
+### Documentation
+
+* ask re-reviews to converge on the issue's outcome ([#2713](https://github.com/prebid/salesagent/issues/2713)) ([9591f1d](https://github.com/prebid/salesagent/commit/9591f1d8e1f4294459ce698ae4a515cc7cd14d29))
+* say where a task's own error codes live in the written spec ([#2727](https://github.com/prebid/salesagent/issues/2727)) ([7771276](https://github.com/prebid/salesagent/commit/7771276bd7250ca00bbb311775a35d752edd05ef))
+
 ## [3.1.0](https://github.com/prebid/salesagent/compare/v3.0.1...v3.1.0) (2026-11-23)
 
 
