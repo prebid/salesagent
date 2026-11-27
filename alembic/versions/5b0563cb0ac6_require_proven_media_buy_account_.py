@@ -1,7 +1,7 @@
 """Require proven media-buy account ownership.
 
 Revision ID: 5b0563cb0ac6
-Revises: 502abb701275
+Revises: e36bcd73e4b0
 
 Only the original create request, its scoped creation workflow, or a cached
 create response naming this exact buy can identify its account. Current grants
@@ -26,7 +26,7 @@ from alembic import op
 from src.core.database.migration_guards import abort_if_rows
 
 revision = "5b0563cb0ac6"
-down_revision = "502abb701275"
+down_revision = "e36bcd73e4b0"
 branch_labels = None
 depends_on = None
 
@@ -42,24 +42,25 @@ def _document(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _response_matches(response: dict[str, Any], buy_id: str, steps: set[str], status: Any) -> bool:
+def _response_mismatch(response: dict[str, Any], buy_id: str, steps: set[str], status: Any) -> str | None:
     # Successful create/submitted arms may carry nonfatal errors advisories.
     # Their identifying field and the stored protocol status select the arm.
     if status == "completed":
-        return (
-            response.get("media_buy_id") == buy_id
-            and response.get("task_id") is None
-            and (response.get("sandbox") is None or response.get("sandbox") is True)
+        checks = (
+            ("media_buy_id", response.get("media_buy_id") == buy_id),
+            ("task_id", response.get("task_id") is None),
+            ("sandbox", response.get("sandbox") is None or response.get("sandbox") is True),
         )
-    if status == "submitted":
+    elif status == "submitted":
         task_id = response.get("task_id")
-        return (
-            isinstance(task_id, str)
-            and task_id in steps
-            and response.get("media_buy_id") is None
-            and response.get("sandbox") is None
+        checks = (
+            ("task_id", isinstance(task_id, str) and task_id in steps),
+            ("media_buy_id", response.get("media_buy_id") is None),
+            ("sandbox", response.get("sandbox") is None),
         )
-    return False
+    else:
+        return "status"
+    return next((field for field, matches in checks if not matches), None)
 
 
 def _recover(bind: sa.Connection, buy: Mapping[str, Any]) -> tuple[str | None, str | None]:
@@ -101,8 +102,10 @@ def _recover(bind: sa.Connection, buy: Mapping[str, Any]) -> tuple[str | None, s
             return None, "malformed_account_reference"
         if "account_id" in ref:
             # A sandbox flag on the ID arm is invalid; it cannot prove mode.
-            if set(ref) != {"account_id"} or not isinstance(ref["account_id"], str) or not ref["account_id"]:
-                return None, "malformed_account_reference"
+            if set(ref) != {"account_id"}:
+                return None, "malformed_account_reference:extra_keys"
+            if not isinstance(ref["account_id"], str) or not ref["account_id"]:
+                return None, "malformed_account_reference:account_id"
             ids.add(ref["account_id"])
         else:
             brand = _document(ref.get("brand"))
@@ -131,8 +134,9 @@ def _recover(bind: sa.Connection, buy: Mapping[str, Any]) -> tuple[str | None, s
     for attempt in attempts:
         envelope = _document(attempt["response_envelope"])
         response = _document(envelope.get("response"))
-        if not _response_matches(response, params["buy"], steps, envelope.get("status")):
-            return None, "conflicting_create_response"
+        mismatch = _response_mismatch(response, params["buy"], steps, envelope.get("status"))
+        if mismatch is not None:
+            return None, f"conflicting_create_response:{mismatch}"
         if buy["idempotency_key"] is not None and buy["idempotency_key"] != attempt["idempotency_key"]:
             return None, "conflicting_idempotency_key"
         if buy["payload_hash"] and attempt["payload_hash"] and buy["payload_hash"] != attempt["payload_hash"]:

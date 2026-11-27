@@ -5,6 +5,7 @@ import os
 from unittest.mock import patch
 
 import httpx
+import httpx2
 import pytest
 from pydantic_ai.exceptions import ModelHTTPError, UserError
 
@@ -691,6 +692,7 @@ class TestRunAgent:
             pytest.param(lambda: UserError("unusable model"), id="UserError"),
             pytest.param(lambda: httpx.ConnectError("unreachable"), id="httpx.ConnectError"),
             pytest.param(lambda: httpx.RemoteProtocolError("dropped"), id="httpx.RemoteProtocolError"),
+            pytest.param(lambda: httpx2.DecodingError("undecodable"), id="httpx2.DecodingError"),
         ],
     )
     async def test_a_provider_failure_raises_ai_provider_error(self, exc):

@@ -579,3 +579,15 @@ Feature: BR-UC-030 Manage Governance Binding
     # specific governance URL persisted at sync time MUST be the URL the
     # seller calls at create_media_buy time.
     # governance binding integration: sync_governance URL is the only URL invoked at create_media_buy time
+
+  @T-UC-001-inv-002-6 @invariant @analysis-2026-05-25 @schema-v3.1
+  Scenario: A resolved policy requiring human review escalates the plan
+    Given the resolved policy has "requires_human_review" set to true
+    When the Buyer Agent sends a get_products request
+    Then the plan should be escalated for human review regardless of the enforcement level
+    # INV-6 holds: requires_human_review escalates regardless of must/should/may (v3.1 governance)
+    # Moved from BR-UC-001 BR-RULE-002 INV-6 (#2696): requires_human_review is a property of
+    # a resolved governance policy, which the governance agent escalates for
+    # (governance/sync-plans-request.json human_review_required at the pinned 3.2.7: "Governance
+    # agents MUST set this to true automatically when any resolved policy or policy_category
+    # has requires_human_review: true"). The seller's advertising_policy has no such field.

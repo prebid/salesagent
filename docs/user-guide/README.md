@@ -36,7 +36,7 @@ section of the settings page. The menu has the following entries:
 - **Setup Checklist** - Every setup task and whether it is complete, including the critical tasks that must be complete before the tenant can take orders
 - **Users & Access** - Users, allowed domains, and single sign-on (SSO)
 - **Ad Server** - The ad server adapter and its connection
-- **Policies & Workflows** - Budget controls, brand manifest policy, naming conventions, measurement providers, approval workflow, creative review, advertising policy, and product ranking
+- **Policies & Workflows** - Budget controls, brand manifest policy, naming conventions, measurement providers, approval workflow, creative review, and product ranking. The section links to the **Policy** page (`/tenant/<tenant_id>/policy/`), where the advertising policy is set
 - **Integrations** - Slack, AI services, creative agents, and signals agents
 - **Signing Keys** - The RFC 9421 keys that the tenant signs with, published at `/.well-known/jwks.json`
 - **Publishers** - The publishers you represent

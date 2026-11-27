@@ -14,9 +14,11 @@ from sqlalchemy.exc import IntegrityError
 
 from tests.integration.migration_helpers import (
     reset_to_revision,
+    row_xmins,
     run_alembic_downgrade,
     run_alembic_upgrade,
     seed_account,
+    seed_media_buy,
     seed_principal,
     seed_tenant,
 )
@@ -24,7 +26,7 @@ from tests.integration.migration_helpers import (
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 _REVISION = "5b0563cb0ac6"
-_PREVIOUS = "502abb701275"
+_PREVIOUS = "e36bcd73e4b0"
 _TENANT = "account_migration"
 _PRINCIPAL = "buyer"
 
@@ -58,26 +60,27 @@ def legacy(migration_db):
 
 
 def _buy(engine, buy_id="buy", *, account=None, request=None, key=None, payload_hash=None, created_at="2026-02-01"):
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                "INSERT INTO media_buys (media_buy_id, tenant_id, principal_id, account_id, "
-                "order_name, advertiser_name, start_date, end_date, status, raw_request, "
-                "created_at, idempotency_key, payload_hash) VALUES (:buy, :tenant, :principal, :account, "
-                "'Order', 'Brand', '2026-02-01', '2026-12-01', 'pending_approval', "
-                "CAST(:request AS jsonb), :created_at, :key, :payload_hash)"
-            ),
-            {
-                "buy": buy_id,
-                "tenant": _TENANT,
-                "principal": _PRINCIPAL,
-                "account": account,
-                "request": json.dumps(request or {}),
-                "created_at": created_at,
-                "payload_hash": payload_hash,
-                "key": key,
-            },
-        )
+    seed_media_buy(
+        engine,
+        tenant_id=_TENANT,
+        principal_id=_PRINCIPAL,
+        media_buy_id=buy_id,
+        account_id=account,
+        raw_request=request or {},
+        created_at=created_at,
+        payload_hash=payload_hash,
+        idempotency_key=key,
+    )
+
+
+def _map_step(conn, buy_id, step, *, object_type="media_buy", action="create"):
+    conn.execute(
+        text(
+            "INSERT INTO object_workflow_mapping (object_type, object_id, step_id, action) "
+            "VALUES (:object_type, :buy, :step, :action)"
+        ),
+        {"buy": buy_id, "step": step, "action": action, "object_type": object_type},
+    )
 
 
 def _workflow(
@@ -91,6 +94,7 @@ def _workflow(
     tool="create_media_buy",
     action="create",
     step_type="media_buy_creation",
+    object_type="media_buy",
 ):
     step = f"step_{buy_id}"
     with engine.begin() as conn:
@@ -115,13 +119,7 @@ def _workflow(
                 "response": json.dumps(response) if response is not None else None,
             },
         )
-        conn.execute(
-            text(
-                "INSERT INTO object_workflow_mapping (object_type, object_id, step_id, action) "
-                "VALUES ('media_buy', :buy, :step, :action)"
-            ),
-            {"buy": buy_id, "step": step, "action": action},
-        )
+        _map_step(conn, buy_id, step, object_type=object_type, action=action)
     return step
 
 
@@ -306,8 +304,10 @@ def test_unrelated_cache_cannot_supply_ownership(legacy, change):
         ("currency", "unsupported_natural_key_identity:currency"),
         ("timezone", "unsupported_natural_key_identity:timezone"),
         ("malformed_reference", "malformed_account_reference"),
-        ("malformed_id_reference", "malformed_account_reference"),
-        ("completed_response_mode", "conflicting_create_response"),
+        ("malformed_id_reference", "malformed_account_reference:extra_keys"),
+        ("empty_account_id", "malformed_account_reference:account_id"),
+        ("integer_account_id", "malformed_account_reference:account_id"),
+        ("completed_response_mode", "conflicting_create_response:sandbox"),
         ("malformed_natural_key", "malformed_natural_key"),
         ("malformed_brand", "malformed_natural_key"),
     ],
@@ -355,6 +355,8 @@ def test_conflicting_evidence_aborts_entire_upgrade(legacy, kind, reason):
         request = {"account": "acc_sandbox"}
     elif kind == "malformed_id_reference":
         request["account"]["sandbox"] = True
+    elif kind in {"empty_account_id", "integer_account_id"}:
+        request["account"]["account_id"] = "" if kind == "empty_account_id" else 7
     _buy(
         engine,
         "unsafe",
@@ -488,13 +490,17 @@ def test_evidence_is_scoped_to_the_buy_tenant_and_principal(legacy, source, fore
     assert _accounts(engine) == {"buy": None}
 
 
-@pytest.mark.parametrize("override", [{"tool": "update_media_buy"}, {"action": "update"}, {"step_type": "approval"}])
+@pytest.mark.parametrize(
+    "override",
+    [{"tool": "update_media_buy"}, {"action": "update"}, {"step_type": "approval"}, {"object_type": "creative"}],
+)
 def test_non_creation_workflow_cannot_supply_ownership(legacy, override):
     engine, url = legacy
     _buy(engine, request={"account": _ref(True)})
     _workflow(engine, request={"account": {"account_id": "acc_sandbox"}}, **override)
     with pytest.raises(RuntimeError, match="account_identity_unproven"):
         run_alembic_upgrade(url, _REVISION)
+    assert _accounts(engine) == {"buy": None}
 
 
 def test_submitted_task_mapped_to_multiple_buys_is_ambiguous(legacy):
@@ -502,13 +508,7 @@ def test_submitted_task_mapped_to_multiple_buys_is_ambiguous(legacy):
     _buy(engine, request={"account": _ref(True)})
     step = _workflow(engine, request={"account": _ref(True)})
     with engine.begin() as conn:
-        conn.execute(
-            text(
-                "INSERT INTO object_workflow_mapping (object_type, object_id, step_id, action) "
-                "VALUES ('media_buy', 'other', :step, 'create')"
-            ),
-            {"step": step},
-        )
+        _map_step(conn, "other", step)
     _cache(engine, response={"task_id": step})
     with pytest.raises(RuntimeError, match="account_identity_unproven"):
         run_alembic_upgrade(url, _REVISION)
@@ -517,11 +517,9 @@ def test_submitted_task_mapped_to_multiple_buys_is_ambiguous(legacy):
 def test_existing_account_rows_are_not_rewritten(legacy):
     engine, url = legacy
     _buy(engine, account="acc_live")
-    with engine.connect() as conn:
-        before = conn.execute(text("SELECT xmin::text, to_jsonb(media_buys) FROM media_buys")).one()
+    before = row_xmins(engine, table="media_buys", key_column="media_buy_id", tenant_id=_TENANT)
     run_alembic_upgrade(url, _REVISION)
-    with engine.connect() as conn:
-        after = conn.execute(text("SELECT xmin::text, to_jsonb(media_buys) FROM media_buys")).one()
+    after = row_xmins(engine, table="media_buys", key_column="media_buy_id", tenant_id=_TENANT)
     assert after == before
 
 
@@ -536,18 +534,24 @@ def test_workflow_account_disagreement_is_not_hidden_by_cache(legacy):
     assert _accounts(engine) == {"buy": None}
 
 
-@pytest.mark.parametrize("arm", ["submitted_with_buy_id", "submitted_mode_only", "completed_with_task_id"])
-def test_cache_response_arm_must_match_its_persisted_status(legacy, arm):
+@pytest.mark.parametrize(
+    "arm,field",
+    [
+        ("submitted_with_buy_id", "media_buy_id"),
+        ("submitted_mode_only", "sandbox"),
+        ("completed_with_task_id", "task_id"),
+    ],
+)
+def test_cache_response_arm_must_match_its_persisted_status(legacy, arm, field):
     engine, url = legacy
     _buy(engine, "mb_legacy_1", request={"account": _ref(True)})
     step = _workflow(engine, "mb_legacy_1")
-    _cache(
-        engine,
-        "mb_legacy_1",
-        response={"media_buy_id": "mb_legacy_1", "sandbox": True}
-        if arm == "submitted_with_buy_id"
-        else {"task_id": step, "sandbox": True},
-    )
+    response = {"task_id": step}
+    if arm != "submitted_mode_only":
+        response["media_buy_id"] = "mb_legacy_1"
+    if arm != "submitted_with_buy_id":
+        response["sandbox"] = True
+    _cache(engine, "mb_legacy_1", response=response)
     if arm != "submitted_mode_only":
         status = "submitted" if arm == "submitted_with_buy_id" else "completed"
         with engine.begin() as conn:
@@ -558,9 +562,13 @@ def test_cache_response_arm_must_match_its_persisted_status(legacy, arm):
                 ),
                 {"status": status},
             )
-    with pytest.raises(RuntimeError, match="conflicting_create_response") as failure:
+    reason = f"conflicting_create_response:{field}"
+    with pytest.raises(RuntimeError, match=reason) as failure:
         run_alembic_upgrade(url, _REVISION)
-    assert "mb_legacy_1" in str(failure.value)
+    assert (
+        f"tenant={_TENANT!r} principal={_PRINCIPAL!r} media_buy='mb_legacy_1': {reason}"
+        in str(failure.value).splitlines()
+    )
     assert _accounts(engine) == {"mb_legacy_1": None}
 
 

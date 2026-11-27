@@ -93,6 +93,7 @@ class ProductEnv(PublisherAdagentsMixin, AdminOperatorMixin, DatabaseFaultMixin,
         set_ranking_failure(failure)       -- the ranking model fails as a ScriptedFailure declares
         set_ranking_unavailable()          -- the ranking model answers 503
         set_ranking_connection_dropped()   -- the ranking model's endpoint drops the connection
+        set_ranking_body_undecodable()     -- the ranking model answers a body that does not decode
 
     Over e2e the scripted answers come from the compose ``scripted-llm`` origin
     (``tests/e2e/scripted_llm_origin_service.py``), keyed by ``scripted_model_key``.
@@ -142,6 +143,17 @@ class ProductEnv(PublisherAdagentsMixin, AdminOperatorMixin, DatabaseFaultMixin,
         if "brief" in kwargs:
             self._dispatched_brief = kwargs["brief"]
         return super().call_via(transport, **kwargs)
+
+    def save_policy_page(self, form: Mapping[str, str]) -> None:
+        """The operator saves the admin Policy page with *form*, as a browser posts it, on this env's transport.
+
+        In-process the admin app runs in this process; over e2e the form is posted to the
+        live server. Either way the save is the only writer of the tenant's policy here.
+        """
+        response = self.admin_request(self.tenant_id, "post", "policy/update", data=dict(form))
+        assert response.status_code == 302, (
+            f"the Policy page's save answered {response.status_code}: {response.data[:300]!r}"
+        )
 
     def _write_ranking_prompt(self, ranking_prompt: str) -> None:
         """Write ``tenant.product_ranking_prompt``, tagged with this env's nonce, and remember it.
@@ -351,6 +363,16 @@ class ProductEnv(PublisherAdagentsMixin, AdminOperatorMixin, DatabaseFaultMixin,
         from tests.e2e._scripted_llm import CONNECTION_DROPPED
 
         self.set_ranking_failure(CONNECTION_DROPPED)
+
+    def set_ranking_body_undecodable(self) -> None:
+        """The seller's provider answers a body its client cannot decode.
+
+        The client raises ``httpx2.DecodingError``, which pydantic-ai does not wrap and which
+        is no ``httpx.HTTPError``.
+        """
+        from tests.e2e._scripted_llm import UNDECODABLE_BODY
+
+        self.set_ranking_failure(UNDECODABLE_BODY)
 
     def _install_scripted_ranking(self) -> None:
         """Replace ``rank_products_async`` with the scripted model, once per env."""

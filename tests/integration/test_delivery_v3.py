@@ -113,7 +113,6 @@ def _setup_base_state(session) -> dict:
         auth_setup_mode=False,
         auto_approve_format_ids=[],
         human_review_required=False,
-        policy_settings={},
         authorized_emails=["test@example.com"],
     )
     session.add(tenant)

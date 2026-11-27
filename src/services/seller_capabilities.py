@@ -628,12 +628,9 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
         # The session itself could not be opened, so neither read happened.
         _record_degradation(advisories, "tenant configuration", e)
 
-    # Get advertising policies from tenant config
-    advertising_policies: str | None = None
+    # The policy in the operator's words, when the tenant saved one that has them.
     policy = tenant.advertising_policy
-    if policy:
-        if isinstance(policy, dict) and policy.get("description"):
-            advertising_policies = policy["description"]
+    advertising_policies = (policy.description or None) if policy is not None else None
 
     # publisher_domains is required with minItems 1, so a seller that no publisher has
     # verified has no portfolio to declare, and it is omitted. Its own host is not a

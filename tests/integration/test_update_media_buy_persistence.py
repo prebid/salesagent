@@ -66,7 +66,6 @@ def test_tenant_setup(integration_db):
             is_active=True,
             human_review_required=False,
             auto_approve_format_ids=[],
-            policy_settings={},
         )
         session.add(tenant)
 

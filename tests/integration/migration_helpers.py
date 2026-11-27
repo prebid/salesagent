@@ -17,9 +17,10 @@ import hashlib
 import json
 import os
 import re
+from contextlib import nullcontext
 from typing import Any
 
-from sqlalchemy import inspect, text
+from sqlalchemy import Connection, Engine, inspect, text
 
 from src.core.http_utils import hostname_of
 from tests.utils.database_helpers import vhost_for
@@ -214,6 +215,42 @@ def seed_account(
                 "sandbox": sandbox,
                 "created_at": created_at,
             },
+        )
+
+
+def seed_media_buy(
+    engine: Engine | Connection,
+    *,
+    tenant_id: str,
+    principal_id: str,
+    media_buy_id: str,
+    raw_request: Any = None,
+    **columns: Any,
+) -> None:
+    """Insert a historical buy without requiring columns added by later revisions.
+
+    The nine required columns match the legacy producers; optional columns are
+    written only when named. Column names come from fixed test call sites, while
+    values stay bound. An omitted request uses the producers' empty JSON object.
+    Reuse a caller's connection without committing or closing its transaction.
+    """
+    row = {
+        "media_buy_id": media_buy_id,
+        "tenant_id": tenant_id,
+        "principal_id": principal_id,
+        "order_name": "Order",
+        "advertiser_name": "Brand",
+        "start_date": "2026-02-01",
+        "end_date": "2026-12-01",
+        "status": "pending_approval",
+        **columns,
+        "raw_request": json.dumps({} if raw_request is None else raw_request),
+    }
+    values = [f"CAST(:{name} AS jsonb)" if name == "raw_request" else f":{name}" for name in row]
+    with nullcontext(engine) if isinstance(engine, Connection) else engine.begin() as conn:
+        conn.execute(
+            text(f"INSERT INTO media_buys ({', '.join(row)}) VALUES ({', '.join(values)})"),
+            row,
         )
 
 

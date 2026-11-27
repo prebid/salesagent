@@ -25,6 +25,7 @@ from src.core.database.models import (
     SyncJob,
     Tenant,
 )
+from src.core.schemas.advertising_policy import AdvertisingPolicy
 from src.core.tenant_context import TenantContext
 
 
@@ -150,6 +151,27 @@ class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
         "tests.factories.core.CurrencyLimitFactory",
         factory_related_name="tenant",
     )
+
+
+class AdvertisingPolicyFactory(factory.Factory):
+    """A complete ``AdvertisingPolicy``, the only shape ``tenants.advertising_policy`` stores.
+
+    The model has no defaults, so a test that hand-writes a policy writes every key or fails
+    to load. This factory holds the one complete shape: checks on, nothing prohibited, no
+    manual review, no description. Override the fields the test grades.
+    """
+
+    class Meta:
+        model = AdvertisingPolicy
+
+    enabled = True
+    require_manual_review = False
+    prohibited_advertisers = factory.LazyFunction(list)
+    prohibited_categories = factory.LazyFunction(list)
+    prohibited_tactics = factory.LazyFunction(list)
+    default_prohibited_categories = factory.LazyFunction(list)
+    default_prohibited_tactics = factory.LazyFunction(list)
+    description = None
 
 
 class CurrencyLimitFactory(factory.alchemy.SQLAlchemyModelFactory):
