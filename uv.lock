@@ -241,7 +241,7 @@ requires-dist = [
     { name = "prometheus-client", specifier = ">=0.23.1" },
     { name = "psycopg2-binary", specifier = ">=2.9.9" },
     { name = "pyasn1", specifier = ">=0.6.5" },
-    { name = "pydantic-ai-slim", extras = ["google", "openai", "anthropic", "cohere", "mistral", "groq"], specifier = ">=1.107.7,<3" },
+    { name = "pydantic-ai-slim", extras = ["google", "openai", "anthropic", "cohere", "mistral", "groq"], specifier = ">=1.107.7" },
     { name = "pyjwt", specifier = ">=2.15.0" },
     { name = "pytest-asyncio", marker = "extra == 'ui-tests'", specifier = ">=1.1.0" },
     { name = "pytest-playwright", marker = "extra == 'ui-tests'", specifier = ">=0.7.2" },
