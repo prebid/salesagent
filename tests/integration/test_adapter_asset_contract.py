@@ -31,7 +31,7 @@ from src.adapters.base import AdapterCreateRequest
 from src.adapters.mock_ad_server import MockAdServer
 from src.core.database.repositories.product import ProductRepository
 from src.core.schemas import FormatId, MediaPackage, Principal
-from src.core.tools._creative_trafficking import _AssignedPackage, _read_for_push
+from src.core.tools._creative_trafficking import _read_for_push
 from src.core.tools.media_buy_create import _build_adapter_asset_from_creative
 from tests.helpers.media_buy_approval import uploadable_creative
 
@@ -79,12 +79,18 @@ def test_the_adapter_names_the_creative_the_builder_named(bound_factory_session)
     creative = uploadable_creative(CreativeFactory, tenant=tenant, principal=principal_row, approved=True)
     bound_factory_session.commit()
 
-    # Read as the retroactive push reads it. A legacy creative on a package with no stored
-    # product: its format spec states its size, and no product declaration narrows it.
+    # Read as the retroactive push reads it, off the buy's package row and the creative's
+    # assignment to it. A legacy creative on a package with no stored product: its format
+    # spec states its size, and no product declaration narrows it.
+    from tests.factories import CreativeAssignmentFactory
+    from tests.factories.media_buy import bare_package_row
+
+    package = bare_package_row("mb_asset_contract", PACKAGE_ID)
+    assignment = CreativeAssignmentFactory.build(
+        creative=creative, media_buy_id="mb_asset_contract", package_id=PACKAGE_ID
+    )
     carriers = _read_for_push(
-        ProductRepository(bound_factory_session, tenant.tenant_id),
-        creative,
-        [_AssignedPackage(PACKAGE_ID, None, [creative.creative_id])],
+        ProductRepository(bound_factory_session, tenant.tenant_id), creative, [package], [assignment]
     )
     asset = _build_adapter_asset_from_creative(
         creative,

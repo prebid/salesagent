@@ -149,9 +149,10 @@ def _with_booked_contract(session: Any, row: dict[str, Any]) -> dict[str, Any]:
     (``format_resolver.booked_format_contract`` reads it back), through the same
     ``booked_contract_record``, so a seeded package is one production can write. A package
     whose product is not stored yet has no contract to record, as the gate has none to read.
+    The record is :func:`booked_on`'s.
     """
     from src.core.database.models import Product
-    from src.core.format_resolver import BOOKED_FORMAT_CONTRACT, booked_contract_record
+    from src.core.format_resolver import BOOKED_FORMAT_CONTRACT
 
     config = dict(row["package_config"] or {})
     product_id = config.get("product_id")
@@ -159,9 +160,18 @@ def _with_booked_contract(session: Any, row: dict[str, Any]) -> dict[str, Any]:
         return config
     media_buy = row.get("media_buy") or session.get(MediaBuy, row["media_buy_id"])
     product = session.get(Product, (media_buy.tenant_id, product_id)) if media_buy else None
-    if product is None:
-        return config
-    return {**config, BOOKED_FORMAT_CONTRACT: booked_contract_record(product.format_contract)}
+    return config if product is None else booked_on(config, product)
+
+
+def booked_on(package_config: dict[str, Any], product: Any) -> dict[str, Any]:
+    """*package_config* booked on *product* as it is now: the product's contract recorded, as create records it.
+
+    For a fixture whose product is given its formats after the package row exists: the
+    product the scenario states is the one the package was booked on.
+    """
+    from src.core.format_resolver import BOOKED_FORMAT_CONTRACT, booked_contract_record
+
+    return {**package_config, BOOKED_FORMAT_CONTRACT: booked_contract_record(product.format_contract)}
 
 
 def bare_package_row(media_buy_id: str, package_id: str) -> MediaPackage:

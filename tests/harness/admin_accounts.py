@@ -847,10 +847,13 @@ class AdminAccountEnv:
         """A tenant of its own on the mock ad server, holding a media buy that awaits the seller's approval.
 
         With *accepted_image_size*, the buy's product also publishes an image format option
-        accepting only that size (formats/canonical/image.json ``sizes``). Returns the seeded
-        rows' ids (``seed_pending_buy``), read while their session is open: the rows detach when
-        it closes.
+        accepting only that size (formats/canonical/image.json ``sizes``), and the package is
+        booked on the product with that option: the approval checks a creative against the
+        contract the package was booked on (``format_resolver.booked_format_contract``).
+        Returns the seeded rows' ids (``seed_pending_buy``), read while their session is open:
+        the rows detach when it closes.
         """
+        from tests.factories.media_buy import booked_on
         from tests.helpers.media_buy_approval import seed_pending_buy
 
         with self._approval_seeding() as session:
@@ -866,6 +869,7 @@ class AdminAccountEnv:
                     "params": {"sizes": [{"width": width, "height": height}]},
                 }
                 product.format_options = [*(product.format_options or []), option]
+                package.package_config = booked_on(package.package_config, product)
             pending = PendingApproval(seeded.tenant_id, seeded.media_buy_id, seeded.context_id, seeded.step_id)
         return pending
 
