@@ -416,6 +416,7 @@ def _make_create_request(product_id: str, po_number: str, delivery_type: str = "
     )
 
     request = CreateMediaBuyRequest(
+        idempotency_key=str(uuid.uuid4()),  # required; a fresh UUID v4 per request, as the schema asks
         account={"account_id": "acct_test"},
         brand={"domain": "testbrand.com"},
         po_number=po_number,
