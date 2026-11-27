@@ -20,6 +20,8 @@ from src.core.database.models import (
     CreativeAgent,
     CurrencyLimit,
     GAMInventory,
+    GAMLineItem,
+    GAMOrder,
     PropertyTag,
     SignalsAgent,
     SyncJob,
@@ -218,6 +220,38 @@ class GAMInventoryFactory(factory.alchemy.SQLAlchemyModelFactory):
             "sizes": [{"width": 300, "height": 250}],
         }
     )
+
+
+class GAMOrderFactory(factory.alchemy.SQLAlchemyModelFactory):
+    """A GAM order an orders sync stored."""
+
+    class Meta:
+        model = GAMOrder
+        sqlalchemy_session = None
+        sqlalchemy_session_persistence = "commit"
+
+    tenant = SubFactory(TenantFactory)
+    tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
+    order_id = Sequence(lambda n: f"{8000000 + n}")
+    name = LazyAttribute(lambda o: f"Order {o.order_id}")
+    status = "APPROVED"
+
+
+class GAMLineItemFactory(factory.alchemy.SQLAlchemyModelFactory):
+    """A GAM line item an orders sync stored."""
+
+    class Meta:
+        model = GAMLineItem
+        sqlalchemy_session = None
+        sqlalchemy_session_persistence = "commit"
+
+    tenant = SubFactory(TenantFactory)
+    tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
+    line_item_id = Sequence(lambda n: f"{9000000 + n}")
+    order_id = Sequence(lambda n: f"{8000000 + n}")
+    name = LazyAttribute(lambda o: f"Line Item {o.line_item_id}")
+    status = "DELIVERING"
+    line_item_type = "STANDARD"
 
 
 class SyncJobFactory(factory.alchemy.SQLAlchemyModelFactory):

@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from src.adapters.gam_reporting_service import GAMReportingService
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
-from src.core.database.models import FormatPerformanceMetrics, Tenant
+from src.core.database.models import FormatPerformanceMetrics
 from src.core.operator_errors import safe_error_message
 
 logger = logging.getLogger(__name__)
@@ -278,25 +278,13 @@ def aggregate_all_tenants(period_days: int = 30) -> dict[str, Any]:
     Returns:
         Summary of aggregation across all tenants
     """
-    from src.adapters.gam.auth import GAMAuthManager
     from src.adapters.gam.client import GAMClientManager
-    from src.core.database.models import AdapterConfig
+    from src.core.database.repositories.adapter_config import list_gam_connected_tenants
 
     logger.info("Starting format metrics aggregation for all tenants")
 
     with get_db_session() as db_session:
-        # Get all active tenants with GAM configured
-        stmt = (
-            select(Tenant, AdapterConfig)
-            .join(AdapterConfig, Tenant.tenant_id == AdapterConfig.tenant_id)
-            .where(
-                Tenant.ad_server == "google_ad_manager",
-                Tenant.is_active,
-                AdapterConfig.gam_network_code.isnot(None),
-                AdapterConfig._gam_refresh_token.isnot(None),
-            )
-        )
-        tenants = db_session.execute(stmt).all()
+        tenants = list_gam_connected_tenants(db_session)
 
         summary: dict[str, Any] = {
             "total_tenants": len(tenants),
@@ -310,14 +298,7 @@ def aggregate_all_tenants(period_days: int = 30) -> dict[str, Any]:
             logger.info(f"Processing tenant: {tenant.name} ({tenant_id})")
 
             try:
-                # Initialize GAM client via repository
-                from src.core.database.repositories.adapter_config import AdapterConfigRepository
-
-                adapter_repo = AdapterConfigRepository(db_session, tenant_id)
-                gam_config = adapter_repo.get_gam_config(adapter_config)
-                auth_manager = GAMAuthManager(gam_config)
-                client_manager = GAMClientManager(gam_config, adapter_config.gam_network_code)
-                gam_client = client_manager.get_client()
+                gam_client = GAMClientManager.for_adapter_config(adapter_config).get_client()
 
                 # Aggregate metrics
                 service = FormatMetricsAggregationService(db_session)

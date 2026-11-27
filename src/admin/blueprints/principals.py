@@ -15,6 +15,7 @@ from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action, record_admin_action_failure
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, PushNotificationConfig, Tenant, UserRole
+from src.core.database.repositories.adapter_config import AdapterConfigRepository
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.database.repositories.uow import PushNotificationConfigUoW
 from src.core.exceptions import AdCPValidationError
@@ -392,22 +393,11 @@ def get_gam_advertisers(tenant_id):
         if not tenant:
             return jsonify({"error": "Tenant not found"}), 404
 
-        # Check if GAM is configured (uses centralized tenant.is_gam_tenant property)
-        gam_enabled = tenant.is_gam_tenant
-
-        # Debug logging to help troubleshoot
+        adapter_config = AdapterConfigRepository(db_session, tenant_id).require_gam_config()
         logger.info(
-            f"GAM API detection for tenant {tenant_id}: "
-            f"ad_server={tenant.ad_server}, "
-            f"has_adapter_config={tenant.adapter_config is not None}, "
-            f"adapter_type={tenant.adapter_config.adapter_type if tenant.adapter_config else None}, "
-            f"gam_enabled={gam_enabled}, "
+            f"Fetching GAM advertisers for tenant {tenant_id}: "
             f"search={search_query}, limit={limit}, fetch_all={fetch_all}"
         )
-
-        if not gam_enabled:
-            logger.warning(f"GAM not enabled for tenant {tenant_id}")
-            return jsonify({"error": "Google Ad Manager not configured"}), 400
 
         # Initialize GAM adapter with adapter config
         # Import Principal model
@@ -426,21 +416,17 @@ def get_gam_advertisers(tenant_id):
             },
         )
 
-        # Build GAM config from AdapterConfig
-        if not tenant.adapter_config or not tenant.adapter_config.gam_network_code:
-            return jsonify({"error": "GAM network code not configured for this tenant"}), 400
-
         # Use build_gam_config_from_adapter to handle both OAuth and service account
         from src.adapters.gam import build_gam_config_from_adapter
 
-        gam_config = build_gam_config_from_adapter(tenant.adapter_config)
+        gam_config = build_gam_config_from_adapter(adapter_config)
 
         adapter = GoogleAdManager(
             config=gam_config,
             principal=mock_principal,
-            network_code=tenant.adapter_config.gam_network_code,
+            network_code=adapter_config.gam_network_code,
             advertiser_id=None,
-            trafficker_id=tenant.adapter_config.gam_trafficker_id,
+            trafficker_id=adapter_config.gam_trafficker_id,
             tenant_id=tenant_id,
             tenant_ai_config=None,  # names no order, so no AI configuration is read
         )

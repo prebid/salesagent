@@ -9,11 +9,12 @@ from sqlalchemy import String, func, or_, select
 from src.admin.form_validation import json_object_body
 from src.admin.utils import execute_limited, get_tenant_config_from_db, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
-from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import GAMInventory, GAMOrder, MediaBuy, Tenant
+from src.core.database.repositories.adapter_config import AdapterConfigRepository
 from src.core.database.repositories.gam_order import GAMOrderRepository
 from src.core.database.repositories.principal import PrincipalRepository
+from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.services.background_sync_service import start_inventory_sync_background
 
 logger = logging.getLogger(__name__)
@@ -195,86 +196,13 @@ def get_targeting_values(tenant_id, key_id):
             return jsonify({"error": "Custom targeting key not found"}), 404
 
         # Query GAM in real-time for values
-        adapter_config = tenant.adapter_config
         logger.info(f"Fetching targeting values for tenant={tenant_id}, key_id={key_id}")
-        logger.debug(f"Adapter config exists: {adapter_config is not None}")
-        if adapter_config:
-            logger.debug(
-                f"Network code: {adapter_config.gam_network_code}, "
-                f"auth_method: {adapter_config.gam_auth_method}, "
-                f"has refresh token: {bool(adapter_config._gam_refresh_token)}, "
-                f"has service account: {bool(adapter_config.gam_service_account_json)}"
-            )
+        adapter_config = AdapterConfigRepository(db_session, tenant_id).require_gam_config()
 
-        if not adapter_config:
-            logger.error(f"No adapter configured for tenant {tenant_id}")
-            return jsonify({"error": "No adapter configured for this tenant"}), 400
-        if not adapter_config.gam_network_code:
-            logger.error(f"GAM network code not configured for tenant {tenant_id}")
-            return jsonify({"error": "GAM network code not configured"}), 400
-
-        # Check for EITHER OAuth or Service Account authentication
-        has_oauth = bool(adapter_config._gam_refresh_token)
-        has_service_account = bool(adapter_config.gam_service_account_json)
-
-        if not has_oauth and not has_service_account:
-            logger.error(f"No GAM authentication configured for tenant {tenant_id}")
-            return (
-                jsonify({"error": "GAM authentication not configured. Please connect to GAM in tenant settings."}),
-                400,
-            )
-
-        # Initialize GAM adapter to query values
-        import tempfile
-
-        from google.oauth2 import service_account as google_service_account
-        from googleads import ad_manager, oauth2
-
+        from src.adapters.gam.client import GAMClientManager
         from src.adapters.gam_inventory_discovery import GAMInventoryDiscovery
 
-        # Create authentication client based on configured method
-        if has_service_account:
-            logger.debug(f"Using service account authentication for tenant {tenant_id}")
-            # Write service account JSON to temp file
-            service_account_json = adapter_config.gam_service_account_json
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-                f.write(service_account_json)
-                temp_key_path = f.name
-
-            try:
-                # Create service account credentials
-                credentials = google_service_account.Credentials.from_service_account_file(
-                    temp_key_path, scopes=["https://www.googleapis.com/auth/dfp"]
-                )
-                # Wrap in GoogleCredentialsClient for AdManagerClient compatibility
-                oauth2_client = oauth2.GoogleCredentialsClient(credentials)
-                # Create Ad Manager client with service account
-                gam_ad_manager_client = ad_manager.AdManagerClient(
-                    oauth2_client, "Prebid Sales Agent", network_code=adapter_config.gam_network_code
-                )
-            finally:
-                # Clean up temp file
-                import os as os_module
-
-                try:
-                    os_module.unlink(temp_key_path)
-                except OSError as e:
-                    logger.warning(f"Failed to delete temp service account file: {e}")
-        else:
-            logger.debug(f"Using OAuth authentication for tenant {tenant_id}")
-            # Create OAuth client
-            gam_auth = get_settings().auth
-            oauth2_client = oauth2.GoogleRefreshTokenClient(
-                client_id=gam_auth.gam_oauth_client_id,
-                client_secret=gam_auth.gam_oauth_client_secret,
-                refresh_token=adapter_config.gam_refresh_token,
-            )
-            # Create Ad Manager client
-            gam_ad_manager_client = ad_manager.AdManagerClient(
-                oauth2_client, "Prebid Sales Agent", network_code=adapter_config.gam_network_code
-            )
-
-        # Create inventory discovery instance
+        gam_ad_manager_client = GAMClientManager.for_adapter_config(adapter_config).get_client()
         gam_client = GAMInventoryDiscovery(client=gam_ad_manager_client, tenant_id=tenant_id)
 
         # Fetch values from GAM (max 1000 to avoid timeout)
@@ -373,31 +301,21 @@ def orders_browser(tenant_id):
 @log_admin_action("sync_orders")
 @require_tenant_access()
 def sync_orders(tenant_id):
-    """Sync GAM orders for a tenant."""
+    """Sync the tenant's GAM orders and line items, as the orders browser's Sync Orders button does.
+
+    A failure marks the sync job failed and raises SyncFailed, which the admin error handler
+    answers with the text the job stores.
+    """
+    from src.services.gam_orders_service import GAMOrdersService
+
     with get_db_session() as db_session:
-        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-
-        if not tenant:
-            return jsonify({"error": "Tenant not found"}), 404
-
-        # Validate GAM configuration via repository
-        from src.admin.blueprints.gam import _validate_gam_config
-
-        adapter_config, gam_error = _validate_gam_config(db_session, tenant_id)
-        if gam_error:
-            return jsonify({"error": gam_error}), 400
-
-        # Import GAM sync functionality
-        from src.adapters.gam_order_sync import sync_gam_orders
-
-        # Perform sync
-        result = sync_gam_orders(
-            tenant_id=tenant_id,
-            network_code=adapter_config.gam_network_code,
-            refresh_token=adapter_config.gam_refresh_token,
+        tenants = TenantConfigRepository(db_session, tenant_id)
+        tenants.require(tenants.get_tenant)
+        adapter_config = AdapterConfigRepository(db_session, tenant_id).require_gam_config()
+        answer = GAMOrdersService(db_session).sync_tenant_orders_as_job(
+            adapter_config, triggered_by="admin_ui", triggered_by_id="system"
         )
-
-        return jsonify(result)
+        return jsonify(answer)
 
 
 @inventory_bp.route("/api/tenant/<tenant_id>/orders", methods=["GET"])
@@ -629,8 +547,9 @@ def sync_inventory(tenant_id):
 
     Returns:
         202 Accepted with sync_id for tracking
-        400 Bad Request if GAM not configured or sync already running
+        400 Bad Request if the tenant's adapter is not GAM
         404 Not Found if tenant doesn't exist
+        409 Conflict if GAM is not connected (GAMNotConnected) or a sync is already running
     """
     # Validate tenant exists
     with get_db_session() as db_session:
@@ -650,22 +569,7 @@ def sync_inventory(tenant_id):
                 400,
             )
 
-        # Check if GAM is configured
-        from src.core.database.models import AdapterConfig
-
-        adapter_config = db_session.scalars(
-            select(AdapterConfig).filter_by(tenant_id=tenant_id, adapter_type="google_ad_manager")
-        ).first()
-
-        if not adapter_config or not adapter_config.gam_network_code:
-            return (
-                jsonify(
-                    {
-                        "error": "Please connect your GAM account before trying to sync inventory. Go to Ad Server settings to configure GAM."
-                    }
-                ),
-                400,
-            )
+        AdapterConfigRepository(db_session, tenant_id).require_gam_config()
 
     # Parse request body
     data = json_object_body()

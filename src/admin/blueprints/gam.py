@@ -2,16 +2,14 @@
 
 import json
 import logging
-from dataclasses import dataclass
-from datetime import UTC, datetime
 
 from flask import Blueprint, jsonify, render_template
 from googleads import ad_manager, oauth2
 from sqlalchemy import select
 
+from src.adapters.gam.client import GAMClientManager
 from src.adapters.gam.utils.error_handler import GAM_CALL_ERRORS
 from src.adapters.gam_inventory_discovery import GAMInventoryDiscovery
-from src.adapters.gam_reporting_service import GAMReportingService
 from src.admin.form_validation import json_object_body, parse_json_field
 from src.admin.gam_utils import GAMOAuthNotConfigured
 from src.admin.utils import require_tenant_access
@@ -19,9 +17,11 @@ from src.admin.utils.audit_decorator import log_admin_action
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
-from src.core.database.models import AdapterConfig, GAMLineItem, GAMOrder, Tenant, UserRole
+from src.core.database.models import Tenant, UserRole
 from src.core.database.repositories.adapter_config import AdapterConfigRepository, read_adapter_config
+from src.core.database.repositories.gam_order import GAMLineItemRepository, GAMOrderRepository
 from src.core.database.repositories.sync_job import SyncJobRepository
+from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.operator_errors import (
     ConnectionTestFailed,
     FormIssue,
@@ -35,50 +35,6 @@ logger = logging.getLogger(__name__)
 
 # Create blueprint
 gam_bp = Blueprint("gam", __name__, url_prefix="/tenant/<tenant_id>/gam")
-
-
-@dataclass(frozen=True)
-class _GamLineItemView:
-    """Display-only view of a line item fetched live from GAM.
-
-    NOT an ORM instance on purpose: the fetch-from-GAM fallback of
-    ``view_gam_line_item`` only needs attribute access for the template and
-    the order lookup, and constructing a ``GAMLineItem`` here both risked
-    accidental persistence and drifted from the mapper (seven phantom kwargs
-    raised TypeError — salesagent-3pj8). Attribute names mirror the real
-    ``GAMLineItem`` columns so templates cannot tell the two apart.
-    """
-
-    tenant_id: str
-    line_item_id: str
-    name: str
-    order_id: str
-    status: str
-    start_date: object
-    end_date: object
-    line_item_type: str
-    priority: int | None
-    cost_type: str | None
-    cost_per_unit: int | None
-    goal_type: str | None
-    primary_goal_units: int | None
-    stats_impressions: int
-    stats_clicks: int
-    stats_ctr: float
-    targeting: dict | None
-    last_synced: datetime
-
-
-def _validate_gam_config(session, tenant_id: str) -> tuple[AdapterConfig | None, str | None]:
-    """Validate that a tenant has a complete GAM configuration.
-
-    Returns (adapter_config, None) on success, or (None, error_message) on failure.
-    """
-    repo = AdapterConfigRepository(session, tenant_id)
-    config = repo.find_by_tenant()
-    if not config or not config.gam_network_code or not repo.has_gam_credentials(config):
-        return None, "Please connect your GAM account first. Go to Ad Server settings to configure GAM."
-    return config, None
 
 
 def _presented_or_stored_refresh_token(tenant_id: str, presented: object) -> str:
@@ -479,81 +435,13 @@ def configure_gam(tenant_id):
 @gam_bp.route("/line-item/<line_item_id>")
 @require_tenant_access()
 def view_gam_line_item(tenant_id, line_item_id):
-    """View details of a GAM line item."""
+    """View details of a GAM line item the orders sync stored."""
     with get_db_session() as db_session:
-        # Get the line item (falls back to a live-GAM display view below)
-        line_item: GAMLineItem | _GamLineItemView | None = db_session.scalars(
-            select(GAMLineItem).filter_by(tenant_id=tenant_id, line_item_id=line_item_id)
-        ).first()
-
-        if not line_item:
-            # Try to fetch from GAM if not in database
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-
-            if not tenant:
-                return render_template("error.html", error="Tenant not found"), 404
-
-            # Validate GAM configuration via repository
-            adapter_config, gam_error = _validate_gam_config(db_session, tenant_id)
-            if gam_error:
-                return render_template("error.html", error=gam_error), 400
-
-            # Initialize GAM reporting service
-            reporting_service = GAMReportingService(
-                network_code=adapter_config.gam_network_code,
-                refresh_token=adapter_config.gam_refresh_token,
-            )
-
-            # Fetch line item details from GAM
-            line_item_data = reporting_service.get_line_item_details(line_item_id)
-
-            if not line_item_data:
-                return render_template("error.html", error="Line item not found in GAM"), 404
-
-            # Display-only view — deliberately not an ORM instance (see
-            # _GamLineItemView). No delivery stats: this item was never
-            # synced locally.
-            line_item = _GamLineItemView(
-                tenant_id=tenant_id,
-                line_item_id=line_item_id,
-                name=line_item_data.get("name", "Unknown"),
-                order_id=str(line_item_data.get("orderId", "")),
-                status=line_item_data.get("status", "UNKNOWN"),
-                start_date=line_item_data.get("startDateTime"),
-                end_date=line_item_data.get("endDateTime"),
-                line_item_type=line_item_data.get("lineItemType", "UNKNOWN"),
-                priority=line_item_data.get("priority"),
-                cost_type=line_item_data.get("costType"),
-                cost_per_unit=line_item_data.get("costPerUnit", {}).get("microAmount"),
-                goal_type=line_item_data.get("primaryGoal", {}).get("goalType"),
-                primary_goal_units=line_item_data.get("primaryGoal", {}).get("units"),
-                stats_impressions=0,
-                stats_clicks=0,
-                stats_ctr=0.0,
-                targeting=line_item_data.get("targeting"),
-                last_synced=datetime.now(UTC),
-            )
-
-            # Get the order if available
-            if line_item.order_id:
-                order = db_session.scalars(
-                    select(GAMOrder).filter_by(tenant_id=tenant_id, order_id=line_item.order_id)
-                ).first()
-            else:
-                order = None
-
-        else:
-            # Get the associated order
-            order = (
-                db_session.scalars(select(GAMOrder).filter_by(tenant_id=tenant_id, order_id=line_item.order_id)).first()
-                if line_item.order_id
-                else None
-            )
-
-        # Get tenant for template
-        tenant_obj = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-        if not tenant_obj:
-            return render_template("error.html", error="Tenant not found"), 404
+        line_items = GAMLineItemRepository(db_session, tenant_id)
+        line_item = line_items.require(line_items.get, line_item_id)
+        order = GAMOrderRepository(db_session, tenant_id).get(line_item.order_id) if line_item.order_id else None
+        tenants = TenantConfigRepository(db_session, tenant_id)
+        tenant_obj = tenants.require(tenants.get_tenant)
 
         return render_template(
             "gam_line_item_viewer.html",
@@ -573,30 +461,10 @@ def view_gam_line_item(tenant_id, line_item_id):
 def get_gam_custom_targeting_keys(tenant_id):
     """Get GAM custom targeting keys."""
     with get_db_session() as db_session:
-        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-
-        if not tenant:
-            return jsonify({"error": "Tenant not found"}), 404
-
-        # Validate GAM configuration via repository
-        adapter_config, gam_error = _validate_gam_config(db_session, tenant_id)
-        if gam_error:
-            return jsonify({"error": gam_error}), 400
-
-        # Create OAuth2 client
-        gam_auth = get_settings().auth
-        oauth2_client = oauth2.GoogleRefreshTokenClient(
-            client_id=gam_auth.gam_oauth_client_id,
-            client_secret=gam_auth.gam_oauth_client_secret,
-            refresh_token=adapter_config.gam_refresh_token,
-        )
-
-        # Create GAM client
-        client = ad_manager.AdManagerClient(
-            oauth2_client, "Prebid Sales Agent", network_code=adapter_config.gam_network_code
-        )
-
-        # Initialize GAM inventory discovery
+        tenants = TenantConfigRepository(db_session, tenant_id)
+        tenants.require(tenants.get_tenant)
+        adapter_config = AdapterConfigRepository(db_session, tenant_id).require_gam_config()
+        client = GAMClientManager.for_adapter_config(adapter_config).get_client()
         discovery = GAMInventoryDiscovery(client=client, tenant_id=tenant_id)
 
         # Get custom targeting keys
@@ -1007,48 +875,25 @@ def test_gam_connection(tenant_id):
 @gam_bp.route("/api/line-item/<line_item_id>", methods=["GET"])
 @require_tenant_access()
 def get_gam_line_item_api(tenant_id, line_item_id):
-    """API endpoint to get GAM line item details."""
+    """The GAM line item the orders sync stored, as JSON."""
     with get_db_session() as db_session:
-        # Get the line item
-        line_item = db_session.scalars(
-            select(GAMLineItem).filter_by(tenant_id=tenant_id, line_item_id=line_item_id)
-        ).first()
-
-        if not line_item:
-            # Try to fetch from GAM if not in database
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-
-            if not tenant:
-                return jsonify({"error": "Tenant not found"}), 404
-
-            # Validate GAM configuration via repository
-            adapter_config, gam_error = _validate_gam_config(db_session, tenant_id)
-            if gam_error:
-                return jsonify({"error": gam_error}), 400
-
-            # Initialize GAM reporting service
-            reporting_service = GAMReportingService(
-                network_code=adapter_config.gam_network_code,
-                refresh_token=adapter_config.gam_refresh_token,
-            )
-
-            # Fetch line item details from GAM
-            line_item_data = reporting_service.get_line_item_details(line_item_id)
-
-            if not line_item_data:
-                return jsonify({"error": "Line item not found"}), 404
-
-            return jsonify(
-                {
-                    "success": True,
-                    "line_item": line_item_data,
-                }
-            )
-
-        # Return the line item data
+        line_items = GAMLineItemRepository(db_session, tenant_id)
+        line_item = line_items.require(line_items.get, line_item_id)
+        order = GAMOrderRepository(db_session, tenant_id).get(line_item.order_id) if line_item.order_id else None
         return jsonify(
             {
                 "success": True,
+                "order": (
+                    {
+                        "id": order.order_id,
+                        "name": order.name,
+                        "advertiser_name": order.advertiser_name,
+                        "trafficker_name": order.trafficker_name,
+                        "status": order.status,
+                    }
+                    if order
+                    else None
+                ),
                 "line_item": {
                     "id": line_item.line_item_id,
                     "name": line_item.name,
@@ -1060,13 +905,19 @@ def get_gam_line_item_api(tenant_id, line_item_id):
                     "priority": line_item.priority,
                     "cost_type": line_item.cost_type,
                     "cost_per_unit": line_item.cost_per_unit,
-                    "currency": line_item.currency_code,
                     "goal_type": line_item.goal_type,
-                    "goal_units": line_item.goal_units,
-                    "units_delivered": line_item.units_delivered,
-                    "impressions_delivered": line_item.impressions_delivered,
-                    "clicks_delivered": line_item.clicks_delivered,
-                    "ctr": line_item.ctr,
+                    "goal_units": line_item.primary_goal_units,
+                    "impressions_delivered": line_item.stats_impressions,
+                    "clicks_delivered": line_item.stats_clicks,
+                    "ctr": line_item.stats_ctr,
+                    "delivery_rate_type": line_item.delivery_rate_type,
+                    "allow_overbook": line_item.allow_overbook,
+                    "skip_inventory_check": line_item.skip_inventory_check,
+                    "reserve_at_creation": line_item.reserve_at_creation,
+                    # As the orders sync stored them: GAM's own objects, serialized.
+                    "targeting": line_item.targeting,
+                    "creative_placeholders": line_item.creative_placeholders,
+                    "frequency_caps": line_item.frequency_caps,
                     "last_synced": line_item.last_synced.isoformat() if line_item.last_synced else None,
                 },
             }

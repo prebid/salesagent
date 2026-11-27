@@ -126,7 +126,7 @@ def _register_hmac_receiver() -> None:
 
     The GAM adapter row is what lets the approval poller reach its ad-server
     branch at all (``_run_approval_thread`` refuses to poll — and reports
-    "GAM not configured for tenant" — without a network code); the
+    ``GAMNotConnected`` — without a network code and credentials); the
     push-notification row is the registration under test.
     """
     from tests.factories import (

@@ -15,7 +15,7 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import SyncJob
-from src.core.operator_errors import safe_error_message
+from src.core.operator_errors import GAMNotConnected, safe_error_message
 from src.core.security.webhook_egress import deliver_webhook
 from src.core.signing.outbound import delivery_signer_for_tenant
 from src.core.thread_registry import ThreadRegistry
@@ -119,15 +119,12 @@ def start_order_approval_background(
                 raise ValueError(f"Approval already running for order {order_id}: {approval.sync_id}")
 
         # Create new approval job
-        approval_id = f"approval_{order_id}_{int(datetime.now(UTC).timestamp())}"
+        from src.core.database.repositories.sync_job import SyncJobRepository
 
-        approval_job = SyncJob(
-            sync_id=approval_id,
-            tenant_id=tenant_id,
-            adapter_type="google_ad_manager",
+        approval_id = f"approval_{order_id}_{int(datetime.now(UTC).timestamp())}"
+        SyncJobRepository(db, tenant_id).start(
+            approval_id,
             sync_type="order_approval",
-            status="running",
-            started_at=datetime.now(UTC),
             triggered_by="order_creation",
             triggered_by_id=media_buy_id,
             progress={
@@ -140,7 +137,6 @@ def start_order_approval_background(
                 "phase": "Starting approval polling",
             },
         )
-        db.add(approval_job)
         db.commit()
 
     # Reserve the stop signal BEFORE starting the thread, so a cancel racing the
@@ -196,27 +192,22 @@ def _run_approval_thread(
         logger.info(f"[{approval_id}] Starting order approval polling for order {order_id}")
 
         # Import here to avoid circular dependencies
+        from src.adapters.gam.client import GAMClientManager
         from src.adapters.gam.managers.orders import GAMOrdersManager
 
         # Get adapter config via repository
         with get_db_session() as db:
             from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
-            adapter_repo = AdapterConfigRepository(db, tenant_id)
-            adapter_config = adapter_repo.find_by_tenant()
-
-            if not adapter_config or not adapter_config.gam_network_code:
+            try:
+                adapter_config = AdapterConfigRepository(db, tenant_id).require_gam_config()
+            except GAMNotConnected:
                 _mark_approval_failed(
-                    approval_id, "GAM not configured for tenant", webhook_url, tenant_id, principal_id, media_buy_id
+                    approval_id, GAMNotConnected.MESSAGE, webhook_url, tenant_id, principal_id, media_buy_id
                 )
                 return
+            client_manager = GAMClientManager.for_adapter_config(adapter_config)
 
-            gam_config = adapter_repo.get_gam_config(adapter_config)
-
-        # Create GAM client
-        from src.adapters.gam.client import GAMClientManager
-
-        client_manager = GAMClientManager(gam_config, adapter_config.gam_network_code)
         orders_manager = GAMOrdersManager(client_manager)
 
         # Poll GAM approval endpoint
@@ -336,17 +327,12 @@ def _mark_approval_complete(
     media_buy_id: str,
 ):
     """Mark approval as completed and send webhook notification."""
+    from src.core.database.repositories.sync_job import SyncJobRepository
+
     try:
         with get_db_session() as db:
-            import json
-
-            stmt = select(SyncJob).where(SyncJob.sync_id == approval_id)
-            approval_job = db.scalars(stmt).first()
-            if approval_job:
-                approval_job.status = "completed"
-                approval_job.completed_at = datetime.now(UTC)
-                approval_job.summary = json.dumps(summary) if summary else None
-                db.commit()
+            SyncJobRepository(db, tenant_id).complete(approval_id, summary)
+            db.commit()
 
         # Send webhook notification
         if webhook_url:

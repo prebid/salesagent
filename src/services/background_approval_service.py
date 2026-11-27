@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories import MediaBuyUoW, WorkflowUoW
-from src.core.operator_errors import safe_error_message
+from src.core.operator_errors import GAMNotConnected, safe_error_message
 from src.core.thread_registry import ThreadRegistry
 
 logger = logging.getLogger(__name__)
@@ -96,20 +96,14 @@ def _run_approval_polling_thread(
             with get_db_session() as db:
                 from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
-                adapter_repo = AdapterConfigRepository(db, tenant_id)
-                adapter_config = adapter_repo.find_by_tenant()
-                if not adapter_config or adapter_config.adapter_type != "google_ad_manager":
-                    raise ValueError(f"No GAM adapter config found for tenant {tenant_id}")
+                adapter_config = AdapterConfigRepository(db, tenant_id).require_gam_config()
+                client_manager = GAMClientManager.for_adapter_config(adapter_config)
 
-                if not adapter_config.gam_network_code:
-                    raise ValueError(f"GAM network code not configured for tenant {tenant_id}")
-
-                gam_config = adapter_repo.get_gam_config(adapter_config)
-
-            # Initialize GAM client and orders manager
-            client_manager = GAMClientManager(gam_config, adapter_config.gam_network_code)
             orders_manager = GAMOrdersManager(client_manager)
 
+        except GAMNotConnected:
+            _mark_approval_failed(tenant_id, workflow_step_id, GAMNotConnected.MESSAGE)
+            return
         except Exception as e:
             _mark_approval_failed(
                 tenant_id,

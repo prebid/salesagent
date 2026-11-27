@@ -1,103 +1,31 @@
-"""Helper functions for Google Ad Manager OAuth integration."""
+"""Helper functions for a tenant's Google Ad Manager connection."""
 
 import logging
 
 from googleads import ad_manager
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import AdapterConfig, Tenant
+from src.core.database.models import AdapterConfig
+from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
 logger = logging.getLogger(__name__)
 
 
-def get_ad_manager_client_for_tenant(tenant_id: str) -> ad_manager.AdManagerClient | None:
-    """
-    Get a Google Ad Manager client for a specific tenant using OAuth credentials.
+def get_ad_manager_client_for_tenant(tenant_id: str) -> ad_manager.AdManagerClient:
+    """A Google Ad Manager client for *tenant_id*, authenticated by its stored connection.
 
-    This function:
-    1. Retrieves the tenant's GAM configuration (network code, refresh token, etc.)
-    2. Gets the OAuth client credentials from superadmin config
-    3. Creates OAuth2 credentials using the refresh token
-    4. Returns an initialized AdManagerClient
-
-    Args:
-        tenant_id: The tenant ID to get the client for
-
-    Returns:
-        An initialized Google Ad Manager client, or None if configuration is missing
+    Built by ``GAMClientManager.for_adapter_config``, the one way to build a client from the
+    tenant's OAuth refresh token or service account. Token problems surface at the first
+    API call.
 
     Raises:
-        ValueError: If required configuration is missing
-        Exception: If OAuth token refresh fails
+        GAMNotConnected: If the tenant has no GAM network code or no credentials.
     """
-    # Get tenant and adapter config
+    from src.adapters.gam.client import GAMClientManager
+
     with get_db_session() as db_session:
-        # Get tenant
-        tenant = db_session.query(Tenant).filter_by(tenant_id=tenant_id).first()
-        if not tenant:
-            raise ValueError(f"Tenant {tenant_id} not found")
-
-        tenant_name = tenant.name
-        ad_server = tenant.ad_server
-
-        if ad_server != "google_ad_manager":
-            raise ValueError(f"Tenant {tenant_id} is not configured for Google Ad Manager (using {ad_server})")
-
-        # Get adapter config
-        adapter_config = (
-            db_session.query(AdapterConfig).filter_by(tenant_id=tenant_id, adapter_type="google_ad_manager").first()
-        )
-        if not adapter_config:
-            raise ValueError(f"No adapter configuration found for tenant {tenant_id}")
-
-        gam_network_code = adapter_config.gam_network_code
-        gam_refresh_token = adapter_config.gam_refresh_token
-
-        # Validate required GAM fields
-        if not gam_network_code:
-            raise ValueError(f"GAM network code not configured for tenant {tenant_id}")
-        if not gam_refresh_token:
-            raise ValueError(f"GAM refresh token not configured for tenant {tenant_id}")
-
-        # Get OAuth client credentials from validated configuration
-        try:
-            from src.core.config import get_settings
-            from src.core.logging_config import oauth_structured_logger
-
-            client_id = get_settings().auth.gam_oauth_client_id
-
-            # Log configuration load
-            oauth_structured_logger.log_gam_oauth_config_load(
-                success=True, client_id_prefix=client_id[:20] + "..." if len(client_id) > 20 else client_id
-            )
-
-        except Exception as e:
-            oauth_structured_logger.log_gam_oauth_config_load(success=False, error=str(e))
-            raise ValueError(f"GAM OAuth configuration error: {str(e)}") from e
-
-    try:
-        # Create the GoogleAds OAuth2 client the same way every other GAM call
-        # site does — via GAMAuthManager, which owns config load and client
-        # construction. Token problems surface at the first API call.
-        from src.adapters.gam.auth import GAMAuthManager
-
-        oauth2_client = GAMAuthManager({"refresh_token": gam_refresh_token}).get_credentials()
-
-        # Log successful client creation
-        oauth_structured_logger.log_gam_client_creation(success=True)
-        logger.info(f"Created OAuth2 client for tenant {tenant_id}")
-
-        # Create and return the Ad Manager client
-        client = ad_manager.AdManagerClient(
-            oauth2_client, f"AdCP-Sales-Agent-{tenant_name}", network_code=gam_network_code
-        )
-
-        logger.info(f"Successfully created GAM client for tenant {tenant_id} (network: {gam_network_code})")
-        return client
-
-    except Exception as e:
-        logger.error(f"Failed to create GAM client for tenant {tenant_id}: {str(e)}")
-        raise
+        adapter_config = AdapterConfigRepository(db_session, tenant_id).require_gam_config()
+        return GAMClientManager.for_adapter_config(adapter_config).get_client()
 
 
 def test_gam_connection(tenant_id: str) -> dict:
@@ -112,8 +40,6 @@ def test_gam_connection(tenant_id: str) -> dict:
     """
     try:
         client = get_ad_manager_client_for_tenant(tenant_id)
-        if not client:
-            return {"success": False, "message": "Failed to create GAM client"}
 
         # Try to get the network information as a test
         network_service = client.GetService("NetworkService")
@@ -137,8 +63,6 @@ def get_gam_network_info(tenant_id: str) -> dict:
     """
     try:
         client = get_ad_manager_client_for_tenant(tenant_id)
-        if not client:
-            raise ValueError(f"No GAM client available for tenant {tenant_id}")
         network_service = client.GetService("NetworkService")
         network = network_service.getCurrentNetwork()
 

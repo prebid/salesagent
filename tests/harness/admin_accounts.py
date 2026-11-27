@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
@@ -48,6 +49,22 @@ class AdminTransport(StrEnum):
 
     INTEGRATION = "admin_integration"  # Flask test_client, in-process
     E2E = "e2e_admin"  # requests.Session against the live stack
+
+
+@dataclass(frozen=True)
+class GamTokenEndpoint:
+    """The token endpoint a seeded GAM service account names as its ``token_uri``.
+
+    It records every token request and refuses it, so a GAM call made with the account
+    fails right after asking for its token, without reaching Google's token service.
+    """
+
+    url: str
+    _request_bodies: Callable[[], list[bytes]]
+
+    def request_bodies(self) -> list[bytes]:
+        """The body of each token request the endpoint received, oldest first."""
+        return self._request_bodies()
 
 
 def _product_edit_path(tenant_id: str, product_id: str) -> str:
@@ -104,8 +121,10 @@ class AdminAccountEnv:
         self._database_faults: list[tuple[str, str]] = []
         #: The in-process scripted model origin (:meth:`script_ai_connection_test`), once started.
         self._llm_origin: str | None = None
-        #: What ``__exit__`` closes besides the client: the in-process origin and its variable,
-        #: and every deployment setting a Given patched onto this process's settings.
+        #: The GAM service-account token endpoint (:meth:`gam_token_endpoint`), once started.
+        self._token_endpoint: GamTokenEndpoint | None = None
+        #: What ``__exit__`` closes besides the client: the in-process origins, the LLM
+        #: variable, and every deployment setting a Given patched onto this process's settings.
         self._in_process_cleanups = ExitStack()
 
     @property
@@ -146,6 +165,7 @@ class AdminAccountEnv:
         """Release what ``_setup`` and the scenario's steps left behind."""
         self._in_process_cleanups.close()
         self._llm_origin = None
+        self._token_endpoint = None
         self._drop_database_faults()
         self._cleanup_accounts()
 
@@ -577,16 +597,69 @@ class AdminAccountEnv:
         with self._seeding(tenant_id) as (_, tenant):
             catalog_first_publisher_leaderboard(tenant)
 
-    def onboard_gam(self, *, tenant_id: str | None = None, service_account_email: str | None = None) -> None:
+    def onboard_gam(
+        self,
+        *,
+        tenant_id: str | None = None,
+        service_account_email: str | None = None,
+        connected: bool = True,
+        service_account_json: str | None = None,
+    ) -> None:
         """Leave *tenant_id* (this env's tenant by default) with the rows GAM onboarding writes.
 
-        The service account email is stored if given; GAM onboarding stores none.
+        The service account email is stored if given; GAM onboarding stores none. A tenant
+        not *connected* keeps its network code and stores no credentials, as one whose
+        connection was never authorized or was removed. With *service_account_json*, the
+        tenant authenticates with that service account instead of an OAuth refresh token.
         """
         from tests.utils.tenant_setup import onboard_gam
 
         with self._seeding(tenant_id) as (_, tenant):
             config = onboard_gam(tenant, trafficker_id="bdd_trafficker")
             config.gam_service_account_email = service_account_email
+            if not connected or service_account_json is not None:
+                config.gam_refresh_token = None
+            if service_account_json is not None:
+                config.gam_auth_method = "service_account"
+                config.gam_service_account_json = service_account_json
+
+    def seed_gam_line_item(self, line_item_id: str, **columns: Any) -> None:
+        """Store the GAM line item *line_item_id* of this env's tenant, as an orders sync does; *columns* are ``GAMLineItem`` columns."""
+        from tests.factories import GAMLineItemFactory
+
+        with self._seeding() as (_, tenant):
+            GAMLineItemFactory(tenant=tenant, line_item_id=line_item_id, **columns)
+
+    def gam_token_endpoint(self) -> GamTokenEndpoint:
+        """The token endpoint for a GAM service account this env seeds, started on first use.
+
+        It refuses every token request with 400, as Google refuses an assertion it does not
+        accept. In process: a loopback origin of this env's own. Over e2e: the compose
+        ``webhook-capture`` service under a fresh key, at the plain-HTTP address the server
+        reaches it by. The service records any body, and answers a form post, which is not
+        JSON, with 400.
+        """
+        if self._token_endpoint is None:
+            self._token_endpoint = (
+                self._e2e_token_endpoint() if self._mode == "e2e" else self._in_process_token_endpoint()
+            )
+        return self._token_endpoint
+
+    def _e2e_token_endpoint(self) -> GamTokenEndpoint:
+        from tests.e2e._webhook_capture import CAPTURE_READBACK_ORIGIN, register_capture_key
+        from tests.e2e.webhook_capture_service import webhook_path
+
+        key, received = register_capture_key()
+        return GamTokenEndpoint(
+            f"{CAPTURE_READBACK_ORIGIN}{webhook_path(key)}", lambda: [request.content for request in received.raw()]
+        )
+
+    def _in_process_token_endpoint(self) -> GamTokenEndpoint:
+        from tests.helpers.local_http_origin import run_local_origin
+
+        origin = self._in_process_cleanups.enter_context(run_local_origin())
+        origin.respond_with(400, body=b'{"error": "invalid_grant"}')
+        return GamTokenEndpoint(f"{origin.base_url}/token", lambda: [request.body for request in origin.requests])
 
     def seed_running_inventory_sync(self, sync_id: str, *, tenant_id: str | None = None) -> None:
         """Store an inventory sync *sync_id* of *tenant_id* (this env's by default), started a moment ago, still running."""
@@ -797,6 +870,19 @@ class AdminAccountEnv:
         return self.client.request(
             "post", f"/api/sync/trigger/{tenant_id}", json=body, headers={"X-API-Key": self._stored_api_key("api_key")}
         )
+
+    def sync_orders_by_api(self, tenant_id: str) -> AdminResponse:
+        """POST the sync API's orders sync for *tenant_id*, as its scripted callers do."""
+        return self.client.request(
+            "post",
+            f"/api/sync/tenant/{tenant_id}/orders/sync",
+            json={},
+            headers={"X-API-Key": self._stored_api_key("api_key")},
+        )
+
+    def open_page(self, path: str) -> AdminResponse:
+        """GET *path* as a browser opens a page from its address bar, so it names no page to go back to."""
+        return self.client.request("get", path)
 
     def sync_status_by_api(self, sync_id: str) -> AdminResponse:
         """GET the sync job *sync_id* from the sync API's status route."""

@@ -8,6 +8,7 @@ from unittest.mock import ANY, patch
 
 import pytest
 
+from src.core.operator_errors import GAMNotConnected
 from tests.factories import AdapterConfigFactory, GAMInventoryFactory, TenantFactory
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -146,8 +147,8 @@ def test_get_targeting_values_tenant_isolation(authenticated_admin_session, boun
 
     response = authenticated_admin_session.get(_values_url(key.tenant_id, key.inventory_id))
 
-    assert response.status_code == 400
-    assert response.json == {"error": "No adapter configured for this tenant"}
+    assert response.status_code == 409
+    assert response.json == {"success": False, "error": GAMNotConnected.MESSAGE}
 
 
 def test_get_targeting_values_requires_auth(admin_client, bound_factory_session):

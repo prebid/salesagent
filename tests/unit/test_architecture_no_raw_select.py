@@ -101,12 +101,9 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/creative_agents.py", "list_creative_agents"),
     ("src/admin/blueprints/creative_agents.py", "test_creative_agent"),
     ("src/admin/blueprints/gam.py", "configure_gam"),
-    ("src/admin/blueprints/gam.py", "get_gam_custom_targeting_keys"),
-    ("src/admin/blueprints/gam.py", "get_gam_line_item_api"),
     ("src/admin/blueprints/gam.py", "get_latest_sync_status"),
     ("src/admin/blueprints/gam.py", "reset_stuck_sync"),
     ("src/admin/blueprints/gam.py", "test_gam_connection"),
-    ("src/admin/blueprints/gam.py", "view_gam_line_item"),
     ("src/admin/blueprints/inventory.py", "analyze_ad_server_inventory"),
     ("src/admin/blueprints/inventory.py", "check_inventory_sync"),
     ("src/admin/blueprints/inventory.py", "get_inventory_list"),
@@ -120,7 +117,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/inventory.py", "inventory_browser"),
     ("src/admin/blueprints/inventory.py", "orders_browser"),
     ("src/admin/blueprints/inventory.py", "sync_inventory"),
-    ("src/admin/blueprints/inventory.py", "sync_orders"),
     ("src/admin/blueprints/inventory.py", "targeting_browser"),
     ("src/admin/blueprints/inventory_profiles.py", "add_inventory_profile"),
     ("src/admin/blueprints/inventory_profiles.py", "edit_inventory_profile"),
@@ -251,7 +247,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/auth_config_service.py", "mark_oidc_verified"),
     ("src/services/auth_config_service.py", "save_oidc_config"),
     # _run_approval_polling_thread removed — uses AdapterConfigRepository
-    ("src/services/background_sync_service.py", "_mark_sync_complete"),
     ("src/services/background_sync_service.py", "_run_sync_thread"),
     ("src/services/background_sync_service.py", "_update_sync_progress"),
     ("src/services/background_sync_service.py", "start_inventory_sync_background"),
@@ -260,7 +255,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/dynamic_pricing_service.py", "_calculate_product_pricing"),
     ("src/services/dynamic_products.py", "archive_expired_variants"),
     ("src/services/format_metrics_service.py", "_process_and_store_metrics"),
-    ("src/services/format_metrics_service.py", "aggregate_all_tenants"),
     # _update_adapter_config_targeting_keys removed — uses AdapterConfigRepository
     ("src/services/gam_inventory_service.py", "_upsert_inventory_item"),
     ("src/services/gam_inventory_service.py", "get_ad_unit_tree"),
@@ -279,7 +273,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/gcp_service_account_service.py", "delete_service_account"),
     ("src/services/gcp_service_account_service.py", "get_service_account_email"),
     ("src/services/media_buy_status_scheduler.py", "_are_creatives_approved"),
-    ("src/services/order_approval_service.py", "_mark_approval_complete"),
     # _run_approval_thread removed — uses AdapterConfigRepository (salesagent-zj9)
     # _send_approval_webhook removed — auth lookup moved to _build_approval_webhook_headers
     # which routes through PushNotificationConfigRepository (C901 ratchet fix)

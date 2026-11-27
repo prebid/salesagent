@@ -122,10 +122,6 @@ def get_gam_reporting(tenant_id: str):
     logger.info(f"Getting GAM client for tenant {tenant_id}")
     gam_client = get_ad_manager_client_for_tenant(tenant_id)
 
-    if not gam_client:
-        logger.error(f"Failed to get GAM client for tenant {tenant_id}")
-        return jsonify({"error": "GAM client not configured for this tenant"}), 500
-
     # Get the network timezone (fetching if necessary)
     from scripts.ops.gam_helper import ensure_network_timezone
 
@@ -350,9 +346,6 @@ def get_country_breakdown(tenant_id: str):
     # Get the GAM client for this tenant
     gam_client = get_ad_manager_client_for_tenant(tenant_id)
 
-    if not gam_client:
-        return jsonify({"error": "GAM client not configured for this tenant"}), 500
-
     # Get the network timezone
     from scripts.ops.gam_helper import ensure_network_timezone
 
@@ -424,9 +417,6 @@ def get_ad_unit_breakdown(tenant_id: str):
 
     # Get the GAM client for this tenant
     gam_client = get_ad_manager_client_for_tenant(tenant_id)
-
-    if not gam_client:
-        return jsonify({"error": "GAM client not configured for this tenant"}), 500
 
     # Get the network timezone
     from scripts.ops.gam_helper import ensure_network_timezone

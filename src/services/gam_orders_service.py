@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session, joinedload, scoped_session, sessionmaker
 from src.adapters.gam_orders_discovery import GAMOrdersDiscovery, LineItem, Order
 from src.core.database.db_config import DatabaseConfig
 from src.core.database.integrity import resolve_or_write
-from src.core.database.models import GAMLineItem, GAMOrder
+from src.core.database.models import AdapterConfig, GAMLineItem, GAMOrder
 
 # Create database session factory
 engine = create_engine(DatabaseConfig.get_connection_string())
@@ -58,6 +58,38 @@ class GAMOrdersService:
         self._save_orders_to_db(tenant_id, discovery)
 
         return sync_summary
+
+    def sync_tenant_orders_as_job(
+        self, adapter_config: AdapterConfig, *, triggered_by: str, triggered_by_id: str
+    ) -> dict[str, Any]:
+        """Sync the tenant's orders and line items from GAM, recorded as one orders ``SyncJob``.
+
+        The one orders sync both orders sync routes run. *adapter_config* is the tenant's
+        connection, as ``AdapterConfigRepository.require_gam_config`` returned it. Returns the
+        answer: ``sync_id``, ``status`` ("completed") and the sync's ``summary``. A failure
+        marks the job failed and raises ``SyncFailed`` (:func:`recording_failure`).
+        """
+        from src.adapters.gam.client import GAMClientManager
+        from src.core.database.repositories.sync_job import SyncJobRepository
+        from src.services.sync_jobs import recording_failure
+
+        tenant_id = adapter_config.tenant_id
+        sync_jobs = SyncJobRepository(self.db, tenant_id)
+        sync_job = sync_jobs.start(
+            f"orders_sync_{tenant_id}_{int(datetime.now(UTC).timestamp())}",
+            sync_type="orders",
+            triggered_by=triggered_by,
+            triggered_by_id=triggered_by_id,
+        )
+        self.db.commit()
+
+        with recording_failure(self.db, sync_job, f"Orders sync failed for tenant {tenant_id}"):
+            client = GAMClientManager.for_adapter_config(adapter_config).get_client()
+            summary = self.sync_tenant_orders(tenant_id, client)
+            sync_jobs.complete(sync_job.sync_id, summary)
+            self.db.commit()
+
+        return {"sync_id": sync_job.sync_id, "status": "completed", "summary": summary}
 
     def _save_orders_to_db(self, tenant_id: str, discovery: GAMOrdersDiscovery):
         """Save discovered orders and line items to database."""
