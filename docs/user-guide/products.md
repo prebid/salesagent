@@ -73,7 +73,8 @@ Every product names the publisher properties it covers. You select them by tag o
 property ID.
 
 The form offers only the properties that your publishers authorize in their
-`adagents.json` files. When the list is empty, add the publisher first.
+`adagents.json` files. When the list is empty, add the publisher first, as
+[Publishers and authorized properties](publishers.md) describes.
 
 ### Inventory on Google Ad Manager
 
@@ -120,7 +121,8 @@ A publisher whose `adagents.json` the sales agent cannot fetch stops authorizing
 once its last fetched file expires. For how long a fetched file counts and how often the
 sales agent fetches it again, see
 [Publisher adagents.json](../deployment/vm.md#step-11-publisher-adagentsjson). To fetch every
-publisher's file at once, click **Sync All Publishers** on the **Publishers & Properties** tab.
+publisher's file at once, click **Sync All Publishers** on the **Publishers & Properties** tab
+that [Publishers and authorized properties](publishers.md) describes.
 
 ## Sample products
 

@@ -109,7 +109,7 @@ A super admin reaches every tenant in the Admin UI. The following variables name
 | `SUPER_ADMIN_EMAILS` | - | Comma-separated super admin emails |
 | `SUPER_ADMIN_DOMAINS` | - | Comma-separated email domains whose users are super admins |
 
-The Admin UI checks these variables before the `super_admin_emails` and `super_admin_domains` rows of the `TenantManagementConfig` table.
+The Admin UI checks these variables before the `super_admin_emails` and `super_admin_domains` rows of the `TenantManagementConfig` table. For the full order, see [Super admin check](../security.md#super-admin-check).
 
 `scripts/setup/init_database.py` copies these variables into those two rows when you run it. The script prefers `TENANT_MANAGEMENT_EMAILS` over `SUPER_ADMIN_EMAILS`, and `TENANT_MANAGEMENT_DOMAINS` over `SUPER_ADMIN_DOMAINS`, when they are set.
 
@@ -234,6 +234,8 @@ in every deployment: properties come only from it.
 |----------|---------|-------------|
 | `ENCRYPTION_KEY` | - | Fernet key for encrypting stored secrets (OIDC client secrets, API keys, GAM service account JSON and GAM OAuth refresh tokens). The container refuses to start without it, and the application refuses to encrypt or decrypt without it, so every deployment with a GAM tenant needs it, whichever GAM authentication method the tenant uses. The database migration that encrypts existing GAM refresh tokens stops if they exist and this is not set. Keep it stable: changing it makes the stored secrets unreadable. Generate with `python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'` |
 | `FLASK_SECRET_KEY` | auto-generated at startup | Flask session secret. Set it explicitly so sessions survive restarts and work across multiple processes. |
+| `SYNC_API_KEY` | - | Key that the Inventory Sync API accepts in the `X-API-Key` header. When unset, the API accepts the key stored in the database. See [Tenant Management API and Inventory Sync API](../operations/admin-apis.md) |
+| `TENANT_MANAGEMENT_API_KEY` | - | Key that the Tenant Management API accepts in the `X-Tenant-Management-API-Key` header. See [Tenant Management API and Inventory Sync API](../operations/admin-apis.md) |
 
 ---
 
@@ -262,6 +264,7 @@ in every deployment: properties come only from it.
 | `ADCP_SALES_PORT` | `8080` | Port the unified application listens on (nginx proxies to it) |
 | `ADCP_SALES_HOST` | `0.0.0.0` | Bind address for `scripts/run_server.py` (production always binds all interfaces) |
 | `SKIP_NGINX` | `false` | Skip nginx in deployment scripts |
+| `ADMIN_SERVER_TYPE` | `waitress` | Server that the standalone Admin UI entry point `src/admin/server.py` starts: `waitress`, `werkzeug`, or `uvicorn`. The unified application does not read it |
 | `SKIP_CRON` | `false` | Skip cron job scheduling. The scheduled GAM inventory sync authenticates with `SYNC_API_KEY` and exits with an error when it is unset |
 
 Every variable above is read once, by `src/core/config.py`, when a process is composed; an
@@ -286,6 +289,7 @@ Set these through your platform's secret store (for example, `fly secrets set`) 
 - `OAUTH_CLIENT_SECRET` or `GOOGLE_CLIENT_SECRET` (for the deployment's own sign-in)
 - `APPROXIMATED_API_KEY`
 - `FLASK_SECRET_KEY`
+- `SYNC_API_KEY`, `TENANT_MANAGEMENT_API_KEY` (for the Admin UI's two key-authenticated APIs)
 
 > **Note**: Each tenant's own SSO credentials live in the database, encrypted with `ENCRYPTION_KEY`. You enter them on the Users & Access page.
 

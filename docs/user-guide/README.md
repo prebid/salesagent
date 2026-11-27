@@ -65,6 +65,10 @@ an invitation. See [SSO setup](sso-setup.md) for configuring authentication.
 - **[Products](products.md)** - Setting up your product catalog
 - **[Advertisers](advertisers.md)** - Managing principals and API access
 - **[Creatives](creatives.md)** - Creative approval workflow
+- **[Publishers and authorized properties](publishers.md)** - Adding the publishers you sell for
+- **[Inventory and inventory profiles](inventory.md)** - Syncing and browsing ad server inventory
+- **[Media buys, approvals, and workflows](media-buys.md)** - Reviewing, approving, and rejecting media buys
+- **[Tenant settings](settings.md)** - The settings page, section by section
 
 ## Connect AI agents
 

@@ -667,7 +667,8 @@ takes more than 30 minutes.
 A sync from the Admin UI, and a `full` sync through the Inventory Sync API, fetch
 custom targeting **keys** only. The Admin UI reads a key's **values** live from GAM
 each time you browse the key, and stores none of them. Other Inventory Sync API syncs
-also store values, subject to `custom_targeting_limit`.
+also store values, as `custom_targeting_limit` in
+[Run an inventory sync](../operations/admin-apis.md#run-an-inventory-sync) describes.
 
 ```bash
 # Trigger an inventory sync (authenticated with the SYNC_API_KEY value)
