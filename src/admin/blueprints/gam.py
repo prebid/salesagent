@@ -879,9 +879,21 @@ def get_gam_line_item_api(tenant_id, line_item_id):
     with get_db_session() as db_session:
         line_items = GAMLineItemRepository(db_session, tenant_id)
         line_item = line_items.require(line_items.get, line_item_id)
+        order = GAMOrderRepository(db_session, tenant_id).get(line_item.order_id) if line_item.order_id else None
         return jsonify(
             {
                 "success": True,
+                "order": (
+                    {
+                        "id": order.order_id,
+                        "name": order.name,
+                        "advertiser_name": order.advertiser_name,
+                        "trafficker_name": order.trafficker_name,
+                        "status": order.status,
+                    }
+                    if order
+                    else None
+                ),
                 "line_item": {
                     "id": line_item.line_item_id,
                     "name": line_item.name,
@@ -898,6 +910,14 @@ def get_gam_line_item_api(tenant_id, line_item_id):
                     "impressions_delivered": line_item.stats_impressions,
                     "clicks_delivered": line_item.stats_clicks,
                     "ctr": line_item.stats_ctr,
+                    "delivery_rate_type": line_item.delivery_rate_type,
+                    "allow_overbook": line_item.allow_overbook,
+                    "skip_inventory_check": line_item.skip_inventory_check,
+                    "reserve_at_creation": line_item.reserve_at_creation,
+                    # As the orders sync stored them: GAM's own objects, serialized.
+                    "targeting": line_item.targeting,
+                    "creative_placeholders": line_item.creative_placeholders,
+                    "frequency_caps": line_item.frequency_caps,
                     "last_synced": line_item.last_synced.isoformat() if line_item.last_synced else None,
                 },
             }

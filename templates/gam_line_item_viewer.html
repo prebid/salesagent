@@ -65,16 +65,10 @@
                 <button class="nav-link" id="targeting-tab" data-bs-toggle="tab" data-bs-target="#targeting" type="button">Targeting</button>
             </li>
             <li class="nav-item" role="presentation">
-                <button class="nav-link" id="creatives-tab" data-bs-toggle="tab" data-bs-target="#creatives" type="button">Creatives</button>
-            </li>
-            <li class="nav-item" role="presentation">
                 <button class="nav-link" id="delivery-tab" data-bs-toggle="tab" data-bs-target="#delivery" type="button">Delivery Settings</button>
             </li>
             <li class="nav-item" role="presentation">
-                <button class="nav-link" id="raw-tab" data-bs-toggle="tab" data-bs-target="#raw" type="button">Raw GAM Data</button>
-            </li>
-            <li class="nav-item" role="presentation">
-                <button class="nav-link" id="product-json-tab" data-bs-toggle="tab" data-bs-target="#product-json" type="button">Product JSON</button>
+                <button class="nav-link" id="raw-tab" data-bs-toggle="tab" data-bs-target="#raw" type="button">Stored Data</button>
             </li>
         </ul>
 
@@ -135,16 +129,6 @@
                 </div>
             </div>
 
-            <!-- Creatives Tab -->
-            <div class="tab-pane fade" id="creatives" role="tabpanel">
-                <div class="card">
-                    <div class="card-header">Associated Creatives</div>
-                    <div class="card-body">
-                        <div id="creativesContent"></div>
-                    </div>
-                </div>
-            </div>
-
             <!-- Delivery Settings Tab -->
             <div class="tab-pane fade" id="delivery" role="tabpanel">
                 <div class="card">
@@ -155,25 +139,12 @@
                 </div>
             </div>
 
-            <!-- Raw GAM Data Tab -->
+            <!-- Stored Data Tab -->
             <div class="tab-pane fade" id="raw" role="tabpanel">
                 <div class="card">
-                    <div class="card-header">Raw GAM Response</div>
+                    <div class="card-header">The stored line item, as the server answers it</div>
                     <div class="card-body">
                         <pre id="rawData" class="bg-light p-3" style="max-height: 600px; overflow-y: auto;"></pre>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Product JSON Tab -->
-            <div class="tab-pane fade" id="product-json" role="tabpanel">
-                <div class="card">
-                    <div class="card-header">
-                        Internal Media Product JSON
-                        <button class="btn btn-sm btn-secondary float-end" onclick="copyProductJson()">Copy JSON</button>
-                    </div>
-                    <div class="card-body">
-                        <pre id="productJsonContent" class="bg-light p-3" style="max-height: 600px; overflow-y: auto;"></pre>
                     </div>
                 </div>
             </div>
@@ -184,17 +155,10 @@
 <script>
 console.log('GAM Line Item Viewer script loaded');
 let currentLineItemData = null;
-let customTargetingMappings = null;
 
 // A missing value reads "N/A" on this page. Escaping is the shared escapeHtml() (static/js/escape_html.js).
 function orNA(value) {
     return value === null || value === undefined ? 'N/A' : value;
-}
-
-// Format number with thousand separators
-function formatNumber(num) {
-    if (num === null || num === undefined) return '0';
-    return Number(num).toLocaleString();
 }
 
 // Parse custom targeting tree structure into readable HTML
@@ -228,29 +192,16 @@ function parseCustomTargeting(customTargeting) {
             nodeHtml += `<div style="margin-left: ${escapeHtml(indent)}px; margin-bottom: 8px;" class="key-value-item">`;
             nodeHtml += '<div class="d-flex align-items-center">';
 
-            // Key - try to get name from mappings
-            const keyId = String(node.keyId);
-            const keyInfo = customTargetingMappings?.keys?.[keyId];
-            const keyDisplay = keyInfo ? `${keyInfo.name} (${keyInfo.displayName})` : `Key ID: ${keyId}`;
-            nodeHtml += `<span class="badge bg-secondary me-2">${escapeHtml(orNA(keyDisplay))}</span>`;
+            // The stored targeting names keys and values by their GAM ids.
+            nodeHtml += `<span class="badge bg-secondary me-2">Key ID: ${escapeHtml(String(node.keyId))}</span>`;
 
             // Operator
             const operatorDisplay = node.operator === 'IS_NOT' ? 'IS NOT' : (node.operator || 'IS');
             nodeHtml += `<span class="badge bg-info me-2">${escapeHtml(orNA(operatorDisplay))}</span>`;
 
-            // Values - try to get names from mappings
             if (node.valueIds && node.valueIds.length > 0) {
-                const valueDisplays = node.valueIds.map(id => {
-                    const valueId = String(id);
-                    const valueInfo = customTargetingMappings?.values?.[valueId];
-                    return valueInfo ? valueInfo.displayName || valueInfo.name : valueId;
-                });
-                nodeHtml += '<span class="badge bg-success">';
-                nodeHtml += valueDisplays.map(v => escapeHtml(orNA(v))).join(', ');
-                nodeHtml += '</span>';
-            } else if (node.values && node.values.length > 0) {
-                nodeHtml += '<span class="badge bg-success">Values: ';
-                nodeHtml += node.values.map(v => escapeHtml(orNA(v.name || v))).join(', ');
+                nodeHtml += '<span class="badge bg-success">Value IDs: ';
+                nodeHtml += node.valueIds.map(id => escapeHtml(String(id))).join(', ');
                 nodeHtml += '</span>';
             }
 
@@ -293,25 +244,6 @@ window.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-async function fetchCustomTargetingMappings() {
-    try {
-        const response = await fetch(scriptRoot + '/tenant/' + {{ tenant_id|tojson }} + '/gam/api/custom-targeting-keys', {
-            method: 'GET',
-            credentials: 'include',
-            headers: {
-                'Accept': 'application/json'
-            }
-        });
-
-        if (response.ok) {
-            customTargetingMappings = await response.json();
-            console.log('Loaded custom targeting mappings:', customTargetingMappings);
-        }
-    } catch (error) {
-        console.error('Failed to load custom targeting mappings:', error);
-    }
-}
-
 async function loadLineItem() {
     console.log('loadLineItem function called');
     const lineItemId = document.getElementById('lineItemId').value.trim();
@@ -329,11 +261,6 @@ async function loadLineItem() {
     document.getElementById('loading').style.display = 'block';
     document.getElementById('error').style.display = 'none';
     document.getElementById('lineItemContent').style.display = 'none';
-
-    // Fetch custom targeting mappings if not already loaded
-    if (!customTargetingMappings) {
-        await fetchCustomTargetingMappings();
-    }
 
     try {
         console.log('Fetching line item from API...');
@@ -391,7 +318,7 @@ function displayLineItemData(data) {
         displayBasicInfo(data.line_item);
 
         console.log('Calling displayOrderInfo...');
-        displayOrderInfo(data.line_item);
+        displayOrderInfo(data.order, data.line_item);
 
         console.log('Calling displayPricingInfo...');
         displayPricingInfo(data.line_item);
@@ -399,36 +326,14 @@ function displayLineItemData(data) {
         console.log('Calling displayScheduleInfo...');
         displayScheduleInfo(data.line_item);
 
-        console.log('Targeting data:', data.line_item.targeting);
-        console.log('Inventory details:', data.inventory_details);
-        if (data.line_item.targeting) {
-            console.log('Calling displayTargeting...');
-            displayTargeting(data.line_item.targeting, data.inventory_details);
-        }
-
-        console.log('Creatives data:', data.creatives);
-        console.log('Creative associations:', data.creative_associations);
-        console.log('Calling displayCreatives...');
-        displayCreatives(data.creatives, data.creative_associations);
+        console.log('Calling displayTargeting...');
+        displayTargeting(data.line_item.targeting);
 
         console.log('Calling displayDeliverySettings...');
         displayDeliverySettings(data.line_item);
 
         // Display raw data
         document.getElementById('rawData').textContent = JSON.stringify(data, null, 2);
-
-        // Display product JSON with human-readable targeting prominently
-        if (data.media_product_json) {
-            console.log('Media Product JSON with human-readable targeting:', data.media_product_json);
-
-            // Highlight the key-value targeting if present
-            if (data.media_product_json.implementation_config?.gam?.key_value_targeting) {
-                console.log('Human-readable key-value targeting:',
-                    data.media_product_json.implementation_config.gam.key_value_targeting);
-            }
-
-            document.getElementById('productJsonContent').textContent = JSON.stringify(data.media_product_json, null, 2);
-        }
     } catch (error) {
         console.error('Error in displayLineItemData:', error);
         console.error('Error stack:', error.stack);
@@ -447,9 +352,22 @@ function displayBasicInfo(lineItem) {
     `;
 }
 
-function displayOrderInfo(lineItem) {
-    document.getElementById('orderInfo').innerHTML = `
-        <tr><td><strong>Order ID:</strong></td><td>${escapeHtml(orNA(lineItem.order_id))}</td></tr>
+// *order* is the stored order the line item belongs to, or null when the orders sync stored none.
+function displayOrderInfo(order, lineItem) {
+    const tbody = document.getElementById('orderInfo');
+    if (!order) {
+        tbody.innerHTML = `
+            <tr><td><strong>Order ID:</strong></td><td>${escapeHtml(orNA(lineItem.order_id))}</td></tr>
+            <tr><td colspan="2" class="text-muted">The orders sync stored no order with this ID.</td></tr>
+        `;
+        return;
+    }
+    tbody.innerHTML = `
+        <tr><td><strong>Order ID:</strong></td><td>${escapeHtml(orNA(order.id))}</td></tr>
+        <tr><td><strong>Order Name:</strong></td><td>${escapeHtml(orNA(order.name))}</td></tr>
+        <tr><td><strong>Advertiser:</strong></td><td>${escapeHtml(orNA(order.advertiser_name))}</td></tr>
+        <tr><td><strong>Trafficker:</strong></td><td>${escapeHtml(orNA(order.trafficker_name))}</td></tr>
+        <tr><td><strong>Status:</strong></td><td><span class="badge bg-${escapeHtml(getStatusBadgeClass(order.status))}">${escapeHtml(orNA(order.status))}</span></td></tr>
     `;
 }
 
@@ -490,23 +408,18 @@ function displayScheduleInfo(lineItem) {
     `;
 }
 
-function displayTargeting(targeting, inventoryDetails) {
+// *targeting* is the line item's GAM targeting as the orders sync stored it, or null.
+// It names ad units, placements and custom targeting keys and values by their GAM ids.
+function displayTargeting(targeting) {
     const container = document.getElementById('targetingContent');
-    console.log('displayTargeting called with:', targeting, inventoryDetails);
-
-    if (!container) {
-        console.error('targetingContent element not found!');
-        return;
-    }
 
     if (!targeting) {
-        container.innerHTML = '<p>No targeting configured</p>';
+        container.innerHTML = '<p>The orders sync stored no targeting for this line item.</p>';
         return;
     }
 
     let targetingHtml = '<div class="row">';
 
-    // Inventory targeting - MOVED TO TOP AND ENHANCED
     if (targeting.inventoryTargeting) {
         targetingHtml += '<div class="col-md-12 mb-4">';
         targetingHtml += '<div class="card">';
@@ -515,87 +428,28 @@ function displayTargeting(targeting, inventoryDetails) {
         targetingHtml += '</div>';
         targetingHtml += '<div class="card-body">';
 
-        // Placements section
-        if (targeting.inventoryTargeting.targetedPlacementIds && targeting.inventoryTargeting.targetedPlacementIds.length > 0) {
+        const placementIds = targeting.inventoryTargeting.targetedPlacementIds || [];
+        if (placementIds.length > 0) {
             targetingHtml += '<div class="mb-3">';
             targetingHtml += '<h6><i class="bi bi-folder2-open"></i> Targeted Placements</h6>';
-            targetingHtml += '<div class="table-responsive">';
-            targetingHtml += '<table class="table table-sm table-hover">';
-            targetingHtml += '<thead><tr><th>Placement Name</th><th>ID</th><th>Status</th><th>Ad Units in Placement</th></tr></thead>';
-            targetingHtml += '<tbody>';
-
-            targeting.inventoryTargeting.targetedPlacementIds.forEach(placementId => {
-                const placement = inventoryDetails?.placements?.[placementId];
-                if (placement) {
-                    targetingHtml += '<tr>';
-                    targetingHtml += `<td><strong>${escapeHtml(orNA(placement.name))}</strong>`;
-                    if (placement.description) {
-                        targetingHtml += `<br><small class="text-muted">${escapeHtml(orNA(placement.description))}</small>`;
-                    }
-                    targetingHtml += '</td>';
-                    targetingHtml += `<td><code>${escapeHtml(orNA(placementId))}</code></td>`;
-                    targetingHtml += `<td><span class="badge bg-${placement.status === 'ACTIVE' ? 'success' : 'secondary'}">${escapeHtml(orNA(placement.status))}</span></td>`;
-                    targetingHtml += '<td>';
-                    if (placement.targetedAdUnitIds && placement.targetedAdUnitIds.length > 0) {
-                        targetingHtml += `<small>${escapeHtml(placement.targetedAdUnitIds.length)} ad unit(s)</small>`;
-                    } else {
-                        targetingHtml += '<small class="text-muted">No specific ad units</small>';
-                    }
-                    targetingHtml += '</td>';
-                    targetingHtml += '</tr>';
-                } else {
-                    targetingHtml += '<tr>';
-                    targetingHtml += `<td colspan="4">Placement ID: <code>${escapeHtml(orNA(placementId))}</code> <small class="text-muted">(Details not available)</small></td>`;
-                    targetingHtml += '</tr>';
-                }
+            targetingHtml += '<ul class="list-unstyled">';
+            placementIds.forEach(placementId => {
+                targetingHtml += `<li>Placement ID: <code>${escapeHtml(String(placementId))}</code></li>`;
             });
-
-            targetingHtml += '</tbody></table>';
-            targetingHtml += '</div>';
+            targetingHtml += '</ul>';
             targetingHtml += '</div>';
         }
 
-        // Ad Units section with hierarchy
-        if (targeting.inventoryTargeting.targetedAdUnits && targeting.inventoryTargeting.targetedAdUnits.length > 0) {
+        const adUnits = targeting.inventoryTargeting.targetedAdUnits || [];
+        if (adUnits.length > 0) {
             targetingHtml += '<div class="mb-3">';
             targetingHtml += '<h6><i class="bi bi-diagram-3"></i> Targeted Ad Units</h6>';
-            targetingHtml += '<div class="table-responsive">';
-            targetingHtml += '<table class="table table-sm table-hover">';
-            targetingHtml += '<thead><tr><th>Ad Unit Hierarchy</th><th>ID</th><th>Code</th><th>Include Descendants</th><th>Status</th></tr></thead>';
-            targetingHtml += '<tbody>';
-
-            targeting.inventoryTargeting.targetedAdUnits.forEach(targetedUnit => {
-                const adUnit = inventoryDetails?.ad_units?.[targetedUnit.adUnitId];
-                if (adUnit) {
-                    targetingHtml += '<tr>';
-                    targetingHtml += '<td>';
-                    targetingHtml += `<div class="d-flex align-items-center">`;
-                    // Show hierarchy with indentation
-                    const pathParts = adUnit.fullPath.split(' > ');
-                    const indent = (pathParts.length - 1) * 20;
-                    targetingHtml += `<div style="margin-left: ${escapeHtml(indent)}px;">`;
-                    targetingHtml += `<i class="bi bi-folder me-1"></i>`;
-                    targetingHtml += `<strong>${escapeHtml(orNA(adUnit.name))}</strong>`;
-                    if (pathParts.length > 1) {
-                        targetingHtml += `<br><small class="text-muted" style="margin-left: 20px;">Path: ${escapeHtml(orNA(adUnit.fullPath))}</small>`;
-                    }
-                    targetingHtml += '</div>';
-                    targetingHtml += '</div>';
-                    targetingHtml += '</td>';
-                    targetingHtml += `<td><code>${escapeHtml(orNA(targetedUnit.adUnitId))}</code></td>`;
-                    targetingHtml += `<td><code>${escapeHtml(orNA(adUnit.adUnitCode || 'N/A'))}</code></td>`;
-                    targetingHtml += `<td>${targetedUnit.includeDescendants ? '<span class="badge bg-info">Yes</span>' : '<span class="badge bg-secondary">No</span>'}</td>`;
-                    targetingHtml += `<td><span class="badge bg-${adUnit.status === 'ACTIVE' ? 'success' : 'secondary'}">${escapeHtml(orNA(adUnit.status))}</span></td>`;
-                    targetingHtml += '</tr>';
-                } else {
-                    targetingHtml += '<tr>';
-                    targetingHtml += `<td colspan="5">Ad Unit ID: <code>${escapeHtml(orNA(targetedUnit.adUnitId))}</code> ${targetedUnit.includeDescendants ? '(+ descendants)' : ''} <small class="text-muted">(Details not available)</small></td>`;
-                    targetingHtml += '</tr>';
-                }
+            targetingHtml += '<ul class="list-unstyled">';
+            adUnits.forEach(targetedUnit => {
+                const descendants = targetedUnit.includeDescendants ? ' (+ descendants)' : '';
+                targetingHtml += `<li>Ad Unit ID: <code>${escapeHtml(orNA(targetedUnit.adUnitId))}</code>${descendants}</li>`;
             });
-
-            targetingHtml += '</tbody></table>';
-            targetingHtml += '</div>';
+            targetingHtml += '</ul>';
             targetingHtml += '</div>';
         }
 
@@ -710,83 +564,41 @@ function displayTargeting(targeting, inventoryDetails) {
     container.innerHTML = targetingHtml;
 }
 
-function displayCreatives(creatives, associations) {
-    const container = document.getElementById('creativesContent');
-    console.log('displayCreatives called with:', creatives, associations);
-
-    if (!container) {
-        console.error('creativesContent element not found!');
-        return;
-    }
-
-    if (!creatives || creatives.length === 0) {
-        container.innerHTML = '<p>No creatives associated with this line item</p>';
-        return;
-    }
-
-    let creativesHtml = '<div class="table-responsive"><table class="table table-sm">';
-    creativesHtml += '<thead><tr><th>Creative ID</th><th>Name</th><th>Type</th><th>Size</th><th>Status</th></tr></thead><tbody>';
-
-    creatives.forEach(creative => {
-        const sizeHtml = creative.size ? `${escapeHtml(orNA(creative.size.width))}x${escapeHtml(orNA(creative.size.height))}` : 'N/A';
-        const previewLinkHtml = creative.previewUrl ?
-            `<a href="${safeUrl(creative.previewUrl)}" target="_blank" rel="noopener noreferrer">Preview</a>` : 'N/A';
-        creativesHtml += `<tr>`;
-        creativesHtml += `<td>${escapeHtml(orNA(creative.id))}</td>`;
-        creativesHtml += `<td>${escapeHtml(orNA(creative.name))}</td>`;
-        creativesHtml += `<td>${escapeHtml(orNA(creative['Creative.Type'] || 'Unknown'))}</td>`;
-        creativesHtml += `<td>${sizeHtml}</td>`;
-        creativesHtml += `<td>${previewLinkHtml}</td>`;
-        creativesHtml += `</tr>`;
-    });
-
-    creativesHtml += '</tbody></table></div>';
-    container.innerHTML = creativesHtml;
-}
-
 function displayDeliverySettings(lineItem) {
     const container = document.getElementById('deliveryContent');
-    console.log('displayDeliverySettings called with:', lineItem);
-
-    if (!container) {
-        console.error('deliveryContent element not found!');
-        return;
-    }
+    const yesNo = flag => (flag ? 'Yes' : 'No');
 
     let settingsHtml = '<div class="row">';
 
-    // Delivery settings
     settingsHtml += '<div class="col-md-6">';
     settingsHtml += '<h6>Delivery Configuration</h6>';
     settingsHtml += '<ul class="list-unstyled">';
-    settingsHtml += `<li><strong>Delivery Rate Type:</strong> ${escapeHtml(lineItem.deliveryRateType)}</li>`;
-    settingsHtml += `<li><strong>Roadblocking Type:</strong> ${escapeHtml(lineItem.roadblockingType || 'NONE')}</li>`;
-    settingsHtml += `<li><strong>Skip Inventory Check:</strong> ${lineItem.skipInventoryCheck ? 'Yes' : 'No'}</li>`;
-    settingsHtml += `<li><strong>Allow Overbook:</strong> ${lineItem.allowOverbook ? 'Yes' : 'No'}</li>`;
-    settingsHtml += `<li><strong>Reserve Inventory:</strong> ${lineItem.reserveAtCreation ? 'Yes' : 'No'}</li>`;
+    settingsHtml += `<li><strong>Delivery Rate Type:</strong> ${escapeHtml(orNA(lineItem.delivery_rate_type))}</li>`;
+    settingsHtml += `<li><strong>Skip Inventory Check:</strong> ${yesNo(lineItem.skip_inventory_check)}</li>`;
+    settingsHtml += `<li><strong>Allow Overbook:</strong> ${yesNo(lineItem.allow_overbook)}</li>`;
+    settingsHtml += `<li><strong>Reserve Inventory:</strong> ${yesNo(lineItem.reserve_at_creation)}</li>`;
     settingsHtml += '</ul>';
     settingsHtml += '</div>';
 
-    // Frequency caps
-    if (lineItem.frequencyCaps && lineItem.frequencyCaps.length > 0) {
+    // Frequency caps and creative placeholders are GAM's own objects, as the orders sync stored them.
+    if (lineItem.frequency_caps && lineItem.frequency_caps.length > 0) {
         settingsHtml += '<div class="col-md-6">';
         settingsHtml += '<h6>Frequency Caps</h6>';
         settingsHtml += '<ul class="list-unstyled">';
-        lineItem.frequencyCaps.forEach(cap => {
+        lineItem.frequency_caps.forEach(cap => {
             settingsHtml += `<li>${escapeHtml(cap.maxImpressions)} impressions per ${escapeHtml(cap.numTimeUnits)} ${escapeHtml(cap.timeUnit)}</li>`;
         });
         settingsHtml += '</ul>';
         settingsHtml += '</div>';
     }
 
-    // Creative placeholders
-    if (lineItem.creativePlaceholders && lineItem.creativePlaceholders.length > 0) {
+    if (lineItem.creative_placeholders && lineItem.creative_placeholders.length > 0) {
         settingsHtml += '<div class="col-md-12">';
         settingsHtml += '<h6>Creative Placeholders</h6>';
         settingsHtml += '<table class="table table-sm">';
         settingsHtml += '<thead><tr><th>Size</th><th>Expected Count</th><th>Companions</th></tr></thead><tbody>';
 
-        lineItem.creativePlaceholders.forEach(placeholder => {
+        lineItem.creative_placeholders.forEach(placeholder => {
             const size = placeholder.size ? `${placeholder.size.width}x${placeholder.size.height}` : 'Flexible';
             const companions = placeholder.companions ? placeholder.companions.map(c => `${c.size.width}x${c.size.height}`).join(', ') : 'None';
             settingsHtml += `<tr>`;
@@ -824,16 +636,6 @@ function showError(message) {
     const errorDiv = document.getElementById('error');
     errorDiv.textContent = message;
     errorDiv.style.display = 'block';
-}
-
-function copyProductJson() {
-    const jsonText = document.getElementById('productJsonContent').textContent;
-    navigator.clipboard.writeText(jsonText).then(() => {
-        alert('Product JSON copied to clipboard!');
-    }).catch(err => {
-        console.error('Failed to copy:', err);
-        alert('Failed to copy JSON. Please select and copy manually.');
-    });
 }
 </script>
 {% endblock %}
