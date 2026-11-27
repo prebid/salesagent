@@ -36,6 +36,7 @@ from src.core.database.models import Product as DBProduct
 from src.core.schemas import CreativeStatusEnum, SyncCreativesRequest, SyncCreativesResponse
 from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
 from tests.factories.creative_asset import named_format_assets
+from tests.factories.media_buy import booked_on
 from tests.factories.principal import plaintext_token_for
 from tests.helpers.credentials import credential_headers
 from tests.helpers.envelope_assertions import raises_adcp
@@ -600,7 +601,8 @@ class TestFormatCompatibility:
             pkg = MediaPackage(
                 media_buy_id="mb_fmt_test",
                 package_id="pkg_video",
-                package_config={"package_id": "pkg_video", "product_id": "prod_video_only"},
+                # Booked on the video-only product: the contract the assignment gate reads.
+                package_config=booked_on({"package_id": "pkg_video", "product_id": "prod_video_only"}, product),
             )
             session.add(pkg)
             session.commit()
@@ -735,7 +737,8 @@ class TestMediaBuyStatusTransition:
             pkg = MediaPackage(
                 media_buy_id="mb_draft_approved",
                 package_id="pkg_draft",
-                package_config={"package_id": "pkg_draft", "product_id": "prod_display"},
+                # Booked on the display product: the contract the assignment gate reads.
+                package_config=booked_on({"package_id": "pkg_draft", "product_id": "prod_display"}, product),
             )
             session.add(pkg)
             session.commit()

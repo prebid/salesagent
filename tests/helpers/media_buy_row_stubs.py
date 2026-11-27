@@ -35,7 +35,15 @@ def stub_package_row(**overrides: Any) -> MagicMock:
     keys off it; everything else defaults to ``None``. Pass overrides by column name — a
     name that is not a column raises, which is the point: a stub that quietly accepts
     ``packge_config`` would hand production a MagicMock again.
+
+    A ``package_config`` naming a product, with neither ``formats_to_provide`` nor
+    ``booked_format_contract``, is given the contract a product with no format restriction
+    is booked with (``{"format_ids": []}``): create records one on every package it stores,
+    and ``format_resolver.booked_format_contract`` refuses a stored row without it. Pass
+    ``booked_format_contract`` in ``package_config`` to state another.
     """
+    from src.core.format_resolver import BOOKED_FORMAT_CONTRACT
+
     unknown = set(overrides) - set(_PACKAGE_COLUMNS)
     if unknown:
         raise AttributeError(f"MediaPackage has no column(s): {', '.join(sorted(unknown))}")
@@ -45,4 +53,12 @@ def stub_package_row(**overrides: Any) -> MagicMock:
     row.package_config = {}
     for name, value in overrides.items():
         setattr(row, name, value)
+    config = row.package_config
+    if (
+        config
+        and config.get("product_id")
+        and not config.get("formats_to_provide")
+        and BOOKED_FORMAT_CONTRACT not in config
+    ):
+        row.package_config = {**config, BOOKED_FORMAT_CONTRACT: {"format_ids": []}}
     return row
