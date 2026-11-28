@@ -141,6 +141,10 @@ class ProductRepository(Repository):
         )
         return list(self._session.execute(stmt).unique().scalars().all())
 
+    def product_ids(self) -> set[str]:
+        """The product_id of every product in the tenant. No row is loaded."""
+        return set(self._session.scalars(select(Product.product_id).where(Product.tenant_id == self._tenant_id)))
+
     def list_dynamic_templates(self) -> list[Product]:
         """Live dynamic product templates for the tenant.
 

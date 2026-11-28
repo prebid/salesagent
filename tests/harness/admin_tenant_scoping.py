@@ -4,11 +4,15 @@ Drives ``GET /api/tenant/<tenant_id>/revenue-chart``, ``GET /api/tenant/<tenant_
 ``GET /api/tenant/<tenant_id>/products/suggestions``, ``GET,POST /tenant/<tenant_id>/policy/rules``
 and ``POST /auth/oidc/test/<tenant_id>`` (#2203), the six GAM reporting routes of
 ``src/admin/blueprints/gam_reporting_api.py`` (#2204), ``GET /tenant/<tenant_id>/media-buys``,
-which names products from the tenant's own catalogue, and the Policy page with the admin-only
-``POST /tenant/<tenant_id>/policy/update`` that saves it (#2692), on the two admin transports ``AdminAccountEnv``
+which names products from the tenant's own catalogue, the Policy page with the admin-only
+``POST /tenant/<tenant_id>/policy/update`` that saves it (#2692), and the five inventory views
+that read the tenant's synced GAM inventory (``GET /tenant/<tenant_id>/check-inventory-sync``,
+``GET /api/tenant/<tenant_id>/sync-status``, ``GET /api/tenant/<tenant_id>/targeting/all``,
+``GET /api/tenant/<tenant_id>/inventory/tree`` and ``GET /api/tenant/<tenant_id>/inventory-stats``),
+on the two admin transports ``AdminAccountEnv``
 already provides — Flask ``test_client`` (integration) and ``requests.Session`` against the
-Docker stack (e2e) — and seeds the tenants, memberships, catalogue and media buys the
-scenarios grade.
+Docker stack (e2e) — and seeds the tenants, memberships, catalogue, media buys and synced
+inventory the scenarios grade.
 
 Subclasses ``AdminAccountEnv`` rather than extracting a base: the transport plumbing is
 inherited unchanged, and the harness lifecycle guard
@@ -37,6 +41,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from contextlib import ExitStack
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, NamedTuple
 from urllib.parse import urlsplit
@@ -45,7 +50,14 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant, UserRole
 from src.core.schemas.advertising_policy import AdvertisingPolicy
 from src.services.default_products import get_default_products
-from tests.factories import MediaBuyFactory, ProductFactory, TenantFactory, UserFactory
+from tests.factories import (
+    GAMInventoryFactory,
+    MediaBuyFactory,
+    ProductFactory,
+    SyncJobFactory,
+    TenantFactory,
+    UserFactory,
+)
 from tests.factories.mint import mint_id
 from tests.harness.admin_accounts import AdminAccountEnv
 from tests.harness.admin_client import AdminResponse
@@ -99,7 +111,7 @@ POLICY_FORM: dict[str, str] = {
 
 _GAM_API = "/api/tenant/{tenant_id}"
 
-#: The routes of #2203 and #2204, keyed by the name the Gherkin scenarios use.
+#: The routes the scenarios send to, keyed by the name the Gherkin scenarios use.
 ROUTES: dict[str, TenantScopedRoute] = {
     "revenue chart API": TenantScopedRoute("/api/tenant/{tenant_id}/revenue-chart", ("GET",)),
     "products API": TenantScopedRoute("/api/tenant/{tenant_id}/products", ("GET",)),
@@ -119,6 +131,11 @@ ROUTES: dict[str, TenantScopedRoute] = {
     "media buys page": TenantScopedRoute("/tenant/{tenant_id}/media-buys", ("GET",)),
     "policy page": TenantScopedRoute("/tenant/{tenant_id}/policy/", ("GET",)),
     "policy update route": TenantScopedRoute("/tenant/{tenant_id}/policy/update", ("POST",), POLICY_FORM),
+    "inventory sync check": TenantScopedRoute("/tenant/{tenant_id}/check-inventory-sync", ("GET",)),
+    "sync status API": TenantScopedRoute("/api/tenant/{tenant_id}/sync-status", ("GET",)),
+    "targeting data API": TenantScopedRoute("/api/tenant/{tenant_id}/targeting/all", ("GET",)),
+    "inventory tree API": TenantScopedRoute("/api/tenant/{tenant_id}/inventory/tree", ("GET",)),
+    "inventory stats API": TenantScopedRoute("/api/tenant/{tenant_id}/inventory-stats", ("GET",)),
 }
 
 #: Where a scenario may say a route redirected to, keyed by the name the Gherkin uses. The
@@ -172,16 +189,24 @@ _DEFAULT_SUGGESTION_ORDER = (
 )
 
 
-def expected_suggestions_body() -> dict[str, Any]:
+def expected_suggestions_body(existing_ids: frozenset[str] = frozenset()) -> dict[str, Any]:
     """Today's body of ``GET .../products/suggestions`` with no query parameters.
 
-    Holds for a tenant whose catalogue shares no id with the default products (the seeded
-    product id is unique), so every suggestion is new, industry-neutral and unboosted.
+    *existing_ids* are the default product ids the tenant's catalogue holds: each of them is
+    marked ``already_exists``, and every other suggestion is new. With none, the catalogue
+    shares no id with the default products (the seeded product id is unique). Every
+    suggestion is industry-neutral and unboosted either way.
     """
     by_id = {product["product_id"]: product for product in get_default_products()}
     assert set(by_id) == set(_DEFAULT_SUGGESTION_ORDER), sorted(by_id)
+    assert existing_ids <= set(by_id), f"not a default product id: {sorted(existing_ids - set(by_id))}"
     suggestions = [
-        {**by_id[product_id], "already_exists": False, "is_industry_specific": False, "match_score": 100}
+        {
+            **by_id[product_id],
+            "already_exists": product_id in existing_ids,
+            "is_industry_specific": False,
+            "match_score": 100,
+        }
         for product_id in _DEFAULT_SUGGESTION_ORDER
     ]
     return {
@@ -191,12 +216,353 @@ def expected_suggestions_body() -> dict[str, Any]:
     }
 
 
+# ── Synced GAM inventory ─────────────────────────────────────────────────
+#
+# The five inventory views read the tenant's synced copy of its Google Ad Manager inventory
+# (``gam_inventory``), and the sync status reads its sync jobs (``sync_jobs``) too. The rows
+# seeded below and the bodies the views answer over them are pinned side by side, the bodies
+# as literals, so an expectation does not re-implement the count it grades. A time is written
+# as the views write it: ``isoformat()`` of the UTC time PostgreSQL returns, ``+00:00``.
+
+#: When the target tenant's latest inventory sync ran.
+LATEST_SYNC = datetime(2026, 10, 30, 12, 0, tzinfo=UTC)
+_DAY = timedelta(days=1)
+
+
+class SyncedItem(NamedTuple):
+    """One row of synced GAM inventory: the columns ``GAMInventoryFactory`` is given for it."""
+
+    inventory_type: str
+    inventory_id: str
+    name: str
+    status: str
+    created_at: datetime
+    last_synced: datetime
+    path: list[str]
+    inventory_metadata: dict[str, Any]
+
+
+def _days_before_latest_sync(days: int) -> datetime:
+    """*days* days before ``LATEST_SYNC``; after it when *days* is negative."""
+    return LATEST_SYNC - days * _DAY
+
+
+def _ad_unit(
+    inventory_id: str,
+    name: str,
+    status: str,
+    *,
+    created: int,
+    synced: int,
+    parent: str | None = None,
+    path: list[str] | None = None,
+    has_children: bool = False,
+) -> SyncedItem:
+    """An ad unit of one leaderboard size, *created* and last *synced* that many days before ``LATEST_SYNC``.
+
+    Its metadata is what the sync stores for an ad unit and the inventory tree reads.
+    """
+    metadata = {
+        "ad_unit_code": inventory_id.removeprefix("au_"),
+        "parent_id": parent,
+        "has_children": has_children,
+        "sizes": [{"width": 728, "height": 90}],
+    }
+    created_at, last_synced = _days_before_latest_sync(created), _days_before_latest_sync(synced)
+    return SyncedItem("ad_unit", inventory_id, name, status, created_at, last_synced, path or [name], metadata)
+
+
+def _item(inventory_type: str, inventory_id: str, name: str, status: str, synced: int, **metadata: Any) -> SyncedItem:
+    """An item that is not an ad unit, created a month before ``LATEST_SYNC`` and last *synced* days before it."""
+    created_at, last_synced = _days_before_latest_sync(30), _days_before_latest_sync(synced)
+    return SyncedItem(inventory_type, inventory_id, name, status, created_at, last_synced, [name], metadata)
+
+
+#: The target tenant's synced inventory: every type the views count, in three statuses. The
+#: latest sync synced every ad unit but the STALE one, which is the newest item of all: created,
+#: and last synced, the day before, and not found in GAM since. Each later type was last synced
+#: a day before the type above it, and its STALE item two days before that.
+SYNCED_INVENTORY: tuple[SyncedItem, ...] = (
+    _ad_unit("au_homepage", "Homepage", "ACTIVE", created=30, synced=0, has_children=True),
+    _ad_unit(
+        "au_homepage_top",
+        "Homepage Top",
+        "ACTIVE",
+        created=30,
+        synced=0,
+        parent="au_homepage",
+        path=["Homepage", "Homepage Top"],
+    ),
+    _ad_unit("au_archive", "Archive", "INACTIVE", created=20, synced=0),
+    _ad_unit("au_microsite", "Microsite", "STALE", created=1, synced=1),
+    _item("placement", "pl_sports", "Sports Package", "ACTIVE", 1, description="Every sports ad unit"),
+    _item("placement", "pl_seasonal", "Seasonal Package", "INACTIVE", 1, description="Holiday campaigns"),
+    _item("placement", "pl_retired", "Retired Package", "STALE", 3, description="Removed from GAM"),
+    _item("label", "lb_family", "Family Safe", "ACTIVE", 2, description="Safe for a family audience"),
+    _item("label", "lb_political", "Political", "INACTIVE", 2, description="Political advertising"),
+    _item("label", "lb_legacy", "Legacy", "STALE", 4, description="Removed from GAM"),
+    _item("custom_targeting_key", "ck_section", "section", "ACTIVE", 3, display_name="Section", type="PREDEFINED"),
+    _item("custom_targeting_key", "ck_campaign", "campaign", "INACTIVE", 3, display_name="Campaign", type="FREEFORM"),
+    _item("custom_targeting_key", "ck_legacy", "legacy_key", "STALE", 5, display_name="Legacy key", type="FREEFORM"),
+    _item("audience_segment", "as_sports_fans", "Sports Fans", "ACTIVE", 4, type="FIRST_PARTY", size=120000),
+    _item("audience_segment", "as_auto_intenders", "Auto Intenders", "INACTIVE", 4, type="THIRD_PARTY", size=50000),
+    _item("audience_segment", "as_lapsed", "Lapsed Visitors", "STALE", 6, type="FIRST_PARTY", size=3000),
+)
+
+#: Another tenant's inventory: an ACTIVE ad unit, created and synced a day after the target
+#: tenant's latest sync, and a STALE label synced then too.
+OTHER_TENANT_INVENTORY: tuple[SyncedItem, ...] = (
+    _ad_unit("au_other_homepage", "Homepage of another tenant", "ACTIVE", created=-1, synced=-1),
+    _item("label", "lb_other", "Label of another tenant", "STALE", -1, description="Another tenant's label"),
+)
+
+
+class SyncRun(NamedTuple):
+    """One row of ``sync_jobs``: the columns ``SyncJobFactory`` is given for it."""
+
+    sync_type: str
+    status: str
+    started_at: datetime
+    completed_at: datetime
+    error_message: str | None = None
+
+
+#: What the target tenant's failed inventory sync recorded, which the sync status shows.
+FAILED_SYNC_ERROR = "Inventory sync failed. Reference: bdd-inventory-sync"
+#: The target tenant's sync jobs: the inventory sync that ran the latest sync completed, a
+#: second one started two hours later and failed, and an orders sync started after both.
+SYNC_JOBS: tuple[SyncRun, ...] = (
+    SyncRun("inventory", "completed", LATEST_SYNC - timedelta(minutes=30), LATEST_SYNC),
+    SyncRun(
+        "inventory",
+        "failed",
+        LATEST_SYNC + timedelta(hours=2),
+        LATEST_SYNC + timedelta(hours=2, minutes=5),
+        FAILED_SYNC_ERROR,
+    ),
+    SyncRun("orders", "completed", LATEST_SYNC + timedelta(hours=5), LATEST_SYNC + timedelta(hours=5, minutes=1)),
+)
+#: Another tenant's inventory sync, started after every sync job of the target tenant.
+OTHER_TENANT_SYNC_JOBS: tuple[SyncRun, ...] = (
+    SyncRun("inventory", "completed", LATEST_SYNC + timedelta(hours=6), LATEST_SYNC + timedelta(hours=6, minutes=30)),
+)
+
+#: The inventory types the sync status reports on, each whether the tenant holds any or not.
+_SYNC_STATUS_TYPES = ("ad_unit", "placement", "label", "custom_targeting_key", "audience_segment")
+#: How many of the target tenant's ``SYNCED_INVENTORY`` items of each type are in each status.
+_ONE_IN_EACH_STATUS = {"ACTIVE": 1, "INACTIVE": 1, "STALE": 1}
+_STATUS_COUNTS: dict[str, dict[str, int]] = {
+    "ad_unit": {"ACTIVE": 2, "INACTIVE": 1, "STALE": 1},
+    "placement": _ONE_IN_EACH_STATUS,
+    "label": _ONE_IN_EACH_STATUS,
+    "custom_targeting_key": _ONE_IN_EACH_STATUS,
+    "audience_segment": _ONE_IN_EACH_STATUS,
+}
+
+
+def expected_inventory_sync_check_body() -> dict[str, Any]:
+    """Today's body of ``GET .../check-inventory-sync`` over ``SYNCED_INVENTORY``.
+
+    Every item the tenant holds, of every type and status, and the latest time any of them was
+    synced: ``LATEST_SYNC``, not the newest item's creation the day before.
+    """
+    return {"has_inventory": True, "inventory_count": 16, "last_sync": "2026-10-30T12:00:00+00:00"}
+
+
+def expected_sync_status_body(tenant_id: str) -> dict[str, Any]:
+    """Today's body of ``GET .../sync-status`` over ``SYNCED_INVENTORY`` and ``SYNC_JOBS``.
+
+    Per type: how many items it holds, how many in each status, and when the type was last
+    synced. Every type shows the tenant's newest inventory sync job, the failed one: not the
+    orders sync that started after it, and not the other tenant's inventory sync.
+    """
+    newest_inventory_job = {
+        "last_job_status": "failed",
+        "last_job_time": "2026-10-30T14:00:00+00:00",
+        "last_job_error": FAILED_SYNC_ERROR,
+    }
+
+    def of_type(total_count: int, status_counts: dict[str, int], last_synced: str) -> dict[str, Any]:
+        """One type's entry: its counts and last sync, with the newest inventory sync job."""
+        return {
+            "total_count": total_count,
+            "status_counts": status_counts,
+            "last_synced": last_synced,
+            **newest_inventory_job,
+        }
+
+    return {
+        "tenant_id": tenant_id,
+        "sync_status": {
+            "ad_unit": of_type(4, _STATUS_COUNTS["ad_unit"], "2026-10-30T12:00:00+00:00"),
+            "placement": of_type(3, _STATUS_COUNTS["placement"], "2026-10-29T12:00:00+00:00"),
+            "label": of_type(3, _STATUS_COUNTS["label"], "2026-10-28T12:00:00+00:00"),
+            "custom_targeting_key": of_type(3, _STATUS_COUNTS["custom_targeting_key"], "2026-10-27T12:00:00+00:00"),
+            "audience_segment": of_type(3, _STATUS_COUNTS["audience_segment"], "2026-10-26T12:00:00+00:00"),
+        },
+    }
+
+
+def expected_inventory_stats_body(tenant_id: str) -> dict[str, Any]:
+    """Today's body of ``GET .../inventory-stats`` over ``SYNCED_INVENTORY``.
+
+    Per type the tenant holds, how many of its items are in each status, STALE included: none of
+    the other tenant's items, though one is a STALE label.
+    """
+    return {"tenant_id": tenant_id, "stats": _STATUS_COUNTS}
+
+
+def expected_targeting_data_body() -> dict[str, Any]:
+    """Today's body of ``GET .../targeting/all`` over ``SYNCED_INVENTORY``, each list in ``id`` order.
+
+    Every custom targeting key, audience segment and label the tenant holds, in every status, and
+    the tenant's latest sync. A label is active only in the ACTIVE status; an audience segment the
+    sync stored no description for has none.
+    """
+    return {
+        "customKeys": [
+            {
+                "id": "ck_campaign",
+                "name": "campaign",
+                "display_name": "Campaign",
+                "status": "INACTIVE",
+                "type": "FREEFORM",
+            },
+            {
+                "id": "ck_legacy",
+                "name": "legacy_key",
+                "display_name": "Legacy key",
+                "status": "STALE",
+                "type": "FREEFORM",
+            },
+            {
+                "id": "ck_section",
+                "name": "section",
+                "display_name": "Section",
+                "status": "ACTIVE",
+                "type": "PREDEFINED",
+            },
+        ],
+        "audiences": [
+            {
+                "id": "as_auto_intenders",
+                "name": "Auto Intenders",
+                "description": None,
+                "status": "INACTIVE",
+                "size": 50000,
+                "type": "THIRD_PARTY",
+            },
+            {
+                "id": "as_lapsed",
+                "name": "Lapsed Visitors",
+                "description": None,
+                "status": "STALE",
+                "size": 3000,
+                "type": "FIRST_PARTY",
+            },
+            {
+                "id": "as_sports_fans",
+                "name": "Sports Fans",
+                "description": None,
+                "status": "ACTIVE",
+                "size": 120000,
+                "type": "FIRST_PARTY",
+            },
+        ],
+        "labels": [
+            {"id": "lb_family", "name": "Family Safe", "description": "Safe for a family audience", "is_active": True},
+            {"id": "lb_legacy", "name": "Legacy", "description": "Removed from GAM", "is_active": False},
+            {"id": "lb_political", "name": "Political", "description": "Political advertising", "is_active": False},
+        ],
+        "last_sync": "2026-10-30T12:00:00+00:00",
+    }
+
+
+def in_id_order(targeting_body: dict[str, Any]) -> dict[str, Any]:
+    """*targeting_body* of ``GET .../targeting/all`` with its three lists in ``id`` order, and nothing else changed.
+
+    The route selects each list with no ORDER BY, so the order PostgreSQL returns the rows in is
+    no part of what it answers.
+    """
+    lists = ("customKeys", "audiences", "labels")
+    return {**targeting_body, **{key: sorted(targeting_body[key], key=lambda entry: entry["id"]) for key in lists}}
+
+
+def expected_inventory_tree_body() -> dict[str, Any]:
+    """Today's body of ``GET .../inventory/tree``, with no search and no parent, over ``SYNCED_INVENTORY``.
+
+    The roots are the ACTIVE ad units with no parent: Homepage alone, whose ACTIVE child is no
+    root and whose INACTIVE and STALE siblings are not ACTIVE. The counts are of ACTIVE items: two
+    ad units, and one of each other type. ``last_sync`` is the tenant's latest sync.
+    """
+    homepage = {
+        "id": "au_homepage",
+        "name": "Homepage",
+        "status": "ACTIVE",
+        "code": "homepage",
+        "path": ["Homepage"],
+        "parent_id": None,
+        "has_children": True,
+        "matched_search": False,
+        "sizes": [{"width": 728, "height": 90}],
+        "children": [],
+    }
+    return {
+        "root_units": [homepage],
+        "total_units": 1,
+        "total_active_count": 2,
+        "truncated": False,
+        "root_count": 1,
+        "search_active": False,
+        "matching_count": 0,
+        "placements": 1,
+        "labels": 1,
+        "custom_targeting_keys": 1,
+        "audience_segments": 1,
+        "last_sync": "2026-10-30T12:00:00+00:00",
+    }
+
+
+def expected_unsynced_body(route_name: str, tenant_id: str) -> dict[str, Any]:
+    """Today's body of the inventory view *route_name* for a tenant that holds no synced inventory and ran no sync."""
+    never_synced = {
+        "total_count": 0,
+        "status_counts": {},
+        "last_synced": None,
+        "last_job_status": None,
+        "last_job_time": None,
+        "last_job_error": None,
+    }
+    bodies: dict[str, dict[str, Any]] = {
+        "inventory sync check": {"has_inventory": False, "inventory_count": 0, "last_sync": None},
+        "sync status API": {"tenant_id": tenant_id, "sync_status": dict.fromkeys(_SYNC_STATUS_TYPES, never_synced)},
+        "targeting data API": {"customKeys": [], "audiences": [], "labels": [], "last_sync": None},
+        "inventory stats API": {"tenant_id": tenant_id, "stats": {}},
+        "inventory tree API": {
+            "root_units": [],
+            "total_units": 0,
+            "total_active_count": 0,
+            "truncated": False,
+            "root_count": 0,
+            "search_active": False,
+            "matching_count": 0,
+            "placements": 0,
+            "labels": 0,
+            "custom_targeting_keys": 0,
+            "audience_segments": 0,
+            "last_sync": None,
+        },
+    }
+    return bodies[route_name]
+
+
 class AdminTenantScopingEnv(AdminAccountEnv):
     """Test environment for the tenant-scoping scenarios of #2203 and #2204.
 
     Same two transports as ``AdminAccountEnv``; adds the target tenant, the three caller
     memberships (elsewhere / inactive here / active here, in the role the scenario names),
-    a super admin of another tenant, and the routes in ``ROUTES``.
+    a super admin of another tenant, the target tenant's synced inventory, and the routes in
+    ``ROUTES``.
     """
 
     def __init__(self, *, mode: str = "integration", base_url: str | None = None) -> None:
@@ -268,11 +634,29 @@ class AdminTenantScopingEnv(AdminAccountEnv):
             )
         return self._target
 
+    def seed_target_product(self, product_id: str) -> None:
+        """A product of the target tenant under *product_id*, such as the id of a default product."""
+        with bound_factory_session() as session:
+            ProductFactory(tenant=session.get(Tenant, self.target.tenant_id), product_id=product_id)
+
     def seed_product_of_other_tenant(self, name: str) -> None:
         """Another tenant's product named *name*, under the product id the target tenant's media buy names."""
         with bound_factory_session():
             other = TenantFactory(tenant_id=self._new_tenant_id("other"))
             ProductFactory(tenant=other, product_id=self.target.media_buy_product_id, name=name)
+
+    def seed_synced_inventory(self) -> None:
+        """``SYNCED_INVENTORY`` and ``SYNC_JOBS`` in the target tenant; another tenant's later items and sync job."""
+        with bound_factory_session() as session:
+            target = session.get(Tenant, self.target.tenant_id)
+            other = TenantFactory(tenant_id=self._new_tenant_id("other"))
+            for factory, target_rows, other_rows in (
+                (GAMInventoryFactory, SYNCED_INVENTORY, OTHER_TENANT_INVENTORY),
+                (SyncJobFactory, SYNC_JOBS, OTHER_TENANT_SYNC_JOBS),
+            ):
+                for tenant, rows in ((target, target_rows), (other, other_rows)):
+                    for row in rows:
+                        factory(tenant=tenant, **row._asdict())
 
     def target_state(self) -> TenantState:
         """The target tenant's state now, read from the database."""

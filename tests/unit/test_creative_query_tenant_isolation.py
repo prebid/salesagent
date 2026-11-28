@@ -13,24 +13,20 @@ will pass once the queries are fixed.
 import ast
 from pathlib import Path
 
-from tests.unit._architecture_helpers import extract_select_calls
+import pytest
+
+from tests.unit._architecture_helpers import SelectCall, extract_select_calls
 
 ROOT = Path(__file__).resolve().parents[2]
 
+#: The Creative-family models, whose rows a creative_id alone no longer identifies.
+_CREATIVE_MODELS = ("Creative", "CreativeReview", "CreativeAssignment")
 
-def _extract_select_calls_in_function(file_path: str, func_name: str) -> list[dict]:
-    """Extract Creative-related select() call info from a function using AST.
 
-    Returns list of dicts with:
-    - model: the model name being selected (e.g., "Creative", "CreativeModel")
-    - has_tenant_filter: whether .filter/.where includes tenant_id
-    - lineno: line number of the select() call
-    """
-    return extract_select_calls(
-        ROOT / file_path,
-        func_name,
-        model_predicate=lambda name: "creative" in name.lower(),
-    )
+def _extract_select_calls_in_function(file_path: str, func_name: str) -> list[SelectCall]:
+    """The queries on a Creative-family model in *func_name*, each resolved by import
+    (``DBCreative`` -> "Creative") and marked with whether it filters that model's tenant_id."""
+    return extract_select_calls(ROOT / file_path, func_name, models=_CREATIVE_MODELS)
 
 
 def _function_calls_repo_get_by_ids(file_path: str, func_name: str) -> bool:
@@ -58,6 +54,25 @@ def _function_calls_repo_get_by_ids(file_path: str, func_name: str) -> bool:
     return False
 
 
+#: Functions that load creatives through CreativeRepository.get_by_ids (tenant_id pinned in
+#: the constructor, principal_id required). Each originally pinned an inline tenant-filtered
+#: select(); an inline select(Creative) reappearing in one is a regression.
+_LOADED_THROUGH_THE_REPOSITORY = [
+    ("src/core/tools/media_buy_list.py", "_fetch_creative_approvals"),
+    ("src/core/tools/media_buy_create.py", "execute_approved_media_buy"),
+]
+
+#: (path, function, model): no query on *model* left inline in the function.
+_NO_INLINE_QUERY = [(path, function, "Creative") for path, function in _LOADED_THROUGH_THE_REPOSITORY]
+
+#: Functions whose Creative and CreativeReview queries filter by creative_id, and so must
+#: take tenant_id and filter by it too.
+_TENANT_FILTERED = [
+    ("src/core/database/queries.py", "get_creative_with_latest_review"),
+    ("src/core/database/queries.py", "get_creative_reviews"),
+]
+
+
 class TestCreativeQueryTenantIsolation:
     """Every Creative/CreativeReview query must include tenant_id filter.
 
@@ -66,87 +81,24 @@ class TestCreativeQueryTenantIsolation:
     tenants — a cross-tenant data leak.
     """
 
-    def test_fetch_creative_approvals_scopes_by_tenant(self):
-        """_fetch_creative_approvals must load Creative via CreativeRepository.
-
-        Originally this pinned an inline tenant-filtered select(). The lookup
-        now routes through CreativeRepository.get_by_ids (tenant_id pinned in
-        the constructor, principal_id required) — the centralized form of the
-        same isolation fix. An
-        inline select(Creative) reappearing here is a regression.
-        """
-        selects = _extract_select_calls_in_function(
-            "src/core/tools/media_buy_list.py",
-            "_fetch_creative_approvals",
+    @pytest.mark.parametrize(("path", "function", "model"), _NO_INLINE_QUERY)
+    def test_no_inline_query_on_a_model_the_repository_loads(self, path: str, function: str, model: str):
+        selects = extract_select_calls(ROOT / path, function, models=[model])
+        assert selects == [], (
+            f"Inline {model} query at {path}:{[s.lineno for s in selects]} — {model} loads must go "
+            f"through CreativeRepository.get_by_ids."
         )
 
-        creative_selects = [s for s in selects if s["model"] in ("Creative", "CreativeModel")]
-        assert not creative_selects, (
-            f"Inline Creative select() at media_buy_list.py:"
-            f"{[s['lineno'] for s in creative_selects]} — Creative loads must go "
-            f"through CreativeRepository.get_by_ids (/)."
-        )
-        assert _function_calls_repo_get_by_ids("src/core/tools/media_buy_list.py", "_fetch_creative_approvals"), (
-            "_fetch_creative_approvals must load creatives via CreativeRepository(...).get_by_ids()."
+    @pytest.mark.parametrize(("path", "function"), _LOADED_THROUGH_THE_REPOSITORY)
+    def test_creatives_load_through_the_repository(self, path: str, function: str):
+        assert _function_calls_repo_get_by_ids(path, function), (
+            f"{function} must load creatives via CreativeRepository(...).get_by_ids()."
         )
 
-    def test_execute_approved_creative_lookup_scopes_by_tenant(self):
-        """execute_approved_media_buy must load Creative via CreativeRepository.
-
-        Originally this pinned an inline tenant-filtered select(). The lookup
-        now routes through CreativeRepository.get_by_ids (tenant_id pinned in
-        the constructor, principal_id required) — the centralized form of the
-        same isolation fix. An
-        inline select(Creative) reappearing here is a regression.
-        """
-        selects = _extract_select_calls_in_function(
-            "src/core/tools/media_buy_create.py",
-            "execute_approved_media_buy",
-        )
-
-        creative_selects = [s for s in selects if s["model"] in ("Creative", "CreativeModel")]
-        assert not creative_selects, (
-            f"Inline Creative select() at media_buy_create.py:"
-            f"{[s['lineno'] for s in creative_selects]} — Creative loads must go "
-            f"through CreativeRepository.get_by_ids (/)."
-        )
-        assert _function_calls_repo_get_by_ids("src/core/tools/media_buy_create.py", "execute_approved_media_buy"), (
-            "execute_approved_media_buy must load creatives via CreativeRepository(...).get_by_ids()."
-        )
-
-    def test_get_creative_with_latest_review_scopes_by_tenant(self):
-        """get_creative_with_latest_review must accept and filter by tenant_id.
-
-        Both the Creative and CreativeReview queries filter only by
-        creative_id. The function doesn't even accept tenant_id as a
-        parameter — it needs to be added to the signature.
-        """
-        selects = _extract_select_calls_in_function(
-            "src/core/database/queries.py",
-            "get_creative_with_latest_review",
-        )
-
-        # Every select on a tenant-scoped model must include tenant_id
-        for s in selects:
-            assert s["has_tenant_filter"], (
-                f"Query at queries.py:{s['lineno']} on {s['model']} is missing tenant_id filter. "
-                f"This is a cross-tenant data leak ."
-            )
-
-    def test_get_creative_reviews_scopes_by_tenant(self):
-        """get_creative_reviews must accept and filter by tenant_id.
-
-        The function filters CreativeReview only by creative_id. Since
-        creative_id is buyer-scoped (not globally unique), this can
-        return reviews from other tenants.
-        """
-        selects = _extract_select_calls_in_function(
-            "src/core/database/queries.py",
-            "get_creative_reviews",
-        )
-
-        for s in selects:
-            assert s["has_tenant_filter"], (
-                f"Query at queries.py:{s['lineno']} on {s['model']} is missing tenant_id filter. "
+    @pytest.mark.parametrize(("path", "function"), _TENANT_FILTERED)
+    def test_every_creative_query_scopes_by_tenant(self, path: str, function: str):
+        for s in _extract_select_calls_in_function(path, function):
+            assert s.has_tenant_filter, (
+                f"Query at {path}:{s.lineno} on {s.model} is missing tenant_id filter. "
                 f"This is a cross-tenant data leak ."
             )

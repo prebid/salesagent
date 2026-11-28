@@ -46,14 +46,15 @@ from typing import NamedTuple
 
 from tests.unit._architecture_helpers import (
     REPO_ROOT,
+    Query,
+    filtered_columns,
     format_failure,
     handles_integrity_error,
     iter_call_expressions,
-    iter_statement_scoped_nodes,
-    orm_model_class_defs,
+    iter_queries,
+    orm_references,
     parse_module,
     rel,
-    select_call_model_name,
     src_python_files,
     structural_guard_marker_re,
     unique_key_constraints,
@@ -72,8 +73,6 @@ FIX_HINT = (
     "add a bare `except IntegrityError` in the blueprint. Where the recovery genuinely belongs "
     f"one frame up, mark the site `# {MARKER} - <why>`."
 )
-
-_ORM_MODEL_NAMES = frozenset(cls.name for cls in orm_model_class_defs())
 
 
 class IndexVerdictViolation(NamedTuple):
@@ -107,62 +106,38 @@ def _outermost_functions(tree: ast.AST) -> Iterator[ast.FunctionDef | ast.AsyncF
 # ── Pre-checks ──────────────────────────────────────────────────────
 
 
-def _equality_column(node: ast.Compare, model: str) -> str | None:
-    """Column name from ``Model.col == value`` (either orientation), else None."""
-    if len(node.ops) != 1 or not isinstance(node.ops[0], ast.Eq):
-        return None
-    for side in (node.left, *node.comparators):
-        if isinstance(side, ast.Attribute) and isinstance(side.value, ast.Name) and side.value.id == model:
-            return side.attr
-    return None
+def _prechecked_keys(func: ast.AST, queries: list[Query]) -> dict[str, list[frozenset[str]]]:
+    """Model -> the column sets the queries inside *func* filter it on, one set per query.
 
-
-def _statement_precheck(stmt: ast.stmt) -> tuple[str, frozenset[str]] | None:
-    """The ``(model, filter_keys)`` this ONE statement checks, else None.
-
-    Keys bind per statement rather than per function so that two unrelated queries
-    on the same model cannot jointly compose a unique tuple neither of them checks.
-    A statement naming more than one model is skipped: its keys cannot be attributed.
+    Keys bind per QUERY (``iter_queries``) rather than per function, so two unrelated queries
+    on the same model cannot jointly compose a unique tuple neither of them checks. The
+    model is the one the query addresses, so ``select(User.user_id)`` and a legacy
+    ``session.query(User)`` pre-check ``User`` exactly as ``select(User)``, and the keys are
+    the columns ``filtered_columns`` reads off its filter stages: a join's ON clause checks
+    nothing.
     """
-    nodes = list(iter_statement_scoped_nodes(stmt))
-    calls = [node for node in nodes if isinstance(node, ast.Call)]
-    models = {name for call in calls if (name := select_call_model_name(call))}
-    if len(models) != 1:
-        return None
-    model = models.pop()
-
-    keys: set[str] = set()
-    for call in calls:
-        if isinstance(call.func, ast.Attribute) and call.func.attr == "filter_by":
-            keys.update(kw.arg for kw in call.keywords if kw.arg)
-    for node in nodes:
-        if isinstance(node, ast.Compare) and (column := _equality_column(node, model)):
-            keys.add(column)
-    return (model, frozenset(keys)) if keys else None
-
-
-def _prechecked_keys(func: ast.AST) -> dict[str, list[frozenset[str]]]:
+    inside = {id(node) for node in ast.walk(func)}
     by_model: dict[str, list[frozenset[str]]] = {}
-    for node in ast.walk(func):
-        if not isinstance(node, ast.stmt):
+    for query in queries:
+        if query.entity is None or id(query.root) not in inside:
             continue
-        precheck = _statement_precheck(node)
-        if precheck is not None:
-            by_model.setdefault(precheck[0], []).append(precheck[1])
+        keys = frozenset(column for owner, column in filtered_columns(query) if owner == query.entity)
+        if keys:
+            by_model.setdefault(query.entity, []).append(keys)
     return by_model
 
 
 # ── Writes ──────────────────────────────────────────────────────────
 
 
-def _constructed_models(func: ast.AST) -> dict[str, str]:
-    """Local name → ORM model class it was constructed from."""
+def _constructed_models(func: ast.AST, references: dict[int, str]) -> dict[str, str]:
+    """Local name → ORM model class it was constructed from (the class resolved by import)."""
     built: dict[str, str] = {}
     for node in ast.walk(func):
         if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):
             continue
-        constructor = getattr(node.value.func, "id", None)
-        if constructor not in _ORM_MODEL_NAMES:
+        constructor = references.get(id(node.value.func))
+        if constructor is None:
             continue
         for target in node.targets:
             if isinstance(target, ast.Name):
@@ -170,7 +145,7 @@ def _constructed_models(func: ast.AST) -> dict[str, str]:
     return built
 
 
-def _write_model(call: ast.Call, constructed: dict[str, str]) -> str | None:
+def _write_model(call: ast.Call, constructed: dict[str, str], references: dict[int, str]) -> str | None:
     """Model written by a ``session.add(...)`` call, else None."""
     if not isinstance(call.func, ast.Attribute) or call.func.attr != "add" or len(call.args) != 1:
         return None
@@ -178,8 +153,7 @@ def _write_model(call: ast.Call, constructed: dict[str, str]) -> str | None:
     if isinstance(arg, ast.Name):
         return constructed.get(arg.id)
     if isinstance(arg, ast.Call):
-        constructor = getattr(arg.func, "id", None)
-        return constructor if constructor in _ORM_MODEL_NAMES else None
+        return references.get(id(arg.func))
     return None
 
 
@@ -210,7 +184,7 @@ def _marked_line_numbers(source: str, marker_re) -> set[int]:
 def find_unhandled_index_verdicts(
     tree: ast.Module,
     source: str,
-    path: str = "<snippet>",
+    path: str,
     *,
     apply_exemptions: bool = True,
 ) -> list[IndexVerdictViolation]:
@@ -222,17 +196,19 @@ def find_unhandled_index_verdicts(
     """
     marked_lines = _marked_line_numbers(source, structural_guard_marker_re(GUARD_NAME))
     unique_keys = usable_unique_keys_by_model()
+    references = orm_references(path, tree)
+    queries = list(iter_queries(tree, path))
     violations: dict[tuple[str, str, str], IndexVerdictViolation] = {}
 
     for func in _outermost_functions(tree):
-        prechecked = _prechecked_keys(func)
+        prechecked = _prechecked_keys(func, queries)
         if not prechecked:
             continue
-        constructed = _constructed_models(func)
+        constructed = _constructed_models(func, references)
         exempt = _exempt_node_ids(func) if apply_exemptions else set()
 
         for call in iter_call_expressions(func, name="add"):
-            model = _write_model(call, constructed)
+            model = _write_model(call, constructed, references)
             if model is None or model not in unique_keys:
                 continue
             covered = any(
@@ -252,8 +228,8 @@ def scan_src(*, apply_exemptions: bool = True) -> list[IndexVerdictViolation]:
     found: list[IndexVerdictViolation] = []
     for py_file in sorted(src_python_files(REPO_ROOT)):
         source = py_file.read_text(encoding="utf-8")
-        if ".add(" not in source or "select(" not in source:
-            continue
+        if ".add(" not in source:
+            continue  # no write to anchor on; a pre-check may be spelled any way the queries resolve
         found.extend(
             find_unhandled_index_verdicts(
                 parse_module(py_file),
@@ -373,8 +349,16 @@ def test_exemptions_are_load_bearing():
 # ── Meta-cases ──────────────────────────────────────────────────────
 
 
+#: The imports a real module carries: the guard resolves ``select`` and every model by import.
+_PREAMBLE = (
+    "from sqlalchemy import select\n"
+    "from src.core.database.models import Account, InventoryProfile, Principal, PropertyTag, Tenant, User\n"
+)
+
+
 def _find(source: str) -> list[IndexVerdictViolation]:
-    return find_unhandled_index_verdicts(ast.parse(source), source)
+    source = _PREAMBLE + source
+    return find_unhandled_index_verdicts(ast.parse(source), source, "src/x.py")
 
 
 class TestGuardMetaCases:
@@ -411,6 +395,48 @@ class TestGuardMetaCases:
             "    if session.scalars(stmt).first():\n"
             "        return 'exists'\n"
             "    session.add(User(tenant_id=tenant_id, email=email))\n"
+        )
+        assert [v.model for v in _find(source)] == ["User"]
+
+    def test_flags_a_column_projection_precheck(self):
+        """select(User.user_id) pre-checks User; the spelling match read a model named user_id."""
+        source = (
+            "def add_user(session, tenant_id, email):\n"
+            "    if session.scalars(select(User.user_id).filter_by(tenant_id=tenant_id, email=email)).first():\n"
+            "        return 'exists'\n"
+            "    session.add(User(tenant_id=tenant_id, email=email))\n"
+        )
+        assert [v.model for v in _find(source)] == ["User"]
+
+    def test_flags_a_legacy_query_precheck(self):
+        """The #1721 shape written the legacy way: ``session.query(User)`` pre-checks User too."""
+        source = (
+            "def add_user(session, tenant_id, email):\n"
+            "    if session.query(User).filter_by(tenant_id=tenant_id, email=email).first():\n"
+            "        return 'exists'\n"
+            "    session.add(User(tenant_id=tenant_id, email=email))\n"
+        )
+        assert [v.model for v in _find(source)] == ["User"]
+
+    def test_a_join_condition_is_not_a_precheck(self):
+        """The ON clause's ``tenant_id`` filters nothing: this query checks ``email`` across every tenant."""
+        source = (
+            "def add_user(session, tenant_id, email):\n"
+            "    if session.scalars(select(User).join(Tenant, User.tenant_id == Tenant.tenant_id)\n"
+            "            .where(User.email == email)).first():\n"
+            "        return 'exists'\n"
+            "    session.add(User(tenant_id=tenant_id, email=email))\n"
+        )
+        assert _find(source) == []
+
+    def test_flags_a_precheck_and_write_through_an_import_alias(self):
+        source = (
+            "from src.core.database.models import User as DBUser\n"
+            "def add_user(session, tenant_id, email):\n"
+            "    if session.scalars(select(DBUser).filter_by(tenant_id=tenant_id, email=email)).first():\n"
+            "        return 'exists'\n"
+            "    user = DBUser(tenant_id=tenant_id, email=email)\n"
+            "    session.add(user)\n"
         )
         assert [v.model for v in _find(source)] == ["User"]
 

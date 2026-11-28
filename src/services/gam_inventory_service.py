@@ -21,6 +21,7 @@ from src.adapters.gam_inventory_discovery import (
 from src.core.database.database_session import get_engine
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import GAMInventory, Product, ProductInventoryMapping
+from src.core.database.repositories.gam_inventory import GAMInventoryRepository, InventoryType
 from src.services.gam_product_config_service import product_gam_slots
 
 
@@ -84,43 +85,26 @@ class GAMInventoryService:
         sync_time = datetime.now(UTC)
         BATCH_SIZE = 500  # Write every 500 items to keep memory usage low
 
-        # Load ALL existing inventory IDs once (1 query instead of N)
-        stmt = select(GAMInventory.inventory_type, GAMInventory.inventory_id, GAMInventory.id).where(
-            GAMInventory.tenant_id == tenant_id
-        )
-        existing_inventory = self.db.execute(stmt).all()
-        existing_ids = {(row.inventory_type, row.inventory_id): row.id for row in existing_inventory}
+        inventory = GAMInventoryRepository(self.db, tenant_id)
 
         # Track totals for logging
-        total_inserted = 0
-        total_updated = 0
+        total_written = 0
 
-        # Prepare batch insert and update lists
-        to_insert: list[dict[str, Any]] = []
-        to_update: list[dict[str, Any]] = []
+        # The current batch: the repository inserts a new item and updates a held one in place
+        batch: list[dict[str, Any]] = []
 
         def flush_batch():
             """Flush current batch to database with error handling."""
-            nonlocal total_inserted, total_updated
+            nonlocal total_written
             try:
-                if to_insert:
-                    self.db.bulk_insert_mappings(GAMInventory, to_insert)
-                    batch_inserted = len(to_insert)
-                    total_inserted += batch_inserted
-                    logger.info(f"Batch inserted {batch_inserted} inventory items")
-                    to_insert.clear()
-                if to_update:
-                    self.db.bulk_update_mappings(GAMInventory, to_update)
-                    batch_updated = len(to_update)
-                    total_updated += batch_updated
-                    logger.info(f"Batch updated {batch_updated} inventory items")
-                    to_update.clear()
+                if batch:
+                    inventory.upsert(batch)
+                    total_written += len(batch)
+                    logger.info("Batch wrote %s inventory items", len(batch))
+                    batch.clear()
                 self.db.commit()  # Commit each batch
             except Exception as e:
-                logger.error(
-                    f"Batch write failed at {total_inserted + total_updated} items: {e}",
-                    exc_info=True,
-                )
+                logger.error("Batch write failed at %s items: %s", total_written, e, exc_info=True)
                 self.db.rollback()
                 raise  # Re-raise to fail the sync properly
 
@@ -146,16 +130,10 @@ class GAMInventoryService:
                 "last_synced": sync_time,
             }
 
-            key = ("ad_unit", ad_unit.id)
-            if key in existing_ids:
-                # Add database ID for update
-                item_data["id"] = existing_ids[key]
-                to_update.append(item_data)
-            else:
-                to_insert.append(item_data)
+            batch.append(item_data)
 
             # Flush batch every BATCH_SIZE items
-            if (len(to_insert) + len(to_update)) >= BATCH_SIZE:
+            if len(batch) >= BATCH_SIZE:
                 flush_batch()
 
         # Flush remaining ad units
@@ -191,15 +169,10 @@ class GAMInventoryService:
                 "last_synced": sync_time,
             }
 
-            key = ("placement", placement.id)
-            if key in existing_ids:
-                item_data["id"] = existing_ids[key]
-                to_update.append(item_data)
-            else:
-                to_insert.append(item_data)
+            batch.append(item_data)
 
             # Flush batch every BATCH_SIZE items
-            if (len(to_insert) + len(to_update)) >= BATCH_SIZE:
+            if len(batch) >= BATCH_SIZE:
                 flush_batch()
 
         # Flush remaining placements
@@ -223,15 +196,10 @@ class GAMInventoryService:
                 "last_synced": sync_time,
             }
 
-            key = ("label", label.id)
-            if key in existing_ids:
-                item_data["id"] = existing_ids[key]
-                to_update.append(item_data)
-            else:
-                to_insert.append(item_data)
+            batch.append(item_data)
 
             # Flush batch every BATCH_SIZE items
-            if (len(to_insert) + len(to_update)) >= BATCH_SIZE:
+            if len(batch) >= BATCH_SIZE:
                 flush_batch()
 
         # Flush remaining labels
@@ -255,12 +223,7 @@ class GAMInventoryService:
                 "last_synced": sync_time,
             }
 
-            item_key = ("custom_targeting_key", targeting_key.id)
-            if item_key in existing_ids:
-                item_data["id"] = existing_ids[item_key]
-                to_update.append(item_data)
-            else:
-                to_insert.append(item_data)
+            batch.append(item_data)
 
             # Process values for this key
             values = discovery.custom_targeting_values.get(targeting_key.id, [])
@@ -282,15 +245,10 @@ class GAMInventoryService:
                     "last_synced": sync_time,
                 }
 
-                value_key = ("custom_targeting_value", value.id)
-                if value_key in existing_ids:
-                    value_data["id"] = existing_ids[value_key]
-                    to_update.append(value_data)
-                else:
-                    to_insert.append(value_data)
+                batch.append(value_data)
 
                 # Flush batch every BATCH_SIZE items (values can be huge)
-                if (len(to_insert) + len(to_update)) >= BATCH_SIZE:
+                if len(batch) >= BATCH_SIZE:
                     flush_batch()
 
         # Flush remaining targeting keys/values
@@ -317,15 +275,10 @@ class GAMInventoryService:
                 "last_synced": sync_time,
             }
 
-            key = ("audience_segment", segment.id)
-            if key in existing_ids:
-                item_data["id"] = existing_ids[key]
-                to_update.append(item_data)
-            else:
-                to_insert.append(item_data)
+            batch.append(item_data)
 
             # Flush batch every BATCH_SIZE items
-            if (len(to_insert) + len(to_update)) >= BATCH_SIZE:
+            if len(batch) >= BATCH_SIZE:
                 flush_batch()
 
         # Flush remaining audience segments
@@ -352,9 +305,7 @@ class GAMInventoryService:
         self.db.execute(update_stmt)
         self.db.commit()
 
-        logger.info(
-            f"Saved inventory to database: {total_inserted} new, {total_updated} updated (batched operations - prevents OOM)"
-        )
+        logger.info("Saved inventory to database: %s items written (batched operations - prevents OOM)", total_written)
 
     def _streaming_sync_all_inventory(self, tenant_id: str, discovery: "GAMInventoryDiscovery") -> dict[str, Any]:
         """
@@ -477,7 +428,7 @@ class GAMInventoryService:
         logger.info(f"Streaming sync completed in {duration:.2f}s: {counts}")
         return summary
 
-    def _write_inventory_batch(self, tenant_id: str, inventory_type: str, items: list, sync_time: datetime):
+    def _write_inventory_batch(self, tenant_id: str, inventory_type: InventoryType, items: list, sync_time: datetime):
         """Write a batch of inventory items to database efficiently.
 
         Args:
@@ -493,42 +444,25 @@ class GAMInventoryService:
 
         BATCH_SIZE = 500
 
-        # Load existing inventory IDs once
-        logger.info(f"🔍 Loading existing {inventory_type} IDs from database...")
-        stmt = select(GAMInventory.inventory_id, GAMInventory.id).where(
-            and_(GAMInventory.tenant_id == tenant_id, GAMInventory.inventory_type == inventory_type)
-        )
-        existing = self.db.execute(stmt).all()
-        existing_ids = {row.inventory_id: row.id for row in existing}
-        logger.info(f"✅ Found {len(existing_ids)} existing {inventory_type} items")
-
-        to_insert: list[dict[str, Any]] = []
-        to_update: list[dict[str, Any]] = []
+        batch: list[dict[str, Any]] = []
         batch_num = 0
 
         logger.info(f"🔄 Processing {len(items)} items (batch size: {BATCH_SIZE})...")
         for idx, item in enumerate(items):
-            item_data = self._convert_item_to_db_format(tenant_id, inventory_type, item, sync_time)
-
-            if item.id in existing_ids:
-                item_data["id"] = existing_ids[item.id]
-                to_update.append(item_data)
-            else:
-                to_insert.append(item_data)
+            batch.append(self._convert_item_to_db_format(tenant_id, inventory_type, item, sync_time))
 
             # Flush batch
-            if (len(to_insert) + len(to_update)) >= BATCH_SIZE:
+            if len(batch) >= BATCH_SIZE:
                 batch_num += 1
                 logger.info(f"💾 Flushing batch {batch_num} (processed {idx + 1}/{len(items)} items)...")
-                self._flush_batch(to_insert, to_update)
-                to_insert.clear()
-                to_update.clear()
+                self._flush_batch(tenant_id, batch)
+                batch.clear()
 
         # Flush remaining
-        if to_insert or to_update:
+        if batch:
             batch_num += 1
-            logger.info(f"💾 Flushing final batch {batch_num} ({len(to_insert)} new, {len(to_update)} updates)...")
-            self._flush_batch(to_insert, to_update)
+            logger.info("💾 Flushing final batch %s (%s items)...", batch_num, len(batch))
+            self._flush_batch(tenant_id, batch)
 
         logger.info(f"✅ Completed writing {len(items)} {inventory_type} items in {batch_num} batch(es)")
 
@@ -545,12 +479,6 @@ class GAMInventoryService:
 
         BATCH_SIZE = 500
 
-        # Load existing key IDs once
-        # Use a fresh query to avoid stale connection issues
-        stmt = select(GAMInventory.inventory_id, GAMInventory.id).where(
-            and_(GAMInventory.tenant_id == tenant_id, GAMInventory.inventory_type == "custom_targeting_key")
-        )
-
         # Explicitly expire_all() and test connection health before querying
         # This prevents hanging on stale connections in long-running syncs
         self.db.expire_all()
@@ -562,11 +490,7 @@ class GAMInventoryService:
             logger.warning(f"Connection test failed, will retry query: {e}")
             # Connection is stale - SQLAlchemy will automatically reconnect on next query
 
-        existing = self.db.execute(stmt).all()
-        existing_ids = {row.inventory_id: row.id for row in existing}
-
-        to_insert: list[dict[str, Any]] = []
-        to_update: list[dict[str, Any]] = []
+        batch: list[dict[str, Any]] = []
 
         for key in keys:
             item_data = {
@@ -584,20 +508,15 @@ class GAMInventoryService:
                 "last_synced": sync_time,
             }
 
-            if key.id in existing_ids:
-                item_data["id"] = existing_ids[key.id]
-                to_update.append(item_data)
-            else:
-                to_insert.append(item_data)
+            batch.append(item_data)
 
             # Flush batch
-            if (len(to_insert) + len(to_update)) >= BATCH_SIZE:
-                self._flush_batch(to_insert, to_update)
-                to_insert.clear()
-                to_update.clear()
+            if len(batch) >= BATCH_SIZE:
+                self._flush_batch(tenant_id, batch)
+                batch.clear()
 
         # Flush remaining
-        self._flush_batch(to_insert, to_update)
+        self._flush_batch(tenant_id, batch)
 
     def _update_adapter_config_targeting_keys(self, tenant_id: str):
         """Update adapter_config.custom_targeting_keys from gam_inventory table.
@@ -610,14 +529,7 @@ class GAMInventoryService:
         """
         try:
             # Build mapping from gam_inventory table
-            stmt = select(GAMInventory.name, GAMInventory.inventory_id).where(
-                and_(
-                    GAMInventory.tenant_id == tenant_id,
-                    GAMInventory.inventory_type == "custom_targeting_key",
-                )
-            )
-            results = self.db.execute(stmt).all()
-            key_mapping = {row.name: row.inventory_id for row in results}
+            key_mapping = GAMInventoryRepository(self.db, tenant_id).inventory_ids_by_name("custom_targeting_key")
 
             if key_mapping:
                 # Update adapter_config via repository
@@ -720,12 +632,12 @@ class GAMInventoryService:
         else:
             raise ValueError(f"Unknown inventory type: {inventory_type}")
 
-    def _flush_batch(self, to_insert: list, to_update: list):
-        """Flush a batch of inserts and updates to database with timeout and connection recovery.
+    def _flush_batch(self, tenant_id: str, rows: list[dict[str, Any]]):
+        """Write a batch of rows and commit it, with timeout and connection recovery.
 
         Args:
-            to_insert: List of items to insert
-            to_update: List of items to update
+            tenant_id: Tenant ID
+            rows: The batch; each row inserts a new item or updates a held one in place
         """
         from sqlalchemy.exc import DBAPIError, OperationalError
 
@@ -738,22 +650,16 @@ class GAMInventoryService:
             self.db.commit()
 
         try:
-            if to_insert:
-                logger.info(f"📝 Starting bulk insert of {len(to_insert)} items...")
-                # SQLAlchemy accepts model class but mypy expects Mapper type
-                self.db.bulk_insert_mappings(GAMInventory, to_insert)  # type: ignore[arg-type]
-                logger.info(f"✅ Batch inserted {len(to_insert)} items")
-            if to_update:
-                logger.info(f"📝 Starting bulk update of {len(to_update)} items...")
-                # SQLAlchemy accepts model class but mypy expects Mapper type
-                self.db.bulk_update_mappings(GAMInventory, to_update)  # type: ignore[arg-type]
-                logger.info(f"✅ Batch updated {len(to_update)} items")
+            if rows:
+                logger.info("📝 Starting upsert of %s items...", len(rows))
+                GAMInventoryRepository(self.db, tenant_id).upsert(rows)
+                logger.info("✅ Batch wrote %s items", len(rows))
             logger.info("💾 Committing batch transaction (120s timeout)...")
             _commit_with_timeout()
             logger.info("✅ Batch committed successfully")
         except AdCPServiceUnavailableError as e:
             logger.error(f"⏰ Database commit timed out after 120s: {e}")
-            logger.error(f"   Insert count: {len(to_insert)}, Update count: {len(to_update)}")
+            logger.error("   Item count: %s", len(rows))
             logger.error("   This usually indicates: lost connection, lock contention, or large transaction")
             self.db.rollback()
             # A DB commit timeout is SERVICE_UNAVAILABLE, per AdCP.1
@@ -762,7 +668,7 @@ class GAMInventoryService:
         except (OperationalError, DBAPIError) as e:
             # Connection errors - log and re-raise with context
             logger.error(f"❌ Database connection error during batch write: {e}")
-            logger.error(f"   Insert count: {len(to_insert)}, Update count: {len(to_update)}")
+            logger.error("   Item count: %s", len(rows))
             logger.error("   Connection may have been lost during long-running sync")
             self.db.rollback()
             # Re-raise the original error with additional context
@@ -773,7 +679,7 @@ class GAMInventoryService:
             )
         except Exception as e:
             logger.error(f"❌ Batch write failed: {e}", exc_info=True)
-            logger.error(f"   Insert count: {len(to_insert)}, Update count: {len(to_update)}")
+            logger.error("   Item count: %s", len(rows))
             self.db.rollback()
             raise
 
@@ -864,150 +770,6 @@ class GAMInventoryService:
             existing.last_synced = last_synced
 
         self.db.commit()
-
-    def get_ad_unit_tree(self, tenant_id: str, limit: int = 1000) -> dict[str, Any]:
-        """
-        Get hierarchical ad unit tree from database.
-
-        For large inventories (10k+ ad units), this returns a limited set
-        to prevent browser timeouts. Use the search endpoint for finding
-        specific ad units.
-
-        Args:
-            tenant_id: Tenant ID
-            limit: Maximum number of ad units to return (default 1000)
-
-        Returns:
-            Hierarchical tree structure with limited ad units
-        """
-        # Get ad units with limit to prevent timeouts on large inventories
-        stmt = (
-            select(GAMInventory)
-            .where(
-                and_(
-                    GAMInventory.tenant_id == tenant_id,
-                    GAMInventory.inventory_type == "ad_unit",
-                    GAMInventory.status != "STALE",
-                )
-            )
-            .order_by(GAMInventory.name)
-            .limit(limit)
-        )
-        ad_units = self.db.scalars(stmt).all()
-
-        # Build lookup maps
-        unit_map = {}
-        root_units = []
-
-        for unit in ad_units:
-            unit_data = {
-                "id": unit.inventory_id,
-                "name": unit.name,
-                "path": unit.path,
-                "status": unit.status,
-                "metadata": unit.inventory_metadata,
-                "children": [],
-            }
-            unit_map[unit.inventory_id] = unit_data
-
-            # Check if root (no parent or parent not in path)
-            parent_id = unit.inventory_metadata.get("parent_id") if unit.inventory_metadata else None
-            if not parent_id:
-                root_units.append(unit_data)
-
-        # Build hierarchy
-        for unit in ad_units:
-            parent_id = unit.inventory_metadata.get("parent_id") if unit.inventory_metadata else None
-            if parent_id and parent_id in unit_map:
-                children_list = unit_map[parent_id]["children"]
-                if isinstance(children_list, list):
-                    children_list.append(unit_map[unit.inventory_id])
-
-        # Get last sync info from gam_inventory table
-        last_sync_stmt = select(func.max(GAMInventory.last_synced)).where(GAMInventory.tenant_id == tenant_id)
-        last_sync_result = self.db.scalar(last_sync_stmt)
-        # last_sync_result is a datetime object from func.max(), not DateTime column
-        last_sync: str | None = None
-        if last_sync_result is not None:
-            from datetime import datetime
-
-            if isinstance(last_sync_result, datetime):
-                last_sync = last_sync_result.isoformat()
-
-        # Get counts for other inventory types
-        placements_count = (
-            self.db.scalar(
-                select(func.count()).where(
-                    and_(
-                        GAMInventory.tenant_id == tenant_id,
-                        GAMInventory.inventory_type == "placement",
-                        GAMInventory.status != "STALE",
-                    )
-                )
-            )
-            or 0
-        )
-
-        labels_count = (
-            self.db.scalar(
-                select(func.count()).where(
-                    and_(
-                        GAMInventory.tenant_id == tenant_id,
-                        GAMInventory.inventory_type == "label",
-                        GAMInventory.status != "STALE",
-                    )
-                )
-            )
-            or 0
-        )
-
-        custom_targeting_keys_count = (
-            self.db.scalar(
-                select(func.count()).where(
-                    and_(
-                        GAMInventory.tenant_id == tenant_id,
-                        GAMInventory.inventory_type == "custom_targeting_key",
-                        GAMInventory.status != "STALE",
-                    )
-                )
-            )
-            or 0
-        )
-
-        audience_segments_count = (
-            self.db.scalar(
-                select(func.count()).where(
-                    and_(
-                        GAMInventory.tenant_id == tenant_id,
-                        GAMInventory.inventory_type == "audience_segment",
-                        GAMInventory.status != "STALE",
-                    )
-                )
-            )
-            or 0
-        )
-
-        return {
-            "root_units": root_units,
-            "total_units": len(ad_units),
-            "placements": placements_count,
-            "labels": labels_count,
-            "custom_targeting_keys": custom_targeting_keys_count,
-            "audience_segments": audience_segments_count,
-            "last_sync": last_sync,
-            "needs_refresh": self._needs_refresh(last_sync),
-        }
-
-    def _needs_refresh(self, last_sync_str: str | None) -> bool:
-        """Check if inventory needs refresh (older than 24 hours)."""
-        if not last_sync_str:
-            return True
-
-        try:
-            last_sync = datetime.fromisoformat(last_sync_str)
-            return datetime.now(UTC) - last_sync > timedelta(hours=24)
-        except Exception:
-            return True
 
     def search_inventory(
         self,
@@ -1341,138 +1103,3 @@ class GAMInventoryService:
         # Sort by score and limit
         suggestions.sort(key=lambda x: int(x["score"]), reverse=True)
         return suggestions[:limit]
-
-    def get_all_targeting_data(self, tenant_id: str) -> dict[str, Any]:
-        """
-        Get all targeting data for browsing.
-
-        Args:
-            tenant_id: Tenant ID
-
-        Returns:
-            Dictionary with all targeting data organized by type
-        """
-        # Get custom targeting keys
-        stmt = select(GAMInventory).where(
-            and_(
-                GAMInventory.tenant_id == tenant_id,
-                GAMInventory.inventory_type == "custom_targeting_key",
-                GAMInventory.status != "STALE",
-            )
-        )
-        custom_keys = self.db.scalars(stmt).all()
-
-        # Get custom targeting values grouped by key
-        custom_values: dict[str, list[dict[str, str]]] = {}
-        stmt = select(GAMInventory).where(
-            and_(
-                GAMInventory.tenant_id == tenant_id,
-                GAMInventory.inventory_type == "custom_targeting_value",
-                GAMInventory.status != "STALE",
-            )
-        )
-        all_values = self.db.scalars(stmt).all()
-
-        for value in all_values:
-            if not value.inventory_metadata:
-                continue
-            key_id = value.inventory_metadata.get("custom_targeting_key_id")
-            if key_id:
-                if key_id not in custom_values:
-                    custom_values[key_id] = []
-                custom_values[key_id].append(
-                    {
-                        "id": value.inventory_id,
-                        "name": value.name,
-                        "display_name": value.inventory_metadata.get("display_name", value.name),
-                        "match_type": value.inventory_metadata.get("match_type", "EXACT"),
-                        "status": value.status,
-                    }
-                )
-
-        # Get audience segments
-        stmt = select(GAMInventory).where(
-            and_(
-                GAMInventory.tenant_id == tenant_id,
-                GAMInventory.inventory_type == "audience_segment",
-                GAMInventory.status != "STALE",
-            )
-        )
-        audiences = self.db.scalars(stmt).all()
-
-        # Get labels
-        stmt = select(GAMInventory).where(
-            and_(
-                GAMInventory.tenant_id == tenant_id,
-                GAMInventory.inventory_type == "label",
-                GAMInventory.status != "STALE",
-            )
-        )
-        labels = self.db.scalars(stmt).all()
-
-        # Get last sync info from gam_inventory table
-        last_sync_stmt_2 = select(func.max(GAMInventory.last_synced)).where(GAMInventory.tenant_id == tenant_id)
-        last_sync_result_2 = self.db.scalar(last_sync_stmt_2)
-        last_sync_2: str | None = None
-        if last_sync_result_2 is not None:
-            from datetime import datetime
-
-            if isinstance(last_sync_result_2, datetime):
-                last_sync_2 = last_sync_result_2.isoformat()
-        last_sync = last_sync_2
-
-        # Format response
-        return {
-            "customKeys": [
-                {
-                    "id": key.inventory_id,
-                    "name": key.name,
-                    "display_name": (
-                        key.inventory_metadata.get("display_name", key.name) if key.inventory_metadata else key.name
-                    ),
-                    "type": key.inventory_metadata.get("type", "UNKNOWN") if key.inventory_metadata else "UNKNOWN",
-                    "status": key.status,
-                    "metadata": {
-                        "reportable_type": (
-                            key.inventory_metadata.get("reportable_type") if key.inventory_metadata else None
-                        ),
-                        "values_count": len(custom_values.get(key.inventory_id, [])),
-                        "values_loaded": key.inventory_id in custom_values and len(custom_values[key.inventory_id]) > 0,
-                    },
-                }
-                for key in custom_keys
-            ],
-            "customValues": custom_values,
-            "audiences": [
-                {
-                    "id": seg.inventory_id,
-                    "name": seg.name,
-                    "description": seg.inventory_metadata.get("description") if seg.inventory_metadata else None,
-                    "type": seg.inventory_metadata.get("type", "UNKNOWN") if seg.inventory_metadata else "UNKNOWN",
-                    "size": seg.inventory_metadata.get("size") if seg.inventory_metadata else None,
-                    "data_provider_name": (
-                        seg.inventory_metadata.get("data_provider_name") if seg.inventory_metadata else None
-                    ),
-                    "segment_type": (
-                        seg.inventory_metadata.get("segment_type", "UNKNOWN") if seg.inventory_metadata else "UNKNOWN"
-                    ),
-                    "status": seg.status,
-                    "category_ids": seg.inventory_metadata.get("category_ids", []) if seg.inventory_metadata else [],
-                }
-                for seg in audiences
-            ],
-            "labels": [
-                {
-                    "id": label.inventory_id,
-                    "name": label.name,
-                    "description": label.inventory_metadata.get("description") if label.inventory_metadata else None,
-                    "is_active": label.status == "ACTIVE",
-                    "ad_category": label.inventory_metadata.get("ad_category") if label.inventory_metadata else None,
-                    "label_type": (
-                        label.inventory_metadata.get("label_type", "UNKNOWN") if label.inventory_metadata else "UNKNOWN"
-                    ),
-                }
-                for label in labels
-            ],
-            "last_sync": last_sync,
-        }

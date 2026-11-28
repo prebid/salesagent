@@ -16,14 +16,21 @@ from bs4 import BeautifulSoup
 from pytest_bdd import given, parsers, then, when
 
 from src.core.database.models import UserRole
-from tests.bdd.steps.domain.admin_accounts import _require_admin_page
+from tests.bdd.steps.domain.admin_accounts import _assert_json_body, _require_admin_page
 from tests.harness.admin_inventory_profile import rendered_form
 from tests.harness.admin_tenant_scoping import (
     ACTIVE_BUY_BUDGET,
     NON_MATCHING_ROW_ROLE,
     POLICY_FORM,
     REDIRECTS,
+    expected_inventory_stats_body,
+    expected_inventory_sync_check_body,
+    expected_inventory_tree_body,
     expected_suggestions_body,
+    expected_sync_status_body,
+    expected_targeting_data_body,
+    expected_unsynced_body,
+    in_id_order,
     redirect_path,
 )
 
@@ -80,10 +87,22 @@ def given_other_tenant_product(ctx: dict, name: str) -> None:
     _env(ctx).seed_product_of_other_tenant(name)
 
 
+@given(parsers.parse('the target tenant holds a product under the default product id "{product_id}"'))
+def given_target_holds_default_product(ctx: dict, product_id: str) -> None:
+    """One more catalogue product, under the id of a product the suggestions offer."""
+    _env(ctx).seed_target_product(product_id)
+
+
 @given("the caller is a super admin of a different tenant with no membership in the target tenant")
 def given_caller_super_admin_elsewhere(ctx: dict) -> None:
     """Logged in as a super admin at another tenant; the target holds no User row for the caller."""
     _env(ctx).login_as_super_admin_of_other_tenant()
+
+
+@given("the target tenant holds synced GAM inventory and sync jobs, and another tenant synced after it")
+def given_target_holds_synced_inventory(ctx: dict) -> None:
+    """``SYNCED_INVENTORY`` and ``SYNC_JOBS`` in the target tenant, and a later item and job in another tenant."""
+    _env(ctx).seed_synced_inventory()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -155,12 +174,66 @@ def then_product_list_is_catalogue(ctx: dict) -> None:
     assert body == expected, f"Expected {expected!r}, got {body!r}"
 
 
+def _assert_suggestions_body(ctx: dict, existing_ids: frozenset[str]) -> None:
+    """Exactly today's body: every default product, in the handler's order, with its metadata,
+    and ``already_exists`` set for *existing_ids* alone."""
+    body = _require_admin_page(ctx).get_json()
+    expected = expected_suggestions_body(existing_ids)
+    assert body == expected, f"Expected {expected!r}, got {body!r}"
+
+
 @then("the suggestions list the default catalogue")
 def then_suggestions_are_defaults(ctx: dict) -> None:
-    """Exactly today's body: every default product, in the handler's order, with its metadata."""
-    body = _require_admin_page(ctx).get_json()
-    expected = expected_suggestions_body()
-    assert body == expected, f"Expected {expected!r}, got {body!r}"
+    """No default product is marked as already created."""
+    _assert_suggestions_body(ctx, frozenset())
+
+
+@then(parsers.parse('the suggestions list the default catalogue with only "{product_id}" marked as already created'))
+def then_suggestions_mark_existing(ctx: dict, product_id: str) -> None:
+    """*product_id* is marked as already created, and each of the other default products is not."""
+    _assert_suggestions_body(ctx, frozenset({product_id}))
+
+
+@then("the inventory sync check counts every item of the target tenant and reports its latest sync")
+def then_inventory_sync_check_reports_latest_sync(ctx: dict) -> None:
+    """Exactly today's body: every item of every type and status, and the latest sync, not the newest item's creation."""
+    _assert_json_body(ctx, expected_inventory_sync_check_body())
+
+
+@then(
+    "the sync status counts each inventory type of the target tenant in every status, "
+    "with the type's latest sync and the tenant's newest inventory sync job"
+)
+def then_sync_status_counts_every_status(ctx: dict) -> None:
+    """Exactly today's body, per type, with the failed inventory sync as the newest job on every type."""
+    _assert_json_body(ctx, expected_sync_status_body(_env(ctx).target.tenant_id))
+
+
+@then("the targeting data lists the target tenant's keys, audience segments and labels, with its latest sync")
+def then_targeting_data_lists_target_tenant(ctx: dict) -> None:
+    """Exactly today's body, its three lists compared in ``id`` order, which the route does not fix."""
+    _assert_json_body(ctx, expected_targeting_data_body(), ordered=in_id_order)
+
+
+@then(
+    "the inventory tree lists the target tenant's active root ad units, counts its active items "
+    "and reports its latest sync"
+)
+def then_inventory_tree_counts_active_items(ctx: dict) -> None:
+    """Exactly today's body: the one ACTIVE root ad unit, ACTIVE counts per type, and the latest sync."""
+    _assert_json_body(ctx, expected_inventory_tree_body())
+
+
+@then("the inventory stats count the target tenant's items of each type in each status")
+def then_inventory_stats_count_each_status(ctx: dict) -> None:
+    """Exactly today's body: per type, the count in every status, STALE included, and no other tenant's item."""
+    _assert_json_body(ctx, expected_inventory_stats_body(_env(ctx).target.tenant_id))
+
+
+@then(parsers.parse("the {route} reports that the target tenant has synced no inventory"))
+def then_route_reports_no_inventory(ctx: dict, route: str) -> None:
+    """Exactly today's body for a tenant that holds no synced inventory and has run no sync."""
+    _assert_json_body(ctx, expected_unsynced_body(route, _env(ctx).target.tenant_id))
 
 
 @then("the reloaded policy page of the target tenant shows the posted policy form")

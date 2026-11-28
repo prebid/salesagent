@@ -12,11 +12,19 @@ AND every module under ``src/core/tools/``:
 
 1. **Query detector** — any query selecting a Creative-family model
    (``Creative``, ``CreativeReview``, ``CreativeAssignment``, under ANY import
-   alias such as ``DBCreative``/``CreativeModel``/``DBAssignment``) that
-   compares ``creative_id`` (via ``==``, ``filter_by`` kwargs, or ``.in_()``)
-   without also comparing ``principal_id`` **in the same query chain**
+   alias such as ``DBCreative``/``CreativeModel``/``DBAssignment``, whole or as a
+   column projection such as ``select(Creative.creative_id)``, through ``select``
+   or a legacy ``<session>.query(...)``) that
+   filters ``creative_id`` (``==``, a ``filter_by`` keyword, or ``.in_()``)
+   without also filtering ``principal_id`` **in the same query**
    (per-QUERY granularity: a scoped query cannot credit an unscoped sibling
-   in the same function).
+   in the same function). The queries are the ones ``iter_queries`` in
+   ``_architecture_helpers`` reads, the model and ``select`` resolved by import
+   as the query's own scope sees them, and the columns are the ones
+   ``filtered_columns`` reads off the filter stages (``where`` / ``filter`` /
+   ``filter_by``) -- the answers the filter_by and uniqueness guards read -- so a
+   join's ON clause, a comparison of two mapped columns and ``principal_id != pid``
+   never scope a query.
 
 2. **Admin-call detector** — any ``admin_get_by_id`` / ``admin_get_by_ids`` /
    ``admin_list_all`` repository call inside ``src/core/tools/``: buyer-facing
@@ -34,7 +42,16 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist, parse_module, rel
+from tests.unit._architecture_helpers import (
+    assert_violations_match_allowlist,
+    filtered_columns,
+    iter_call_expressions,
+    iter_queries,
+    mapped,
+    parse_module,
+    rel,
+    walk_with_enclosing_function,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CREATIVE_REPO = _REPO_ROOT / "src" / "core" / "database" / "repositories" / "creative.py"
@@ -42,7 +59,8 @@ _TOOLS_DIR = _REPO_ROOT / "src" / "core" / "tools"
 
 # ORM models whose PK/FK carries principal_id — lookups by creative_id on any
 # of them are principal-ambiguous unless the query also pins principal_id.
-_CREATIVE_MODELS = {"Creative", "CreativeReview", "CreativeAssignment"}
+# Checked against the mapper where the detector runs (``mapped``), so a rename fails.
+_CREATIVE_MODELS = ("Creative", "CreativeReview", "CreativeAssignment")
 
 _ADMIN_REPO_METHODS = {"admin_get_by_id", "admin_get_by_ids", "admin_list_all"}
 
@@ -65,206 +83,41 @@ _QUERY_ALLOWLIST: set[tuple[str, str]] = {
 _ADMIN_CALL_ALLOWLIST: set[tuple[str, str]] = set()
 
 
-def _model_aliases(tree: ast.Module) -> dict[str, str]:
-    """Map local names (incl. ``import ... as`` aliases) to Creative-family models."""
-    aliases: dict[str, str] = {name: name for name in _CREATIVE_MODELS}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom):
-            for alias in node.names:
-                if alias.name in _CREATIVE_MODELS and alias.asname:
-                    aliases[alias.asname] = alias.name
-    return aliases
+def find_unscoped_creative_queries(tree: ast.Module, relpath: str) -> list[tuple[int, str]]:
+    """Return (lineno, function) per QUERY filtering creative_id without principal_id.
 
-
-def _is_model_attr(expr: ast.expr, aliases: dict[str, str]) -> bool:
-    """True for ``<CreativeFamilyAlias>.<attr>`` attribute access."""
-    return isinstance(expr, ast.Attribute) and isinstance(expr.value, ast.Name) and expr.value.id in aliases
-
-
-def _chain_parts(node: ast.Call) -> tuple[ast.Call | None, list[ast.Call]]:
-    """Unwrap ``select(X).where(...).filter(...)`` chains.
-
-    Returns (select_call, [filter-stage calls]) — select_call is None when the
-    chain does not bottom out in a ``select(...)`` call.
+    One row per query ``iter_queries`` reads on a Creative-family class, under the function
+    that holds it. An accumulator (``stmt = select(...)`` and every later
+    ``stmt = stmt.where(...)``) is ONE query on its whole filter set, so an unscoped
+    accumulator is flagged and principal_id pinned in a later statement is credited; a chain
+    on a folded name (``session.scalars(stmt.where(...))``) is graded on the fold's filters
+    with its own on top. Opaque or not, a fold is graded on the calls it folded: a rebind it
+    cannot read (``s = wrap(s)``) receives the statement with those filters already applied.
+    A column counts on any Creative-family class (``filtered_columns``).
     """
-    parts: list[ast.Call] = []
-    base: ast.expr = node
-    while (
-        isinstance(base, ast.Call)
-        and isinstance(base.func, ast.Attribute)
-        and base.func.attr in {"where", "filter", "filter_by"}
-    ):
-        parts.append(base)
-        base = base.func.value
-    if isinstance(base, ast.Call) and isinstance(base.func, ast.Name) and base.func.id == "select":
-        return base, parts
-    return None, parts
-
-
-def _chain_base(node: ast.expr) -> tuple[ast.expr, list[ast.Call]]:
-    """Unwrap a ``<base>.where(...).filter(...)`` chain to its base expression.
-
-    Unlike ``_chain_parts`` this returns whatever the chain bottoms out in —
-    a ``select(...)`` call, a plain ``ast.Name`` (accumulator style), or
-    anything else — so callers can fold ``stmt = stmt.where(...)`` statements.
-    """
-    parts: list[ast.Call] = []
-    base: ast.expr = node
-    while (
-        isinstance(base, ast.Call)
-        and isinstance(base.func, ast.Attribute)
-        and base.func.attr in {"where", "filter", "filter_by"}
-    ):
-        parts.append(base)
-        base = base.func.value
-    return base, parts
-
-
-def _accumulated_chains(tree: ast.Module) -> list[tuple[ast.Call, list[ast.Call]]]:
-    """Merge accumulator-style queries into single (select_call, parts) chains.
-
-    Tracks simple ``name = select(...)...`` assignments per function scope and
-    folds subsequent ``name = name.where/filter/filter_by(...)`` statements into
-    the same chain, so the query is graded on its FULL accumulated filter set
-    (an unscoped accumulator is flagged; principal_id pinned in a later
-    statement is credited).
-    """
-    scopes: list[ast.AST] = [tree]
-    scopes.extend(n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)))
-    merged: list[tuple[ast.Call, list[ast.Call]]] = []
-
-    def _local_assigns(scope: ast.AST) -> list[ast.Assign]:
-        """Assign statements in *scope*, not descending into nested functions."""
-        found: list[ast.Assign] = []
-        stack: list[ast.AST] = list(ast.iter_child_nodes(scope))
-        while stack:
-            node = stack.pop()
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            if isinstance(node, ast.Assign):
-                found.append(node)
-            stack.extend(ast.iter_child_nodes(node))
-        return sorted(found, key=lambda n: n.lineno)
-
-    for scope in scopes:
-        acc: dict[str, tuple[ast.Call, list[ast.Call]]] = {}
-        for stmt in _local_assigns(scope):
-            if len(stmt.targets) != 1 or not isinstance(stmt.targets[0], ast.Name):
-                continue
-            target = stmt.targets[0].id
-            base, parts = _chain_base(stmt.value)
-            if isinstance(base, ast.Call) and isinstance(base.func, ast.Name) and base.func.id == "select":
-                acc[target] = (base, list(parts))
-            elif isinstance(base, ast.Name) and base.id in acc and parts:
-                sel, prev = acc[base.id]
-                acc[target] = (sel, prev + parts)
-            else:
-                acc.pop(target, None)
-        merged.extend(chain for chain in acc.values() if chain[1])
-    return merged
-
-
-def _attrs_compared_in_chain(parts: list[ast.Call], aliases: dict[str, str]) -> set[str]:
-    """Collect model attrs pinned by a single query chain's filter stages.
-
-    Counts ``Model.attr == value`` comparisons (excluding pure JOIN conditions
-    where both sides are model attrs), ``filter_by(attr=...)`` kwargs, and
-    ``Model.attr.in_(...)`` membership filters.
-    """
-    names: set[str] = set()
-    for part in parts:
-        if isinstance(part.func, ast.Attribute) and part.func.attr == "filter_by":
-            for kw in part.keywords:
-                if kw.arg:
-                    names.add(kw.arg)
-            continue
-        for arg in part.args:
-            for node in ast.walk(arg):
-                if isinstance(node, ast.Compare):
-                    sides = [node.left, *node.comparators]
-                    if all(_is_model_attr(s, aliases) for s in sides):
-                        continue  # JOIN condition, not a lookup filter
-                    for expr in sides:
-                        if _is_model_attr(expr, aliases):
-                            names.add(expr.attr)  # type: ignore[union-attr]
-                elif (
-                    isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Attribute)
-                    and node.func.attr == "in_"
-                    and _is_model_attr(node.func.value, aliases)
-                ):
-                    names.add(node.func.value.attr)  # type: ignore[union-attr]
-    return names
-
-
-def _enclosing_function_map(tree: ast.Module) -> list[tuple[ast.FunctionDef | ast.AsyncFunctionDef, set[int]]]:
-    """Map each function to the set of line numbers it spans (innermost wins by order)."""
-    funcs = []
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            end = getattr(node, "end_lineno", node.lineno)
-            funcs.append((node, set(range(node.lineno, end + 1))))
-    return funcs
-
-
-def _function_at(funcs: list, lineno: int) -> str:
-    """Name of the innermost function containing *lineno* (module level -> '<module>')."""
-    best: tuple[int, str] | None = None
-    for node, span in funcs:
-        if lineno in span:
-            if best is None or len(span) < best[0]:
-                best = (len(span), node.name)
-    return best[1] if best else "<module>"
-
-
-def find_unscoped_creative_queries(tree: ast.Module) -> list[tuple[int, str]]:
-    """Return (lineno, description) per QUERY comparing creative_id without principal_id."""
-    aliases = _model_aliases(tree)
-    funcs = _enclosing_function_map(tree)
+    creative = mapped(*_CREATIVE_MODELS)
     violations: list[tuple[int, str]] = []
-    seen_selects: set[int] = set()
-
-    # Accumulator-style queries first: their merged filter set replaces the
-    # grading of the bare initial chain (which would otherwise miss filters
-    # added by later ``stmt = stmt.where(...)`` statements — in either
-    # direction: unscoped accumulators hid, later-scoped ones false-flagged).
-    chains: list[tuple[ast.Call, list[ast.Call]]] = list(_accumulated_chains(tree))
-
-    # Then inline chains, longest first so subchains of a processed chain skip.
-    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)]
-    inline: list[tuple[ast.Call, list[ast.Call]]] = []
-    for call in calls:
-        select_call, parts = _chain_parts(call)
-        if select_call is not None:
-            inline.append((select_call, parts))
-    inline.sort(key=lambda c: -len(c[1]))
-    chains.extend(inline)
-
-    for select_call, parts in chains:
-        if id(select_call) in seen_selects:
+    for query in iter_queries(tree, relpath):
+        if query.entity not in creative:
             continue
-        seen_selects.add(id(select_call))
-        if not (select_call.args and isinstance(select_call.args[0], ast.Name) and select_call.args[0].id in aliases):
-            continue
-        compared = _attrs_compared_in_chain(parts, aliases)
+        compared = {column for owner, column in filtered_columns(query) if owner in creative}
         if "creative_id" in compared and "principal_id" not in compared:
-            func_name = _function_at(funcs, select_call.lineno)
-            violations.append((select_call.lineno, func_name))
+            violations.append((query.root.lineno, query.holder))
     return violations
 
 
 def find_admin_calls(tree: ast.Module) -> list[tuple[int, str]]:
-    """Return (lineno, function) for admin_* repository calls (tools scan)."""
-    funcs = _enclosing_function_map(tree)
-    hits: list[tuple[int, str]] = []
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr in _ADMIN_REPO_METHODS
-        ):
-            hits.append((node.lineno, _function_at(funcs, node.lineno)))
-    return hits
+    """Return (lineno, function) for admin_* repository calls (tools scan).
+
+    A node walk, so the function comes from ``walk_with_enclosing_function``: the name
+    ``iter_scopes`` gives the scope that owns the call.
+    """
+    enclosing = {id(node): function for node, function in walk_with_enclosing_function(tree)}
+    return [
+        (call.lineno, enclosing[id(call)])
+        for call in iter_call_expressions(tree)
+        if isinstance(call.func, ast.Attribute) and call.func.attr in _ADMIN_REPO_METHODS
+    ]
 
 
 def _scanned_files() -> list[Path]:
@@ -278,7 +131,7 @@ class TestCreativeLookupPrincipalScoped:
         found: set[tuple[str, str]] = set()
         for path in _scanned_files():
             rel_path = rel(path, _REPO_ROOT)
-            for _lineno, func in find_unscoped_creative_queries(parse_module(path)):
+            for _lineno, func in find_unscoped_creative_queries(parse_module(path), rel_path):
                 found.add((rel_path, func))
         assert_violations_match_allowlist(
             found,
@@ -310,6 +163,16 @@ class TestCreativeLookupPrincipalScoped:
         )
 
 
+#: What every real module that queries carries; the snippets below import their own models.
+_SELECT_IMPORT = "from sqlalchemy import select\n"
+
+
+def _flagged(source: str) -> list[str]:
+    """The functions the LIVE query detector flags in *source*, given the ``select`` import."""
+    tree = ast.parse(_SELECT_IMPORT + source)
+    return [func for _, func in find_unscoped_creative_queries(tree, "src/core/tools/x.py")]
+
+
 class TestDetectorMetaTests:
     """Exercise the LIVE detectors on synthetic modules (#1430 guard meta-drift
     discipline: meta-tests must pin the detectors the guard actually runs, incl.
@@ -317,7 +180,7 @@ class TestDetectorMetaTests:
 
     @pytest.mark.arch_guard
     def test_detector_catches_tenant_only_lookup(self):
-        tree = ast.parse(
+        source = (
             "from src.core.database.models import Creative\n"
             "def get_thing(self, creative_id):\n"
             "    return self._session.scalars(select(Creative).where(\n"
@@ -325,12 +188,12 @@ class TestDetectorMetaTests:
             "        Creative.creative_id == creative_id,\n"
             "    )).first()\n"
         )
-        assert [(f, "creative_id") for _, f in find_unscoped_creative_queries(tree)] == [("get_thing", "creative_id")]
+        assert _flagged(source) == ["get_thing"]
 
     @pytest.mark.arch_guard
     def test_detector_catches_aliased_in_bulk_load(self):
         """DBCreative alias + .in_() bulk form — the shape that evaded the old detector."""
-        tree = ast.parse(
+        source = (
             "from src.core.database.models import Creative as DBCreative\n"
             "def load(session, tenant_id, ids):\n"
             "    stmt = select(DBCreative).where(\n"
@@ -339,22 +202,69 @@ class TestDetectorMetaTests:
             "    )\n"
             "    return session.scalars(stmt).all()\n"
         )
-        assert [f for _, f in find_unscoped_creative_queries(tree)] == ["load"]
+        assert _flagged(source) == ["load"]
 
     @pytest.mark.arch_guard
     def test_detector_catches_filter_by_form(self):
-        tree = ast.parse(
+        source = (
             "from src.core.database.models import Creative\n"
             "def get_thing(session, creative_id, tenant_id):\n"
             "    return session.scalars(select(Creative).filter_by(\n"
             "        creative_id=creative_id, tenant_id=tenant_id)).first()\n"
         )
-        assert [f for _, f in find_unscoped_creative_queries(tree)] == ["get_thing"]
+        assert _flagged(source) == ["get_thing"]
+
+    @pytest.mark.arch_guard
+    def test_detector_catches_a_column_projection(self):
+        """select(Creative.creative_id) addresses Creative; the spelling match read a model named creative_id."""
+        source = (
+            "from src.core.database.models import Creative\n"
+            "def ids(session, tid, cid):\n"
+            "    return session.scalars(select(Creative.creative_id).where(\n"
+            "        Creative.tenant_id == tid, Creative.creative_id == cid)).all()\n"
+        )
+        assert _flagged(source) == ["ids"]
+
+    @pytest.mark.arch_guard
+    def test_detector_walks_the_whole_chain(self):
+        """A filter after order_by belongs to the same query; the old walker stopped at order_by."""
+        source = (
+            "from src.core.database.models import Creative\n"
+            "def latest(session, tid, cid):\n"
+            "    return session.scalars(select(Creative).order_by(Creative.created_at).where(\n"
+            "        Creative.tenant_id == tid, Creative.creative_id == cid)).first()\n"
+        )
+        assert _flagged(source) == ["latest"]
+
+    @pytest.mark.arch_guard
+    def test_a_join_condition_does_not_scope_the_query(self):
+        """principal_id in a join's ON clause filters nothing: only where/filter/filter_by count."""
+        source = (
+            "from src.core.database.models import Creative, Principal\n"
+            "def joined(session, tid, cid):\n"
+            "    return session.scalars(select(Creative)\n"
+            "        .join(Principal, Principal.principal_id == Creative.principal_id)\n"
+            "        .where(Creative.tenant_id == tid, Creative.creative_id == cid)).first()\n"
+        )
+        assert _flagged(source) == ["joined"]
+
+    @pytest.mark.arch_guard
+    def test_detector_resolves_by_import_not_by_spelling(self):
+        """A Pydantic Creative and a parameter named select are not an ORM query."""
+        source = (
+            "from src.core.schemas import Creative\n"
+            "def pydantic(cid):\n"
+            "    return select(Creative).where(Creative.creative_id == cid)\n"
+            "def shadowed(select, cid):\n"
+            "    from src.core.database.models import Creative as DBCreative\n"
+            "    return select(DBCreative).where(DBCreative.creative_id == cid)\n"
+        )
+        assert _flagged(source) == []
 
     @pytest.mark.arch_guard
     def test_detector_is_per_query_not_per_function(self):
         """A principal-scoped query must NOT credit an unscoped sibling in the same function."""
-        tree = ast.parse(
+        source = (
             "from src.core.database.models import Creative\n"
             "def two_queries(session, cid, tid, pid):\n"
             "    scoped = session.scalars(select(Creative).where(\n"
@@ -368,12 +278,12 @@ class TestDetectorMetaTests:
             "    )).first()\n"
             "    return scoped, unscoped\n"
         )
-        assert [f for _, f in find_unscoped_creative_queries(tree)] == ["two_queries"]
+        assert _flagged(source) == ["two_queries"]
 
     @pytest.mark.arch_guard
     def test_detector_passes_scoped_and_non_creative_models(self):
-        tree = ast.parse(
-            "from src.core.database.models import Creative\n"
+        source = (
+            "from src.core.database.models import Creative, Product\n"
             "def get_thing(self, creative_id, principal_id):\n"
             "    return self._session.scalars(select(Creative).where(\n"
             "        Creative.tenant_id == self._tenant_id,\n"
@@ -383,11 +293,11 @@ class TestDetectorMetaTests:
             "def other_model(session, x):\n"
             "    return session.scalars(select(Product).where(Product.creative_id == x)).all()\n"
         )
-        assert find_unscoped_creative_queries(tree) == []
+        assert _flagged(source) == []
 
     @pytest.mark.arch_guard
     def test_detector_ignores_join_conditions(self):
-        tree = ast.parse(
+        source = (
             "from src.core.database.models import Creative, CreativeAssignment\n"
             "def joined(session, pid, tid):\n"
             "    return session.scalars(select(Creative).where(\n"
@@ -396,26 +306,26 @@ class TestDetectorMetaTests:
             "        Creative.principal_id == pid,\n"
             "    )).all()\n"
         )
-        assert find_unscoped_creative_queries(tree) == []
+        assert _flagged(source) == []
 
     @pytest.mark.arch_guard
     def test_detector_catches_unscoped_accumulator_query(self):
         """Accumulator style (stmt = select(...); stmt = stmt.where(...)) must be graded
         as ONE merged query — the shape the old detector silently dropped."""
-        tree = ast.parse(
+        source = (
             "from src.core.database.models import Creative\n"
             "def accumulate(session, tid, ids):\n"
             "    stmt = select(Creative).where(Creative.tenant_id == tid)\n"
             "    stmt = stmt.where(Creative.creative_id.in_(ids))\n"
             "    return session.scalars(stmt).all()\n"
         )
-        assert [f for _, f in find_unscoped_creative_queries(tree)] == ["accumulate"]
+        assert _flagged(source) == ["accumulate"]
 
     @pytest.mark.arch_guard
     def test_detector_merges_accumulated_principal_scope(self):
         """principal_id pinned in a LATER accumulation statement scopes the whole
         query — the merged grading must not flag it (no false positive)."""
-        tree = ast.parse(
+        source = (
             "from src.core.database.models import Creative\n"
             "def accumulate(session, tid, pid, ids):\n"
             "    stmt = select(Creative).filter_by(tenant_id=tid)\n"
@@ -423,7 +333,81 @@ class TestDetectorMetaTests:
             "    stmt = stmt.where(Creative.principal_id == pid)\n"
             "    return session.scalars(stmt).all()\n"
         )
-        assert find_unscoped_creative_queries(tree) == []
+        assert _flagged(source) == []
+
+    @pytest.mark.arch_guard
+    def test_detector_grades_the_filters_folded_before_an_opaque_rebind(self):
+        """``s = wrap(s)`` receives the statement with the folded filters already applied, so
+        they are graded: principal_id pinned before it scopes the query, and creative_id
+        without principal_id still flags. The fold used to be dropped there, and the first
+        line was graded alone."""
+        source = (
+            "from src.core.database.models import Creative\n"
+            "def f(session, cid, p):\n"
+            "    s = select(Creative).where(Creative.creative_id == cid)\n"
+            "    s = s.where(Creative.principal_id == p)\n"
+            "    s = wrap(s)\n"
+            "    return session.scalars(s).all()\n"
+        )
+        assert _flagged(source) == []
+        assert _flagged(source.replace("    s = s.where(Creative.principal_id == p)\n", "")) == ["f"]
+
+    @pytest.mark.arch_guard
+    def test_detector_grades_a_chain_on_a_folded_name_with_the_folded_filters(self):
+        """``stmt.where(...)`` inside a call is a query of its own: the fold's filters with its
+        own on top. It used to be dropped because its base is a name, not a statement root."""
+        source = (
+            "from src.core.database.models import Creative\n"
+            "def f(session, tid, cid):\n"
+            "    stmt = select(Creative).where(Creative.tenant_id == tid)\n"
+            "    return session.scalars(stmt.where(Creative.creative_id == cid)).first()\n"
+        )
+        assert _flagged(source) == ["f"]
+
+    @pytest.mark.arch_guard
+    def test_a_principal_inequality_does_not_scope_the_query(self):
+        """``principal_id != pid`` pins no principal; only ``==``, ``filter_by`` and ``.in_()`` do."""
+        source = (
+            "from src.core.database.models import Creative\n"
+            "def f(session, tid, cid, pid):\n"
+            "    return session.scalars(select(Creative).where(\n"
+            "        Creative.tenant_id == tid, Creative.creative_id == cid, Creative.principal_id != pid)).first()\n"
+        )
+        assert _flagged(source) == ["f"]
+
+    @pytest.mark.arch_guard
+    def test_detector_reads_a_legacy_query_root(self):
+        """``<session>.query(Creative)`` addresses Creative as ``select(Creative)`` does, inline or
+        folded: the root and its class are ``statement_root`` and ``statement_entity``, the answers
+        the filter_by guard reads. The detector used to read the class off ``select(...)`` calls only."""
+        source = (
+            "from src.core.database.models import Creative\n"
+            "def inline(s, cid):\n"
+            "    return s.query(Creative).filter_by(creative_id=cid).first()\n"
+            "def folded(s, cid):\n"
+            "    q = s.query(Creative)\n"
+            "    q = q.filter_by(creative_id=cid)\n"
+            "    return q.first()\n"
+            "def scoped(s, cid, pid):\n"
+            "    return s.query(Creative).filter_by(creative_id=cid, principal_id=pid).first()\n"
+            "def scoped_later(s, cid, pid):\n"
+            "    q = s.query(Creative).filter_by(creative_id=cid)\n"
+            "    q = q.filter(Creative.principal_id == pid)\n"
+            "    return q.first()\n"
+        )
+        assert _flagged(source) == ["inline", "folded"]
+
+    @pytest.mark.arch_guard
+    def test_detector_names_the_function_that_holds_a_nested_scope(self):
+        """A query in a comprehension or a lambda is reported under its enclosing function."""
+        source = (
+            "from src.core.database.models import Creative\n"
+            "def listed(session, ids):\n"
+            "    return [session.scalars(select(Creative).where(Creative.creative_id == i)).first() for i in ids]\n"
+            "def deferred(session, cid):\n"
+            "    return lambda: session.scalars(select(Creative).where(Creative.creative_id == cid)).first()\n"
+        )
+        assert _flagged(source) == ["listed", "deferred"]
 
     @pytest.mark.arch_guard
     def test_admin_call_detector(self):
@@ -432,5 +416,7 @@ class TestDetectorMetaTests:
             "    return uow.creatives.admin_get_by_ids(ids)\n"
             "def fine(uow, ids, pid):\n"
             "    return uow.creatives.get_by_ids(ids, pid)\n"
+            "def deferred(uow, cid):\n"
+            "    return lambda: uow.creatives.admin_get_by_id(cid)\n"
         )
-        assert [f for _, f in find_admin_calls(tree)] == ["buyer_path"]
+        assert [f for _, f in find_admin_calls(tree)] == ["buyer_path", "deferred"]

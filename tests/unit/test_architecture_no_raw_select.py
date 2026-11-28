@@ -4,7 +4,7 @@ All ORM model data access in production code must go through repository classes.
 Direct select() calls bypass tenant isolation, skip business logic, and violate
 the repository pattern (CLAUDE.md Pattern #3).
 
-ORM model names are auto-discovered from src/core/database/models.py — any new
+ORM model names come from the live mapper registry (``orm_classes``) — any new
 model gets coverage automatically without manual listing.
 
 Repository files (src/core/database/repositories/*.py) are exempt because they
@@ -13,12 +13,16 @@ are also exempt.
 
 """
 
+import ast
+
 import pytest
 
 from tests.unit._architecture_helpers import (
     assert_violations_match_allowlist,
     find_raw_select_violations,
-    orm_model_class_defs,
+    mapped,
+    orm_classes,
+    raw_select_rows,
 )
 
 # ── Exempt directories and files ────────────────────────────────────
@@ -30,22 +34,8 @@ INFRASTRUCTURE_FILES = {
     "src/core/database/database.py",
 }
 
-# ── Auto-discover ORM models ───────────────────────────────────────
-
-
-def _discover_orm_model_names() -> set[str]:
-    """Every ORM model class name declared in src/core/database/models.py.
-
-    A class is an ORM model if it inherits from Base (directly or with mixins).
-    The Base class itself is excluded. Discovery reads the shared
-    ``models_module_tree()`` parse so this guard, the uniqueness-index-verdict
-    guard and every other models.py reader agree on one inventory.
-    """
-    return {cls.name for cls in orm_model_class_defs()}
-
-
-# Cache the model names at module load (fast — single file parse)
-ORM_MODEL_NAMES = _discover_orm_model_names()
+# ── ORM models: every mapped class, from the one shared inventory ──
+ORM_MODEL_NAMES = set(orm_classes())
 
 # ── Pre-existing violations (allowlist) ─────────────────────────────
 # These existed before the guard was created. The allowlist can only SHRINK.
@@ -71,7 +61,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/adapters/google_ad_manager.py", "get_packages_snapshot"),
     ("src/adapters/xandr.py", "_create_human_task"),
     # ── Admin app ──
-    ("src/admin/app.py", "create_app"),
+    # create_app removed — its one select is in the nested inject_context, which holds it
     ("src/admin/app.py", "inject_context"),
     # ── Admin blueprints ──
     ("src/admin/blueprints/activity_stream.py", "get_recent_activities"),
@@ -94,7 +84,8 @@ ALLOWLIST: set[tuple[str, str]] = {
     # auth.login call it instead of each hand-rolling the same select (#2263)
     ("src/admin/blueprints/core.py", "index"),
     ("src/admin/blueprints/core.py", "reactivate_tenant"),
-    ("src/admin/blueprints/core.py", "render_super_admin_index"),
+    # render_super_admin_index removed — its tenant page and count come from
+    # TenantLookupRepository.list_active / count_active
     ("src/admin/blueprints/creative_agents.py", "add_creative_agent"),
     ("src/admin/blueprints/creative_agents.py", "delete_creative_agent"),
     ("src/admin/blueprints/creative_agents.py", "edit_creative_agent"),
@@ -108,13 +99,13 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/gam.py", "test_gam_connection"),
     ("src/admin/blueprints/gam.py", "view_gam_line_item"),
     ("src/admin/blueprints/inventory.py", "analyze_ad_server_inventory"),
-    ("src/admin/blueprints/inventory.py", "check_inventory_sync"),
+    # check_inventory_sync removed — its count and last sync come from GAMInventoryRepository
     ("src/admin/blueprints/inventory.py", "get_inventory_list"),
     ("src/admin/blueprints/inventory.py", "get_inventory_sizes"),
     ("src/admin/blueprints/inventory.py", "_batch_fetch_ancestors"),  # FIXME(#1119): extract to repository
     ("src/admin/blueprints/inventory.py", "get_inventory_tree"),
     ("src/admin/blueprints/inventory.py", "get_orders"),
-    ("src/admin/blueprints/inventory.py", "get_sync_status"),
+    # get_sync_status removed — its last inventory job comes from SyncJobRepository.latest
     ("src/admin/blueprints/inventory.py", "get_targeting_data"),
     ("src/admin/blueprints/inventory.py", "get_targeting_values"),
     ("src/admin/blueprints/inventory.py", "inventory_browser"),
@@ -261,10 +252,10 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/dynamic_products.py", "archive_expired_variants"),
     ("src/services/format_metrics_service.py", "_process_and_store_metrics"),
     ("src/services/format_metrics_service.py", "aggregate_all_tenants"),
-    # _update_adapter_config_targeting_keys removed — uses AdapterConfigRepository
+    # _save_inventory_to_db, _update_adapter_config_targeting_keys, _write_custom_targeting_keys and
+    # _write_inventory_batch removed — the sync reads gam_inventory through GAMInventoryRepository.
+    # get_ad_unit_tree and get_all_targeting_data deleted: #2571 dropped the endpoints that called them
     ("src/services/gam_inventory_service.py", "_upsert_inventory_item"),
-    ("src/services/gam_inventory_service.py", "get_ad_unit_tree"),
-    ("src/services/gam_inventory_service.py", "get_all_targeting_data"),
     ("src/services/gam_inventory_service.py", "get_product_inventory"),
     ("src/services/gam_inventory_service.py", "search_inventory"),
     ("src/services/gam_inventory_service.py", "suggest_inventory_for_product"),
@@ -307,8 +298,55 @@ def _find_raw_selects() -> list[tuple[str, str, str, int]]:
     """
     return find_raw_select_violations(
         skip=lambda rel_path: rel_path.startswith(REPOSITORY_DIR) or rel_path in INFRASTRUCTURE_FILES,
-        model_names=ORM_MODEL_NAMES,
+        models=ORM_MODEL_NAMES,
     )
+
+
+_PREAMBLE = "from sqlalchemy import select\nfrom src.core.database.models import Tenant, User\n"
+
+# label -> (source after the preamble, the (function, model) rows the detector gives, in
+# scan order). At most one row per function, keyed by the function that holds the call.
+_TABLE: dict[str, tuple[str, list[tuple[str, str]]]] = {
+    "whole-class": ("def f():\n    return select(Tenant)\n", [("f", "Tenant")]),
+    "column-projection": ("def f():\n    return select(Tenant.tenant_id)\n", [("f", "Tenant")]),
+    "module-level": ("q = select(Tenant)\n", [("<module>", "Tenant")]),
+    "nested-def-counts-for-itself": (
+        "def f():\n    def g():\n        return select(Tenant)\n\n    return g\n",
+        [("g", "Tenant")],
+    ),
+    "lambda-counts-for-its-function": ("def f():\n    return lambda: select(Tenant)\n", [("f", "Tenant")]),
+    "comprehension-counts-for-its-function": (
+        "def f(xs):\n    return [select(Tenant) for x in xs]\n",
+        [("f", "Tenant")],
+    ),
+    "aliased-import": (
+        "from src.core.database.models import Tenant as DBTenant\ndef f():\n    return select(DBTenant)\n",
+        [("f", "Tenant")],
+    ),
+    "module-attribute": (
+        "from src.core.database import models\ndef f():\n    return select(models.Tenant)\n",
+        [("f", "Tenant")],
+    ),
+    "one-row-per-function": ("def f():\n    select(User)\n    return select(Tenant)\n", [("f", "User")]),
+    "two-functions-of-one-name-are-two-rows": (
+        "class A:\n    def load(self):\n        return select(Tenant)\n\n"
+        "class B:\n    def load(self):\n        return select(Tenant)\n",
+        [("load", "Tenant"), ("load", "Tenant")],
+    ),
+    # Not a raw select on a mapped class: nothing reported.
+    "pydantic-namesake": ("from src.core.schemas import Product\ndef f():\n    return select(Product)\n", []),
+    "select-parameter": ("def f(select):\n    return select(Tenant)\n", []),
+    "legacy-query": ("def f(session):\n    return session.query(Tenant)\n", []),
+}
+
+
+@pytest.mark.arch_guard
+@pytest.mark.parametrize("label", sorted(_TABLE))
+def test_detector_rows_per_shape(label: str) -> None:
+    """The LIVE detector, on one module: what it flags and what it leaves alone."""
+    source, rows = _TABLE[label]
+    found = raw_select_rows(ast.parse(_PREAMBLE + source), "src/x.py", mapped(*ORM_MODEL_NAMES))
+    assert [(function, model) for _, function, model, _ in found] == rows
 
 
 # ── Tests ───────────────────────────────────────────────────────────

@@ -28,21 +28,21 @@ group — they hold the session and the dict serialization, and issue no query o
 their own, and so is the admin plane's ``core.get_tenant_from_hostname``.
 
 The scope of that claim, exactly: nothing under ``src/`` answers WHICH TENANT a
-request names outside this class. Cross-tenant LISTINGS are a third question and
-five of them are still written as raw selects (``admin/sync_api.py``,
-``admin/domain_access.py``, ``admin/blueprints/core.py``); they want a listing
-method here or on a sibling. GH #2263 tracks the rest, and the import ban that
-would make a second lookup unrepresentable.
+request names outside this class. Cross-tenant LISTINGS are a third question: the
+operator's tenant list and the tenant management API's list are answered here
+(``count_active`` / ``list_active``, ``list_all``), and four are still written as raw
+selects (``admin/sync_api.py``, ``admin/domain_access.py``). GH #2263 tracks those, and
+the import ban that would make a second lookup unrepresentable.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable
 
-from sqlalchemy import ColumnElement, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy import ColumnElement, func, or_, select
+from sqlalchemy.orm import Session, joinedload
 
-from src.core.database.models import Tenant
+from src.core.database.models import MediaBuy, Tenant
 from src.core.http_utils import hostname_of
 
 
@@ -136,6 +136,51 @@ class TenantLookupRepository:
         if by_id is not None:
             return by_id
         return self._session.scalars(select(Tenant).filter_by(is_active=True).order_by(Tenant.created_at)).first()
+
+    # ── Listings: every tenant, for the operator's views ─────────────────────
+
+    def count_active(self, *, ad_server_selected: bool | None = None, has_activity: bool | None = None) -> int:
+        """How many active tenants :meth:`list_active` pages through under the same filters."""
+        stmt = select(func.count()).select_from(Tenant).where(*_active_listing(ad_server_selected, has_activity))
+        return self._session.scalar(stmt) or 0
+
+    def list_active(
+        self, *, limit: int, offset: int, ad_server_selected: bool | None = None, has_activity: bool | None = None
+    ) -> list[Tenant]:
+        """One page of the active tenants, by name, with ``adapter_config`` loaded.
+
+        *ad_server_selected* keeps the tenants that name an ad server (True) or name none (False);
+        *has_activity* keeps the tenants that hold a media buy (True) or hold none (False).
+        None keeps every tenant.
+        """
+        stmt = (
+            select(Tenant)
+            .options(joinedload(Tenant.adapter_config))
+            .where(*_active_listing(ad_server_selected, has_activity))
+            .order_by(Tenant.name)
+            .limit(limit)
+            .offset(offset)
+        )
+        return list(self._session.scalars(stmt))
+
+    def list_all(self) -> list[Tenant]:
+        """Every tenant, active or not, newest first, with ``adapter_config`` loaded."""
+        stmt = select(Tenant).options(joinedload(Tenant.adapter_config)).order_by(Tenant.created_at.desc())
+        return list(self._session.scalars(stmt))
+
+
+def _active_listing(ad_server_selected: bool | None, has_activity: bool | None) -> list[ColumnElement[bool]]:
+    """The WHERE clauses of :meth:`TenantLookupRepository.list_active` and its count."""
+    clauses: list[ColumnElement[bool]] = [Tenant.is_active.is_(True)]
+    if ad_server_selected is True:
+        clauses += [Tenant.ad_server.is_not(None), Tenant.ad_server != ""]
+    elif ad_server_selected is False:
+        clauses.append(Tenant.ad_server.is_(None) | (Tenant.ad_server == ""))
+    if has_activity is not None:
+        # EXISTS rather than a join or a subquery count: one probe per tenant row.
+        holds_a_buy = select(MediaBuy.media_buy_id).where(MediaBuy.tenant_id == Tenant.tenant_id).exists()
+        clauses.append(holds_a_buy if has_activity else ~holds_a_buy)
+    return clauses
 
 
 def _same_host(requested: str) -> ColumnElement[bool]:

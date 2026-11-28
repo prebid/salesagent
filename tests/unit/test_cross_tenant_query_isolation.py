@@ -8,60 +8,18 @@ Note: MediaPackage has NO tenant_id column — its PK is (media_buy_id, package_
 Tenant isolation comes through the media_buy_id FK to MediaBuy (globally unique PK).
 MediaPackage queries filtered by media_buy_id are inherently tenant-safe.
 
-These tests use AST scanning to verify that select() calls include tenant_id.
-Each test class maps to one beads bug.
+These tests use AST scanning: each function below reaches a tenant-scoped model through
+the repository that pins tenant_id in its constructor, and must not query it directly again.
 """
 
 import ast
 from pathlib import Path
 
+import pytest
+
 from tests.unit._architecture_helpers import extract_select_calls
 
 ROOT = Path(__file__).resolve().parents[2]
-
-# Models that require tenant_id in every query
-TENANT_SCOPED_MODELS = {
-    "Principal",
-    "ModelPrincipal",
-    "Creative",
-    "CreativeModel",
-    "DBCreative",
-    "CreativeReview",
-    "MediaBuy",
-    "MediaBuyModel",
-    "Product",
-    "CreativeAssignment",
-    "PricingOption",
-}
-
-# MediaPackage / MediaPackageModel / DBMediaPackage are NOT tenant-scoped.
-# They have no tenant_id column; PK is (media_buy_id, package_id).
-# Tenant isolation is inherited via media_buy_id FK → MediaBuy (globally unique PK).
-
-
-def _extract_select_calls(
-    file_path: str,
-    func_name: str,
-    class_name: str | None = None,
-    tenant_scoped_only: bool = True,
-) -> list[dict]:
-    """Extract select() call info from a function or method using AST.
-
-    Args:
-        file_path: Relative path from project root
-        func_name: Function or method name to scan
-        class_name: If set, look for method inside this class
-        tenant_scoped_only: If True, only return calls on TENANT_SCOPED_MODELS
-
-    Returns:
-        List of dicts with: model, has_tenant_filter, lineno
-    """
-    return extract_select_calls(
-        ROOT / file_path,
-        func_name,
-        class_name=class_name,
-        model_predicate=(lambda name: name in TENANT_SCOPED_MODELS) if tenant_scoped_only else None,
-    )
 
 
 # TestAuthUtilsTenantIsolation is DELETED. It scanned auth.py's get_principal_object for a
@@ -80,74 +38,6 @@ def _extract_select_calls(
 #     @T-SECURITY-002-own-tenant-only grades that a buyer sees its own tenant's products
 #     AND no other tenant's, which is the leak this scan was a proxy for.
 
-
-class TestMediaBuyUpdateTenantIsolation:
-    """: media_buy_update.py MediaBuy queries missing tenant_id.
-
-    After UoW migration , _update_media_buy_impl uses
-    MediaBuyUoW which provides a tenant-scoped MediaBuyRepository.
-    All MediaBuy queries go through the repository — no raw select(MediaBuy) calls remain.
-    """
-
-    def test_update_impl_uses_repository_not_raw_select(self):
-        """_update_media_buy_impl must use MediaBuyUoW, not raw select(MediaBuy).
-
-        After UoW migration, MediaBuy access goes through tenant-scoped
-        MediaBuyRepository. Verify no raw select(MediaBuy) calls remain
-        in the function (they would bypass tenant isolation).
-        """
-        selects = _extract_select_calls(
-            "src/core/tools/media_buy_update.py",
-            "_update_media_buy_impl",
-        )
-
-        mediabuy_selects = [s for s in selects if s["model"] in ("MediaBuy", "MediaBuyModel")]
-        assert not mediabuy_selects, (
-            f"Found {len(mediabuy_selects)} raw select(MediaBuy) call(s) in _update_media_buy_impl. "
-            f"After UoW migration, all MediaBuy queries should go through MediaBuyRepository. "
-            f"Raw select() calls bypass the tenant-scoped repository."
-        )
-
-
-class TestApproveMediaBuyTenantIsolation:
-    """: approve_media_buy() raw select(MediaBuy) should use repository."""
-
-    def test_approve_media_buy_uses_repository(self):
-        """approve_media_buy() must use MediaBuyRepository, not raw select(MediaBuy).
-
-        Two raw select(MediaBuy) calls remain at lines ~328 and ~431.
-        Both should be migrated to MediaBuyRepository for pattern consistency.
-        """
-        source_path = ROOT / "src/admin/blueprints/operations.py"
-        tree = ast.parse(source_path.read_text(encoding="utf-8"))
-
-        # Find the approve_media_buy function
-        func_node = None
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "approve_media_buy":
-                func_node = node
-                break
-
-        assert func_node is not None, "approve_media_buy function not found"
-
-        # Verify MediaBuyRepository is used
-        source_text = ast.get_source_segment(source_path.read_text(encoding="utf-8"), func_node)
-        assert "MediaBuyRepository" in source_text, (
-            "approve_media_buy() must use MediaBuyRepository for tenant-scoped MediaBuy access "
-        )
-
-        # Verify no raw select(MediaBuy) calls bypass the repository
-        selects = _extract_select_calls(
-            "src/admin/blueprints/operations.py",
-            "approve_media_buy",
-        )
-        mediabuy_selects = [s for s in selects if s["model"] in ("MediaBuy", "MediaBuyModel")]
-        assert not mediabuy_selects, (
-            f"approve_media_buy() should use MediaBuyRepository, not raw select(MediaBuy). "
-            f"Found {len(mediabuy_selects)} raw query(ies). "
-        )
-
-
 # TestAdapterTenantIsolation is DELETED. Its one test scanned
 # GAMOrdersManager.create_line_items for a tenant_id filter on its select(DBCreative).
 # 43a205a72 moved that query into CreativeRepository.admin_get_by_ids, which applies the
@@ -161,154 +51,55 @@ class TestApproveMediaBuyTenantIsolation:
 # The original NOTE, still true: Broadstreet MediaPackage queries are not covered here
 # because MediaPackage has no tenant_id column -- its isolation comes through the
 # media_buy_id FK to MediaBuy (globally unique PK).
+#
+# _get_media_buy_delivery_impl's MediaPackage query is NOT tested here for the same reason:
+# tenant isolation via the media_buy_id FK is sufficient.
+
+#: (path, function, model): each function's access to *model* was migrated to the
+#: tenant-scoped repository (MediaBuyRepository, CreativeRepository and
+#: get_prior_ai_review, ProductRepository), so a raw query on it there bypasses tenant
+#: isolation. ``_update_media_buy_impl`` reaches MediaBuy through MediaBuyUoW, and
+#: ``approve_media_buy`` once held two raw select(MediaBuy) calls.
+_MIGRATED_TO_A_REPOSITORY = [
+    ("src/core/tools/media_buy_update.py", "_update_media_buy_impl", "MediaBuy"),
+    ("src/admin/blueprints/operations.py", "approve_media_buy", "MediaBuy"),
+    ("src/admin/blueprints/creatives.py", "_call_webhook_for_creative_status", "Creative"),
+    ("src/admin/blueprints/creatives.py", "approve_creative", "Creative"),
+    ("src/admin/blueprints/creatives.py", "approve_creative", "CreativeReview"),
+    ("src/admin/blueprints/creatives.py", "reject_creative", "CreativeReview"),
+    ("src/admin/blueprints/creatives.py", "review_creatives", "MediaBuy"),
+    ("src/admin/blueprints/creatives.py", "review_creatives", "Product"),
+]
+
+#: (path, function, names): the function must name one of *names*, the tenant-scoped
+#: repository or unit of work it reads the model through.
+_READS_THROUGH = [
+    ("src/admin/blueprints/operations.py", "approve_media_buy", ("MediaBuyRepository",)),
+    ("src/admin/blueprints/creatives.py", "_call_webhook_for_creative_status", ("AdminCreativeUoW",)),
+    ("src/admin/blueprints/creatives.py", "review_creatives", ("MediaBuyRepository", "AdminCreativeUoW")),
+]
 
 
-class TestAdminDeliveryTenantIsolation:
-    """: admin blueprints + delivery queries missing tenant_id."""
+@pytest.mark.parametrize(("path", "function", "model"), _MIGRATED_TO_A_REPOSITORY)
+def test_no_raw_query_on_a_model_its_repository_scopes(path: str, function: str, model: str) -> None:
+    selects = extract_select_calls(ROOT / path, function, models=[model])
+    assert selects == [], (
+        f"{function}() at {path}:{[s.lineno for s in selects]} queries {model} directly. Its access "
+        f"goes through the tenant-scoped repository; a raw query bypasses tenant isolation."
+    )
 
-    def test_webhook_creative_query_scopes_by_tenant(self):
-        """_call_webhook_for_creative_status Creative access must be tenant-scoped.
 
-        Creative access was migrated to CreativeRepository ,
-        which enforces tenant_id on every query by construction.
-        Verify the repository is used rather than raw select() calls.
-        """
-        source_path = ROOT / "src/admin/blueprints/creatives.py"
-        tree = ast.parse(source_path.read_text(encoding="utf-8"))
-
-        func_node = None
-        for node in ast.walk(tree):
-            if (
-                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and node.name == "_call_webhook_for_creative_status"
-            ):
-                func_node = node
-                break
-
-        assert func_node is not None
-        source_text = ast.get_source_segment(source_path.read_text(encoding="utf-8"), func_node)
-        assert "AdminCreativeUoW" in source_text, (
-            "_call_webhook_for_creative_status must use AdminCreativeUoW for tenant-scoped access"
-        )
-
-        # Verify no raw select(Creative) calls bypass the repository
-        selects = _extract_select_calls(
-            "src/admin/blueprints/creatives.py",
-            "_call_webhook_for_creative_status",
-        )
-        creative_selects = [s for s in selects if s["model"] in ("Creative", "CreativeModel")]
-        assert not creative_selects, (
-            f"_call_webhook_for_creative_status should use CreativeRepository, not raw select(Creative). "
-            f"Found {len(creative_selects)} raw query(ies)."
-        )
-
-    def test_approve_creative_creative_query_scopes_by_tenant(self):
-        """approve_creative() Creative access must be tenant-scoped.
-
-        Creative access was migrated to CreativeRepository ,
-        which enforces tenant_id on every query by construction.
-        Verify no raw select(Creative) calls bypass the repository.
-        """
-        selects = _extract_select_calls(
-            "src/admin/blueprints/creatives.py",
-            "approve_creative",
-        )
-
-        creative_selects = [s for s in selects if s["model"] in ("Creative", "CreativeModel")]
-        assert not creative_selects, (
-            f"approve_creative() should use CreativeRepository, not raw select(Creative). "
-            f"Found {len(creative_selects)} raw query(ies)."
-        )
-
-    def test_review_creatives_mediabuy_queries_scope_by_tenant(self):
-        """review_creatives() MediaBuy queries must be tenant-scoped.
-
-        MediaBuy access was migrated to MediaBuyRepository ,
-        which enforces tenant_id on every query by construction.
-        Verify the repository is used rather than raw select() calls.
-        """
-        source_path = ROOT / "src/admin/blueprints/creatives.py"
-        tree = ast.parse(source_path.read_text(encoding="utf-8"))
-
-        # Find the review_creatives function
-        func_node = None
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "review_creatives":
-                func_node = node
-                break
-
-        assert func_node is not None, "review_creatives function not found"
-
-        # Verify tenant-scoped media buy access (via MediaBuyRepository or AdminCreativeUoW)
-        source_text = ast.get_source_segment(source_path.read_text(encoding="utf-8"), func_node)
-        assert "MediaBuyRepository" in source_text or "AdminCreativeUoW" in source_text, (
-            "review_creatives() must use MediaBuyRepository or AdminCreativeUoW for tenant-scoped MediaBuy access"
-        )
-
-        # Verify no raw select(MediaBuy) calls bypass the repository
-        selects = _extract_select_calls(
-            "src/admin/blueprints/creatives.py",
-            "review_creatives",
-        )
-        mediabuy_selects = [s for s in selects if s["model"] in ("MediaBuy", "MediaBuyModel")]
-        assert not mediabuy_selects, (
-            f"review_creatives() should use MediaBuyRepository, not raw select(MediaBuy). "
-            f"Found {len(mediabuy_selects)} raw query(ies)."
-        )
-
-    def test_review_creatives_product_query_scopes_by_tenant(self):
-        """review_creatives() Product access must be tenant-scoped.
-
-        Product access was migrated to ProductRepository ,
-        which enforces tenant_id on every query by construction.
-        Verify no raw select(Product) calls bypass the repository.
-        """
-        selects = _extract_select_calls(
-            "src/admin/blueprints/creatives.py",
-            "review_creatives",
-        )
-
-        product_selects = [s for s in selects if s["model"] == "Product"]
-        assert not product_selects, (
-            f"review_creatives() should use ProductRepository, not raw select(Product). "
-            f"Found {len(product_selects)} raw query(ies)."
-        )
-
-    def test_approve_creative_review_query_scopes_by_tenant(self):
-        """approve_creative() CreativeReview access must be tenant-scoped.
-
-        CreativeReview access was migrated to CreativeRepository.get_prior_ai_review()
-        , which enforces tenant_id by construction.
-        Verify no raw select(CreativeReview) calls bypass the repository.
-        """
-        selects = _extract_select_calls(
-            "src/admin/blueprints/creatives.py",
-            "approve_creative",
-        )
-
-        review_selects = [s for s in selects if s["model"] == "CreativeReview"]
-        assert not review_selects, (
-            f"approve_creative() should use CreativeRepository.get_prior_ai_review(), not raw select(CreativeReview). "
-            f"Found {len(review_selects)} raw query(ies)."
-        )
-
-    def test_reject_creative_review_query_scopes_by_tenant(self):
-        """reject_creative() CreativeReview access must be tenant-scoped.
-
-        CreativeReview access was migrated to CreativeRepository.get_prior_ai_review()
-        , which enforces tenant_id by construction.
-        Verify no raw select(CreativeReview) calls bypass the repository.
-        """
-        selects = _extract_select_calls(
-            "src/admin/blueprints/creatives.py",
-            "reject_creative",
-        )
-
-        review_selects = [s for s in selects if s["model"] == "CreativeReview"]
-        assert not review_selects, (
-            f"reject_creative() should use CreativeRepository.get_prior_ai_review(), not raw select(CreativeReview). "
-            f"Found {len(review_selects)} raw query(ies)."
-        )
-
-    # NOTE: _get_media_buy_delivery_impl MediaPackage query is NOT tested here because
-    # MediaPackage has no tenant_id column. Tenant isolation via media_buy_id FK is sufficient.
+@pytest.mark.parametrize(("path", "function", "names"), _READS_THROUGH)
+def test_reads_through_a_tenant_scoped_repository(path: str, function: str, names: tuple[str, ...]) -> None:
+    source = (ROOT / path).read_text(encoding="utf-8")
+    node = next(
+        (
+            node
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == function
+        ),
+        None,
+    )
+    assert node is not None, f"{function} function not found in {path}"
+    text = ast.get_source_segment(source, node) or ""
+    assert any(name in text for name in names), f"{function}() must use {' or '.join(names)} for tenant-scoped access"

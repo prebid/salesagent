@@ -2,8 +2,10 @@
 
 import json
 import logging
+from datetime import datetime
+from typing import TypedDict
 
-from flask import Blueprint, jsonify, render_template, request
+from flask import Blueprint, Response, jsonify, render_template, request
 from sqlalchemy import String, func, or_, select
 
 from src.admin.form_validation import json_object_body
@@ -12,8 +14,11 @@ from src.admin.utils.audit_decorator import log_admin_action
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import GAMInventory, GAMOrder, MediaBuy, Tenant
+from src.core.database.repositories.gam_inventory import GAMInventoryRepository, InventoryCounts, InventoryType
 from src.core.database.repositories.gam_order import GAMOrderRepository
 from src.core.database.repositories.principal import PrincipalRepository
+from src.core.database.repositories.sync_job import SyncJobRepository
+from src.core.database.repositories.uow import GAMInventoryUoW
 from src.services.background_sync_service import start_inventory_sync_background
 
 logger = logging.getLogger(__name__)
@@ -87,13 +92,7 @@ def get_targeting_data(tenant_id):
         labels_rows = db_session.scalars(labels_stmt).all()
 
         # Get last sync time from most recent inventory item
-        last_sync_stmt = (
-            select(GAMInventory.last_synced)
-            .where(GAMInventory.tenant_id == tenant_id)
-            .order_by(GAMInventory.last_synced.desc())
-            .limit(1)
-        )
-        last_sync = db_session.scalar(last_sync_stmt)
+        last_sync = GAMInventoryRepository(db_session, tenant_id).last_synced_at()
 
         # Transform to frontend format
         custom_keys = []
@@ -486,37 +485,32 @@ def get_order_details(tenant_id, order_id):
         )
 
 
+class InventorySyncCheck(TypedDict):
+    """The body of ``check_inventory_sync``: whether the tenant holds synced inventory, and when it was synced."""
+
+    has_inventory: bool
+    inventory_count: int
+    last_sync: str | None
+
+
 @inventory_bp.route("/tenant/<tenant_id>/check-inventory-sync")
 @require_tenant_access()
-def check_inventory_sync(tenant_id):
+def check_inventory_sync(tenant_id: str) -> Response:
     """Check if GAM inventory has been synced for this tenant."""
-    with get_db_session() as db_session:
+    with GAMInventoryUoW(tenant_id) as uow:
+        assert uow.gam_inventory is not None
         # Count inventory items
-        inventory_count = db_session.scalar(
-            select(func.count()).select_from(GAMInventory).filter_by(tenant_id=tenant_id)
-        )
-
-        has_inventory = inventory_count > 0
+        inventory_count = uow.gam_inventory.counts().total()
 
         # Get last sync time if available
-        last_sync = None
-        if has_inventory:
-            stmt = (
-                select(GAMInventory)
-                .filter(GAMInventory.tenant_id == tenant_id)
-                .order_by(GAMInventory.created_at.desc())
-            )
-            latest = db_session.scalars(stmt).first()
-            if latest and latest.created_at:
-                last_sync = latest.created_at.isoformat()
+        last_sync = uow.gam_inventory.last_synced_at()
 
-        return jsonify(
-            {
-                "has_inventory": has_inventory,
-                "inventory_count": inventory_count,
-                "last_sync": last_sync,
-            }
-        )
+    check: InventorySyncCheck = {
+        "has_inventory": inventory_count > 0,
+        "inventory_count": inventory_count,
+        "last_sync": last_sync.isoformat() if last_sync else None,
+    }
+    return jsonify(check)
 
 
 @inventory_bp.route("/tenant/<tenant_id>/analyze-ad-server")
@@ -697,36 +691,43 @@ def sync_inventory(tenant_id):
     )
 
 
+class InventoryStatsPayload(TypedDict):
+    """The body of ``get_inventory_stats``: the tenant's synced items, counted per type and status."""
+
+    tenant_id: str
+    stats: dict[str, dict[str, int]]
+
+
 @inventory_bp.route("/api/tenant/<tenant_id>/inventory-stats", methods=["GET"])
 @require_tenant_access()
-def get_inventory_stats(tenant_id):
+def get_inventory_stats(tenant_id: str) -> Response:
     """Get inventory statistics by type and status for debugging.
 
     Returns:
         JSON with counts grouped by inventory_type and status
     """
-    with get_db_session() as db_session:
-        # Get counts by inventory_type and status
-        stmt = (
-            select(GAMInventory.inventory_type, GAMInventory.status, func.count())
-            .filter(GAMInventory.tenant_id == tenant_id)
-            .group_by(GAMInventory.inventory_type, GAMInventory.status)
-        )
-        results = db_session.execute(stmt).all()
+    with GAMInventoryUoW(tenant_id) as uow:
+        assert uow.gam_inventory is not None
+        counts = uow.gam_inventory.counts()
 
-        # Format results
-        stats = {}
-        for inv_type, status, count in results:
-            if inv_type not in stats:
-                stats[inv_type] = {}
-            stats[inv_type][status] = count
+    payload: InventoryStatsPayload = {"tenant_id": tenant_id, "stats": counts.by_type_and_status}
+    return jsonify(payload)
 
-        return jsonify({"tenant_id": tenant_id, "stats": stats})
+
+class InventoryTypeSyncStatus(TypedDict):
+    """One inventory type's entry in the body of ``get_sync_status``."""
+
+    total_count: int
+    status_counts: dict[str, int]
+    last_synced: str | None
+    last_job_status: str | None
+    last_job_time: str | None
+    last_job_error: str | None
 
 
 @inventory_bp.route("/api/tenant/<tenant_id>/sync-status", methods=["GET"])
 @require_tenant_access()
-def get_sync_status(tenant_id):
+def get_sync_status(tenant_id: str) -> Response:
     """Get detailed sync status for each inventory type.
 
     Returns:
@@ -734,51 +735,29 @@ def get_sync_status(tenant_id):
     """
     with get_db_session() as db_session:
         # Define inventory types we track
-        inventory_types = ["ad_unit", "placement", "label", "custom_targeting_key", "audience_segment"]
+        inventory_types: tuple[InventoryType, ...] = (
+            "ad_unit",
+            "placement",
+            "label",
+            "custom_targeting_key",
+            "audience_segment",
+        )
 
-        sync_status = {}
+        inventory = GAMInventoryRepository(db_session, tenant_id)
+        counts = inventory.counts()
+
+        # Get most recent sync job for this tenant (one per tenant, shown on every type)
+        last_job = SyncJobRepository(db_session, tenant_id).latest("inventory")
+
+        sync_status: dict[str, InventoryTypeSyncStatus] = {}
 
         for inv_type in inventory_types:
-            # Get total count for this type
-            count_stmt = (
-                select(func.count())
-                .select_from(GAMInventory)
-                .where(GAMInventory.tenant_id == tenant_id, GAMInventory.inventory_type == inv_type)
-            )
-            total_count = db_session.scalar(count_stmt) or 0
-
-            # Get count by status
-            status_stmt = (
-                select(GAMInventory.status, func.count())
-                .filter(GAMInventory.tenant_id == tenant_id, GAMInventory.inventory_type == inv_type)
-                .group_by(GAMInventory.status)
-            )
-            status_results = db_session.execute(status_stmt).all()
-            status_counts = dict(status_results)
-
-            # Get last sync time for this type
-            last_sync_stmt = (
-                select(GAMInventory.last_synced)
-                .filter(GAMInventory.tenant_id == tenant_id, GAMInventory.inventory_type == inv_type)
-                .order_by(GAMInventory.last_synced.desc())
-                .limit(1)
-            )
-            last_synced = db_session.scalar(last_sync_stmt)
-
-            # Get most recent sync job for this tenant
-            from src.core.database.models import SyncJob
-
-            last_job_stmt = (
-                select(SyncJob)
-                .filter(SyncJob.tenant_id == tenant_id, SyncJob.sync_type == "inventory")
-                .order_by(SyncJob.started_at.desc())
-                .limit(1)
-            )
-            last_job = db_session.scalars(last_job_stmt).first()
+            last_synced = inventory.last_synced_at(inv_type)
 
             sync_status[inv_type] = {
-                "total_count": total_count,
-                "status_counts": status_counts,
+                "total_count": counts.total(inv_type),
+                # Count by status, every status included
+                "status_counts": counts.by_type_and_status.get(inv_type, {}),
                 "last_synced": last_synced.isoformat() if last_synced else None,
                 "last_job_status": last_job.status if last_job else None,
                 "last_job_time": last_job.started_at.isoformat() if last_job and last_job.started_at else None,
@@ -807,36 +786,25 @@ def _unit_to_dict(unit, *, matched_search=False):
     }
 
 
-def _get_inventory_stats(db_session, tenant_id):
-    """Get counts for non-ad-unit inventory types and last sync time."""
-    stats = {}
-    for inv_type, key in [
-        ("placement", "placements"),
-        ("label", "labels"),
-        ("custom_targeting_key", "custom_targeting_keys"),
-        ("audience_segment", "audience_segments"),
-    ]:
-        stats[key] = (
-            db_session.scalar(
-                select(func.count())
-                .select_from(GAMInventory)
-                .where(
-                    GAMInventory.tenant_id == tenant_id,
-                    GAMInventory.inventory_type == inv_type,
-                    GAMInventory.status == "ACTIVE",
-                )
-            )
-            or 0
-        )
+class InventoryTreeStats(TypedDict):
+    """What the root inventory tree reports beside its units: the other types' ACTIVE counts, and the last sync."""
 
-    last_sync = db_session.scalar(
-        select(GAMInventory.last_synced)
-        .where(GAMInventory.tenant_id == tenant_id)
-        .order_by(GAMInventory.last_synced.desc())
-        .limit(1)
-    )
-    stats["last_sync"] = last_sync.isoformat() if last_sync else None
-    return stats
+    placements: int
+    labels: int
+    custom_targeting_keys: int
+    audience_segments: int
+    last_sync: str | None
+
+
+def _get_inventory_stats(counts: InventoryCounts, last_sync: datetime | None) -> InventoryTreeStats:
+    """Get counts of ACTIVE items for the non-ad-unit inventory types, and the last sync time."""
+    return {
+        "placements": counts.total("placement", status="ACTIVE"),
+        "labels": counts.total("label", status="ACTIVE"),
+        "custom_targeting_keys": counts.total("custom_targeting_key", status="ACTIVE"),
+        "audience_segments": counts.total("audience_segment", status="ACTIVE"),
+        "last_sync": last_sync.isoformat() if last_sync else None,
+    }
 
 
 def _get_parent_id(unit):
@@ -995,9 +963,6 @@ def get_inventory_tree(tenant_id):
             GAMInventory.status == "ACTIVE",
         ]
 
-        # Count total active ad units (for truncation warning)
-        total_active_count = db_session.scalar(select(func.count()).select_from(GAMInventory).where(*base_where)) or 0
-
         if search:
             # --- Mode 3: Search with ancestors ---
             search_stmt = (
@@ -1051,12 +1016,17 @@ def get_inventory_tree(tenant_id):
             )
             roots, truncated = execute_limited(db_session, root_stmt, _TREE_LIMIT)
 
+            inventory = GAMInventoryRepository(db_session, tenant_id)
+            counts = inventory.counts()
+            # Count total active ad units (for truncation warning)
+            total_active_count = counts.total("ad_unit", status="ACTIVE")
+
             root_units = [_unit_to_dict(u) for u in roots]
             logger.info(
                 f"Returning {len(root_units)} root units (total active: {total_active_count}, truncated: {truncated})"
             )
 
-            stats = _get_inventory_stats(db_session, tenant_id)
+            stats = _get_inventory_stats(counts, inventory.last_synced_at())
 
             result = jsonify(
                 {
@@ -1116,19 +1086,10 @@ def get_inventory_list(tenant_id):
     )
 
     with get_db_session() as db_session:
-        # First, get total counts before filtering (for diagnostics)
-        total_stmt = select(func.count()).select_from(GAMInventory).filter(GAMInventory.tenant_id == tenant_id)
-        total_count = db_session.scalar(total_stmt) or 0
+        # First, get counts by type before filtering (for diagnostics)
+        counts = GAMInventoryRepository(db_session, tenant_id).counts()
 
-        # Get counts by type before filtering
-        type_counts_stmt = (
-            select(GAMInventory.inventory_type, func.count())
-            .filter(GAMInventory.tenant_id == tenant_id)
-            .group_by(GAMInventory.inventory_type)
-        )
-        type_counts = dict(db_session.execute(type_counts_stmt).all())
-
-        logger.info(f"Total inventory in DB: {total_count}, by type: {type_counts}")
+        logger.info("Total inventory in DB: %s, by type: %s", counts.total(), counts.by_type())
 
         # Build query
         stmt = select(GAMInventory).filter(GAMInventory.tenant_id == tenant_id)

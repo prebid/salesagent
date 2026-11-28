@@ -8,19 +8,16 @@ Integration tests are excluded — they need direct DB access for assertions.
 
 """
 
-from pathlib import Path
-
 import pytest
 
 from tests.unit._architecture_helpers import assert_violations_match_allowlist, find_raw_select_violations
 
-ROOT = Path(__file__).resolve().parents[2]
-
 # The repository module is the ONLY allowed location for raw select(MediaPackage)
 REPOSITORY_FILE = "src/core/database/repositories/media_buy.py"
 
-# Model names that represent MediaPackage in select() calls
-MEDIA_PACKAGE_MODELS = {"MediaPackage", "DBMediaPackage", "MediaPackageModel"}
+# The mapped class, by name: the scan resolves any import alias of it to this name, and
+# checks the name against the mapper where it runs.
+MEDIA_PACKAGE_MODELS = {"MediaPackage"}
 
 # Pre-existing violations: (file_path, function_name)
 # These existed before the guard was created. Allowlist shrinks as they're fixed.
@@ -34,16 +31,16 @@ EXPECTED_VIOLATION_COUNT = len(ALLOWLIST)
 
 
 def _find_raw_media_package_selects() -> list[tuple[str, str, int]]:
-    """Find select(MediaPackage/DBMediaPackage/MediaPackageModel) calls in src/.
+    """Find raw select(MediaPackage) calls in src/, the class resolved by import under any alias.
 
     Returns list of (file_path, function_name, line_number).
-    Skips the repository module itself and non-production code.
+    Skips the repository module itself.
     """
     return [
         (rel_path, func_name, lineno)
         for rel_path, func_name, _model, lineno in find_raw_select_violations(
             skip=lambda rel_path: rel_path == REPOSITORY_FILE,
-            model_names=MEDIA_PACKAGE_MODELS,
+            models=MEDIA_PACKAGE_MODELS,
         )
     ]
 

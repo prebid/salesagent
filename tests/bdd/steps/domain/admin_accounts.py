@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from html import unescape
 from html.parser import HTMLParser
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from pytest_bdd import given, parsers, then, when
 
@@ -70,6 +71,17 @@ def _answer_text(ctx: dict) -> str:
 def _json_error(ctx: dict) -> object:
     """The ``error`` of the last admin answer's JSON body."""
     return _require_admin_page(ctx).get_json().get("error")
+
+
+def _assert_json_body(ctx: dict, expected: object, *, ordered: Callable[[Any], Any] | None = None) -> None:
+    """The last admin answer's JSON body is *expected*, compared whole.
+
+    *ordered* puts the lists of the body in a fixed order first, for a route that answers
+    them in no order of its own.
+    """
+    body = _require_admin_page(ctx).get_json()
+    actual = body if ordered is None else ordered(body)
+    assert actual == expected, f"Expected {expected!r}, got {actual!r}"
 
 
 @given(parsers.parse('an admin user is authenticated for tenant "{tenant_id}"'))

@@ -31,6 +31,7 @@ tests/bdd/
 │   ├── BR-ADMIN-INVENTORY-PROFILES.feature            # inventory-profile modal
 │   ├── BR-ADMIN-INVENTORY-PROFILE-publishers.feature  # inventory-profile and product forms
 │   ├── BR-ADMIN-OPERATOR-REFUSALS.feature             # expected refusals
+│   ├── BR-ADMIN-TENANT-LISTINGS.feature               # the all-tenants index and the tenant management API's list
 │   ├── BR-ADMIN-TENANT-SCOPING.feature                # tenant-scoped route authorization (#2203, #2204)
 │   ├── BR-ADMIN-UNEXPECTED-ERRORS.feature             # unexpected failures
 │   └── local-publisher-authorization.feature          # publisher pages
@@ -38,6 +39,7 @@ tests/bdd/
 │   ├── admin_accounts.py                # account steps and the shared admin page steps
 │   ├── admin_inventory_profiles.py      # inventory-profile and product form steps
 │   ├── admin_operator_refusals.py       # expected-refusal steps
+│   ├── admin_tenant_listings.py         # tenant-listing steps
 │   ├── admin_tenant_scoping.py          # tenant-scoping steps
 │   ├── admin_unexpected_errors.py       # unexpected-failure steps
 │   └── publisher_authorization.py       # publisher steps
@@ -45,6 +47,7 @@ tests/bdd/
 ├── test_admin_inventory_profiles.py
 ├── test_admin_inventory_profile_publishers.py
 ├── test_admin_operator_refusals.py
+├── test_admin_tenant_listings.py
 ├── test_admin_tenant_scoping.py
 ├── test_admin_unexpected_errors.py
 ├── test_local_publisher_authorization.py
@@ -54,6 +57,7 @@ tests/harness/
 ├── admin_client.py                  # AdminClient, AdminResponse: the two transports, once
 ├── admin_accounts.py                # AdminTransport, AdminAccountEnv
 ├── admin_inventory_profile.py       # AdminInventoryProfileEnv
+├── admin_tenant_listings.py         # AdminTenantListingEnv (AdminAccountEnv subclass, stores no tenant)
 ├── admin_tenant_scoping.py          # AdminTenantScopingEnv (AdminAccountEnv subclass)
 └── publisher_authorization.py       # PublisherAuthorizationEnv
 
@@ -81,6 +85,12 @@ it created. The feature file is the one statement of
 the contract: the pytest twins that once ran the same assertions in-process and against the
 Docker stack were deleted once `AdminTransport.E2E` carried the Gherkin, as
 BR-ADMIN-ACCOUNTS' own `test_admin_bdd_e2e.py` had been.
+
+`BR-ADMIN-TENANT-LISTINGS` (`T-ADMIN-LIST-*`) is claimed the same way, by its own
+`tag="admin-tenant-listings"` row, and runs on both admin transports. Its scenarios grade
+listings of every tenant the deployment holds, so `AdminTenantListingEnv` stores no tenant
+of its own: the one `AdminAccountEnv` stores on entry would show up in every listing. The
+tenants a scenario seeds are then the deployment's only ones.
 
 ## Add an admin feature
 

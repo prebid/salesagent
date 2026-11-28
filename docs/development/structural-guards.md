@@ -20,6 +20,7 @@ shrink as invariants move into types and lint rules.
   - [Schema inheritance guard](#schema-inheritance-guard)
   - [Boundary completeness guard](#boundary-completeness-guard)
   - [Query type safety guard](#query-type-safety-guard)
+  - [filter_by mapped-attributes guard](#filter_by-mapped-attributes-guard)
   - [No model_dump() in _impl guard](#no-model_dump-in-_impl-guard)
   - [Repository pattern guard](#repository-pattern-guard)
   - [BDD step quality guards](#bdd-step-quality-guards)
@@ -247,6 +248,61 @@ The fix is to cast at the boundary: `[int(x) for x in pricing_option_ids]`.
 | File | Pattern | Tracked by |
 |------|---------|------------|
 | `media_buy_delivery.py` | `PricingOption.id.in_(string_list)` | salesagent-mq3n |
+
+### filter_by mapped-attributes guard
+
+**File:** `tests/unit/test_architecture_filter_by_mapped_attributes.py`
+
+**What it enforces:** Every keyword a `filter_by()` call under `src/` or `scripts/`
+passes names an attribute of the entity that call addresses: a column, relationship,
+synonym or hybrid in `sqlalchemy.inspect(M).all_orm_descriptors`.
+
+**Why it matters:** `filter_by` takes attribute names as keyword strings, and
+SQLAlchemy looks them up only when the query runs, so a name the model does not map
+raises `InvalidRequestError` at call time rather than at import. In #2206 a helper
+filtered `User` on an `is_admin` column `User` never had, inside its own
+`except Exception: return False`, so it answered False for every non-super-admin for
+fourteen months, and it had no callers, so nothing noticed even that. A static
+scan can check each keyword against the live mapper.
+
+#### How it works
+
+The guard asks the shared resolver which queries a module builds (`iter_queries`) and
+which entity each `filter_by` looks its keywords up on (`filter_by_entity`). That
+entity follows `Select._filter_by_zero`: the last `join`, `outerjoin` or `join_from`
+target before the call, else the first `select_from`, else the class the statement
+root addresses: `select(M)`, `select(M.column)`, `select(models.M)` or a legacy
+`session.query(M)`. Resolution is closed-world:
+
+- `select` and the model resolve by import, as the scope that reads them binds it:
+  `select` from `sqlalchemy`, the model from `models.py` under any alias or through the
+  models module. A parameter, a local `def select`, a rebinding or a local import of
+  the same name shadows the import, and an import inside one function binds nothing in
+  another.
+- A chain is walked only through the `Select` methods in `SELECT_CHAIN_METHODS`, which
+  keep the entity; `with_only_columns`, `subquery` and any other method ends it.
+- A local name resolves through `fold_name` only when its plain assignments hold one
+  statement, `stmt = stmt.where(...)` folded onto it. When a read of the name may see
+  another statement (a second statement bound in a branch, or a rebind the fold cannot
+  read), a site reached through the name is skipped, never guessed.
+
+Only the installed mapper (`orm_classes`) is consulted, so the inventory of models and
+attributes cannot go stale. The scan runs through `scan_rows` over `src/` and
+`scripts/`, and a row is `(path, function, "Model.keyword")`, the function being the
+one `iter_scopes` names for the site's scope.
+
+#### Tests
+
+| Test | What it checks |
+|------|---------------|
+| `test_filter_by_names_only_mapped_attributes` | No `filter_by` keyword under `src/` or `scripts/` names an attribute its entity does not map |
+| `TestDetectorMetaTests::test_rows_per_shape` | One table row per shape, run through the live detector against its exact rows: the phantom column, each spelling that reaches the entity, each join form, each scope, and the valid and unresolved queries that must report nothing |
+| `TestDetectorMetaTests::test_live_scan_reaches_real_sites` | The scan the guard runs grades a `select(M)` site and a `db.query(M)` site under `src/`, and a site under `scripts/` |
+
+#### No allowlist
+
+`ALLOWLIST` is empty. The only violation at creation was the #2206 site, which #2689
+deleted on main.
 
 ### internal_detail is an exception
 
@@ -581,6 +637,34 @@ guards use:
 - `format_failure()` — the standard failure-message formatter.
 - `assert_detector_catches_ast_snippets()` — feeds known-bad inline snippets
   to your detector and fails if any go unflagged.
+- `scan_rows()` — the scan for a guard whose rows are keys such as
+  `(path, function, ...)`: it runs a `detector(tree, relpath)` over the given roots,
+  owns the walk and the accumulation, and raises on a root that does not exist and
+  on a scan that grades no module.
+
+A guard that asks a question about an ORM query reads the shared resolver's answer
+rather than building its own, so a fix reaches every guard at once:
+
+- `orm_classes()` — every mapped class by name, from the live SQLAlchemy registry;
+  `mapped()` checks the model names a guard writes down against it, so a renamed
+  model fails the guard instead of emptying its scan.
+- `query_bindings()` and `iter_scopes()` — what each scope's imports let a resolver
+  see, an import binding only the scope that holds it, and the function that holds
+  each scope by `enclosing_function()`, the one holder rule
+  `walk_with_enclosing_function()` also applies.
+- `select_chain()` — the one chain walker; it crosses only the `Select` methods in
+  the set it is given (`SELECT_CHAIN_METHODS`, `SELECT_FILTER_METHODS`,
+  `SELECT_JOIN_METHODS`).
+- `fold_name()` — the statement a local name holds, folded from its plain
+  assignments.
+- `statement_root()` and `statement_entity()` — where a statement starts
+  (`select(...)` or a legacy `session.query(...)`) and the class it addresses.
+- `orm_references()` — which mapped class a node denotes: a class imported from
+  `models.py`, `models.M` through the models module, or a statement root on one.
+- `iter_queries()` — every query a module builds, once, with its root, entity,
+  chain calls and filter stages. `filter_by_entity()` is the entity a `filter_by`
+  looks its keywords up on, and `filtered_columns()` the columns a query's filter
+  stages pin to a value.
 
 `assert_detector_catches_ast_snippets` matters more than it looks: a
 detector nobody proved can fire is a guard that passes vacuously. A green

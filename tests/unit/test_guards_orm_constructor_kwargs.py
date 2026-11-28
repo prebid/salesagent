@@ -8,105 +8,77 @@ an error flash, and the route ships broken — the admin webhook family was dead
 in production this way with zero test coverage.
 
 The scan is import-resolving, not name-matching: a call site is checked only
-when its callee binds to an import from ``src.core.database.models`` (aliased
-imports included), so Pydantic schemas that share an ORM class name (Product,
-MediaBuy, Creative, ...) are not false positives, and ``... as DBFoo`` aliases
-are not misses.
+when its callee denotes a mapped class as the call's own scope binds it
+(``orm_references``: aliased imports and ``models.Foo`` included, a parameter or a
+local import of the same name shadowing it), so Pydantic schemas that share an ORM
+class name (Product, MediaBuy, Creative, ...) are not false positives, and
+``... as DBFoo`` aliases are not misses.
 """
 
 from __future__ import annotations
 
 import ast
-from pathlib import Path
 
 from sqlalchemy.orm import class_mapper
 
-from src.core.database.models import Base
-from tests.unit._architecture_helpers import rel
+from tests.unit._architecture_helpers import (
+    assert_violations_match_allowlist,
+    iter_call_expressions,
+    orm_classes,
+    orm_references,
+    repo_root,
+    scan_rows,
+)
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-MODELS_MODULE = "src.core.database.models"
-
-# (file, class, kwarg) triples permitted to violate — shrink-only.
+# (file, "Class.kwarg") pairs permitted to violate — shrink-only.
 ALLOWLIST: set[tuple[str, str]] = set()
 
 
 def _mapped_attrs() -> dict[str, set[str]]:
     """ORM class name -> settable attribute names (columns, relationships, descriptors)."""
-    out: dict[str, set[str]] = {}
-    for mapper in Base.registry.mappers:
-        cls = mapper.class_
-        attrs = {a.key for a in class_mapper(cls).attrs}
-        attrs |= {k for k in vars(cls) if not k.startswith("_")}
-        out[cls.__name__] = attrs
-    return out
+    return {
+        name: {a.key for a in class_mapper(cls).attrs} | {k for k in vars(cls) if not k.startswith("_")}
+        for name, cls in orm_classes().items()
+    }
 
 
-def _orm_bindings(tree: ast.AST) -> dict[str, str]:
-    """Local name -> ORM class name, for names imported from models.py."""
-    bindings: dict[str, str] = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module == MODELS_MODULE:
-            for alias in node.names:
-                bindings[alias.asname or alias.name] = alias.name
-    return bindings
-
-
-def _scan_file(path: Path, mapped: dict[str, set[str]]) -> list[tuple[str, str, list[str], int]]:
+def _scan_file(tree: ast.Module, relpath: str, mapped: dict[str, set[str]]) -> list[tuple[str, str, list[str], int]]:
     """Return (rel_path, class_name, bad_kwargs, lineno) for each violating call."""
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    bindings = _orm_bindings(tree)
+    references = orm_references(relpath, tree)
     violations = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
-            continue
-        orm_name = bindings.get(node.func.id)
+    for call in iter_call_expressions(tree):
+        orm_name = references.get(id(call.func))
         if orm_name is None or orm_name not in mapped:
             continue
-        bad = [kw.arg for kw in node.keywords if kw.arg and kw.arg not in mapped[orm_name]]
+        bad = [kw.arg for kw in call.keywords if kw.arg and kw.arg not in mapped[orm_name]]
         if bad:
-            violations.append((rel(path, REPO_ROOT), orm_name, bad, node.lineno))
+            violations.append((relpath, orm_name, bad, call.lineno))
     return violations
 
 
 def _scan_src() -> list[tuple[str, str, list[str], int]]:
     mapped = _mapped_attrs()
-    hits = []
-    for path in (REPO_ROOT / "src").rglob("*.py"):
-        hits.extend(_scan_file(path, mapped))
-    return hits
+    return scan_rows([repo_root() / "src"], lambda tree, relpath: _scan_file(tree, relpath, mapped))
 
 
 class TestOrmConstructorKwargsGuard:
     def test_no_orm_construction_with_unknown_kwargs(self):
-        """Every ORM construction in src/ uses only mapper attributes."""
-        violations = [v for v in _scan_src() if (v[0], v[1]) not in ALLOWLIST]
-        assert not violations, (
-            "ORM constructions with kwargs the mapper does not have (runtime TypeError):\n"
-            + "\n".join(f"  {f}:{line} {cls}(...) unknown kwargs: {bad}" for f, cls, bad, line in violations)
+        """Every ORM construction in src/ uses only mapper attributes, and every allowlist entry still violates."""
+        assert_violations_match_allowlist(
+            {(path, f"{cls}.{kwarg}") for path, cls, bad, _line in _scan_src() for kwarg in bad},
+            ALLOWLIST,
+            fix_hint=(
+                "An ORM construction passes a kwarg the mapper does not have, which raises TypeError "
+                "at runtime. Fix the kwarg or the model -- do not allowlist."
+            ),
         )
-
-    def test_allowlist_entries_still_violate(self):
-        """Stale-entry check: every allowlisted (file, class) still has a violation."""
-        actual = {(v[0], v[1]) for v in _scan_src()}
-        stale = ALLOWLIST - actual
-        assert not stale, f"Allowlist entries no longer violating — remove them: {sorted(stale)}"
 
 
 class TestGuardMetaTests:
     """The guard's scanner itself must catch/pass the right shapes."""
 
     def _scan_source(self, source: str) -> list[tuple[str, str, list[str], int]]:
-        import tempfile
-
-        mapped = _mapped_attrs()
-        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".py", dir=REPO_ROOT, delete=False) as fh:
-            fh.write(source)
-            tmp = Path(fh.name)
-        try:
-            return _scan_file(tmp, mapped)
-        finally:
-            tmp.unlink()
+        return _scan_file(ast.parse(source), "src/x.py", _mapped_attrs())
 
     def test_positive_detects_unknown_kwarg(self):
         src = "from src.core.database.models import PushNotificationConfig\nc = PushNotificationConfig(config_id='x')\n"
@@ -123,6 +95,10 @@ class TestGuardMetaTests:
         hits = self._scan_source(src)
         assert [h[2] for h in hits] == [["auth_type"]]
 
+    def test_positive_detects_a_construction_through_the_models_module(self):
+        src = "from src.core.database import models\nc = models.PushNotificationConfig(config_id='x')\n"
+        assert [(h[1], h[2]) for h in self._scan_source(src)] == [("PushNotificationConfig", ["config_id"])]
+
     def test_negative_valid_construction_passes(self):
         src = (
             "from src.core.database.models import PushNotificationConfig\n"
@@ -133,4 +109,13 @@ class TestGuardMetaTests:
     def test_negative_same_named_pydantic_class_ignored(self):
         """A Product that is NOT imported from models.py is not checked."""
         src = "from src.core.schemas import Product\np = Product(publisher_properties=[])\n"
+        assert self._scan_source(src) == []
+
+    def test_negative_a_parameter_shadows_the_import(self):
+        """Inside ``f`` the name is the parameter, not the model: the call's own scope decides."""
+        src = (
+            "from src.core.database.models import PushNotificationConfig\n"
+            "def f(PushNotificationConfig):\n"
+            "    return PushNotificationConfig(config_id='x')\n"
+        )
         assert self._scan_source(src) == []

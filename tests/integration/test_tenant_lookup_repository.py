@@ -11,12 +11,12 @@ BDD cannot reach this: the subject is a repository contract, not a buyer-visible
 outcome, and the two halves differ only in rows a wire never shows.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from src.core.database.repositories import TenantLookupRepository
-from tests.factories import TenantFactory
+from tests.factories import AdapterConfigFactory, MediaBuyFactory, TenantFactory
 from tests.harness._base import IntegrationEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -218,3 +218,59 @@ class TestUniquenessChecksStillSeeInactiveTenants:
             repo = TenantLookupRepository(env.get_session())
 
             assert repo.find_by_virtual_host("Case.Example.COM").tenant_id == "tlr_u4"
+
+
+class TestListingsServeTheOperatorsViews:
+    """The cross-tenant listings: every tenant, not one by key."""
+
+    def test_list_active_pages_the_active_tenants_by_name(self, integration_db):
+        with _RepoEnv() as env:
+            TenantFactory(tenant_id="tll_b", name="Bravo")
+            TenantFactory(tenant_id="tll_a", name="Alpha")
+            TenantFactory(tenant_id="tll_c", name="Charlie", is_active=False)
+            repo = TenantLookupRepository(env.get_session())
+
+            assert [t.tenant_id for t in repo.list_active(limit=10, offset=0)] == ["tll_a", "tll_b"]
+            assert [t.tenant_id for t in repo.list_active(limit=1, offset=1)] == ["tll_b"]
+            assert repo.count_active() == 2
+
+    def test_ad_server_selected_keeps_the_tenants_that_name_an_ad_server(self, integration_db):
+        with _RepoEnv() as env:
+            TenantFactory(tenant_id="tll_gam", name="A", ad_server="google_ad_manager")
+            TenantFactory(tenant_id="tll_none", name="B", ad_server=None)
+            TenantFactory(tenant_id="tll_blank", name="C", ad_server="")
+            repo = TenantLookupRepository(env.get_session())
+
+            assert [t.tenant_id for t in repo.list_active(limit=10, offset=0, ad_server_selected=True)] == ["tll_gam"]
+            assert [t.tenant_id for t in repo.list_active(limit=10, offset=0, ad_server_selected=False)] == [
+                "tll_none",
+                "tll_blank",
+            ]
+            assert repo.count_active(ad_server_selected=True) == 1
+            assert repo.count_active(ad_server_selected=False) == 2
+
+    def test_has_activity_keeps_the_tenants_that_hold_a_media_buy(self, integration_db):
+        with _RepoEnv() as env:
+            busy = TenantFactory(tenant_id="tll_busy", name="A")
+            TenantFactory(tenant_id="tll_idle", name="B")
+            MediaBuyFactory(tenant=busy, principal__tenant=busy)  # its packages' products bring tenants of their own
+            repo = TenantLookupRepository(env.get_session())
+
+            holding = [t.tenant_id for t in repo.list_active(limit=100, offset=0, has_activity=True)]
+            idle = [t.tenant_id for t in repo.list_active(limit=100, offset=0, has_activity=False)]
+            assert holding == ["tll_busy"]
+            assert "tll_idle" in idle and "tll_busy" not in idle
+            assert repo.count_active(has_activity=True) == 1
+            assert repo.count_active(has_activity=False) == len(idle)
+
+    def test_list_all_is_every_tenant_newest_first_with_its_adapter_config(self, integration_db):
+        with _RepoEnv() as env:
+            now = datetime.now(UTC)
+            older = TenantFactory(tenant_id="tll_old", created_at=now - timedelta(days=1), is_active=False)
+            TenantFactory(tenant_id="tll_new", created_at=now)
+            AdapterConfigFactory(tenant=older)
+            repo = TenantLookupRepository(env.get_session())
+
+            tenants = repo.list_all()
+            assert [t.tenant_id for t in tenants] == ["tll_new", "tll_old"]
+            assert [t.adapter_config is not None for t in tenants] == [False, True]

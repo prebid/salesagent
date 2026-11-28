@@ -25,11 +25,22 @@ this file exists.
 from __future__ import annotations
 
 import ast
-from pathlib import Path
+import importlib
 
-from tests.unit._architecture_helpers import called_function_names
+import factory
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+from tests.unit._architecture_helpers import (
+    iter_scopes,
+    orm_classes,
+    orm_references,
+    parse_module,
+    query_bindings,
+    repo_root,
+    scope_nodes,
+)
+
+#: Where the factories live: a callee imported from under it may be a factory_boy factory.
+_FACTORIES_PACKAGE = "tests.factories"
 
 #: The production paths that CREATE a tenant. Each is read for what else it creates alongside.
 #: These are paths, not a row list -- the rows are derived from them below.
@@ -59,39 +70,50 @@ _NOT_REQUIRED_OF_A_FIXTURE = frozenset(
 )
 
 
-def _orm_model_names() -> frozenset[str]:
-    """Every mapped ORM class, asked of the declarative registry rather than listed.
+def _factory_model(target: str | None) -> str | None:
+    """The mapped class the factory_boy factory at *target* (a dotted import) declares as its
+    ``Meta.model``, when *target* is imported from :data:`_FACTORIES_PACKAGE`; else None."""
+    if target is None or not target.startswith(f"{_FACTORIES_PACKAGE}."):
+        return None
+    module, _, name = target.rpartition(".")
+    built = getattr(importlib.import_module(module), name, None)
+    if not (isinstance(built, type) and issubclass(built, factory.Factory)):
+        return None
+    model = built._meta.model
+    return model.__name__ if orm_classes().get(model.__name__) is model else None
 
-    The first version of this guard counted any CapWords call and flagged
-    ``PrincipalRepository`` -- a repository, not a row. Pattern-matching the SPELLING of a
-    name cannot tell a model from anything else that happens to be capitalised, so the
-    population comes from the mapper registry: whatever is mapped to a table is a row, and
-    nothing else is.
+
+def _models_constructed_in_tree(tree: ast.Module, relative_path: str) -> set[str]:
+    """Every ORM MODEL *tree* constructs: by calling it, or a factory that declares it.
+
+    A row is a call whose callee denotes a mapped class as the call's own scope binds it
+    (``orm_references``), or a call to a factory_boy factory that scope imports, which builds
+    the model the factory declares (``class Meta: model = ...``). The first version of this
+    guard counted any CapWords call and flagged ``PrincipalRepository`` -- a repository, not a
+    row -- and the next stripped a ``Factory`` suffix off a callee's spelling. A name's
+    spelling cannot tell a model from anything else that happens to be capitalised, so the
+    class comes from the import and the mapper registry, and nothing else is a row.
+
+    Walked scope by scope (``iter_scopes``), not with ``iter_call_expressions``, because a
+    factory callee resolves through the imports of the scope that calls it.
     """
-    from src.core.database.models import Base
-
-    return frozenset(mapper.class_.__name__ for mapper in Base.registry.mappers)
-
-
-_ORM_MODELS = _orm_model_names()
+    references = orm_references(relative_path, tree)
+    built: set[str] = set()
+    for scope, view, _, _ in iter_scopes(tree, query_bindings(relative_path, tree)):
+        for node in scope_nodes(scope):
+            if not isinstance(node, ast.Call):
+                continue
+            model = references.get(id(node.func))
+            if model is None and isinstance(node.func, ast.Name):
+                model = _factory_model(view.imports.get(node.func.id))
+            if model is not None:
+                built.add(model)
+    return built
 
 
 def _models_constructed_in(relative_path: str) -> set[str]:
-    """Every ORM MODEL constructed in *relative_path*, from its AST.
-
-    Through ``_architecture_helpers.called_function_names``, which already yields every
-    callable name in a tree -- bare and dotted alike -- rather than a local ``ast.walk`` over
-    ``Call`` nodes. A hand-rolled version of that loop stood here and
-    ``test_architecture_no_handrolled_call_walk`` refused it, correctly: two guards had grown
-    the same loop independently before, which is why that guard exists.
-
-    A trailing ``Factory`` is stripped so a fixture building ``AdapterConfigFactory(...)`` is
-    recognised as creating an ``AdapterConfig`` row, and the result is intersected with
-    :data:`_ORM_MODELS` so only real mapped classes contribute.
-    """
-    tree = ast.parse((_REPO_ROOT / relative_path).read_text(encoding="utf-8"), filename=relative_path)
-    called = called_function_names(tree)
-    return {name.removesuffix("Factory") for name in called if name.removesuffix("Factory") in _ORM_MODELS}
+    """Every ORM MODEL constructed in the module at *relative_path*; see :func:`_models_constructed_in_tree`."""
+    return _models_constructed_in_tree(parse_module(repo_root() / relative_path), relative_path)
 
 
 def test_the_fixture_tenant_is_not_missing_a_row_every_production_path_creates() -> None:
@@ -133,3 +155,22 @@ def test_the_derivation_has_a_non_empty_population() -> None:
         "if the derivation no longer finds it across every production path, this guard has "
         "stopped covering the case it was written for"
     )
+
+
+def test_the_derivation_reads_the_model_a_call_builds_not_its_spelling() -> None:
+    """The class comes from the import and the factory's declared ``Meta.model``: a parameter
+    named like a model builds no row, and a factory builds its model whatever it is called."""
+
+    def built(source: str) -> set[str]:
+        return _models_constructed_in_tree(ast.parse(source), "tests/harness/x.py")
+
+    assert (
+        built("from src.core.database.models import AdapterConfig\ndef f(AdapterConfig):\n    AdapterConfig()\n")
+        == set()
+    )
+    assert built("from tests.factories import AdapterConfigFactory as Seed\ndef f(t):\n    Seed(tenant=t)\n") == {
+        "AdapterConfig"
+    }
+    assert built(
+        "def f(t):\n    from tests.factories import TenantFactory as AdapterConfigFactory\n    AdapterConfigFactory()\n"
+    ) == {"Tenant"}
