@@ -77,18 +77,20 @@ def render_super_admin_index():
         # Filters
         config_filter = request.args.get("configured", "all")  # all, configured, not-configured
         activity_filter = request.args.get("activity", "all")  # all, has-activity, no-activity
-        configured = {"configured": True, "not-configured": False}.get(config_filter)
+        # The page's "configured" filter keeps the tenants that name an ad server; the
+        # Configured badge below is is_tenant_ad_server_configured, a different check.
+        ad_server_selected = {"configured": True, "not-configured": False}.get(config_filter)
         has_activity = {"has-activity": True, "no-activity": False}.get(activity_filter)
 
         tenant_lookup = TenantLookupRepository(db_session)
-        total_tenants = tenant_lookup.count_active(configured=configured, has_activity=has_activity)
+        total_tenants = tenant_lookup.count_active(ad_server_selected=ad_server_selected, has_activity=has_activity)
 
         # Calculate pagination
         total_pages = (total_tenants + per_page - 1) // per_page if total_tenants > 0 else 1
         offset = (page - 1) * per_page
 
         tenants = tenant_lookup.list_active(
-            limit=per_page, offset=offset, configured=configured, has_activity=has_activity
+            limit=per_page, offset=offset, ad_server_selected=ad_server_selected, has_activity=has_activity
         )
 
         # Bulk fetch setup status for all tenants on this page (single query per metric)

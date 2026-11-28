@@ -139,24 +139,24 @@ class TenantLookupRepository:
 
     # ── Listings: every tenant, for the operator's views ─────────────────────
 
-    def count_active(self, *, configured: bool | None = None, has_activity: bool | None = None) -> int:
+    def count_active(self, *, ad_server_selected: bool | None = None, has_activity: bool | None = None) -> int:
         """How many active tenants :meth:`list_active` pages through under the same filters."""
-        stmt = select(func.count()).select_from(Tenant).where(*_active_listing(configured, has_activity))
+        stmt = select(func.count()).select_from(Tenant).where(*_active_listing(ad_server_selected, has_activity))
         return self._session.scalar(stmt) or 0
 
     def list_active(
-        self, *, limit: int, offset: int, configured: bool | None = None, has_activity: bool | None = None
+        self, *, limit: int, offset: int, ad_server_selected: bool | None = None, has_activity: bool | None = None
     ) -> list[Tenant]:
         """One page of the active tenants, by name, with ``adapter_config`` loaded.
 
-        *configured* keeps the tenants that name an ad server (True) or name none (False);
+        *ad_server_selected* keeps the tenants that name an ad server (True) or name none (False);
         *has_activity* keeps the tenants that hold a media buy (True) or hold none (False).
         None keeps every tenant.
         """
         stmt = (
             select(Tenant)
             .options(joinedload(Tenant.adapter_config))
-            .where(*_active_listing(configured, has_activity))
+            .where(*_active_listing(ad_server_selected, has_activity))
             .order_by(Tenant.name)
             .limit(limit)
             .offset(offset)
@@ -169,12 +169,12 @@ class TenantLookupRepository:
         return list(self._session.scalars(stmt))
 
 
-def _active_listing(configured: bool | None, has_activity: bool | None) -> list[ColumnElement[bool]]:
+def _active_listing(ad_server_selected: bool | None, has_activity: bool | None) -> list[ColumnElement[bool]]:
     """The WHERE clauses of :meth:`TenantLookupRepository.list_active` and its count."""
     clauses: list[ColumnElement[bool]] = [Tenant.is_active.is_(True)]
-    if configured is True:
+    if ad_server_selected is True:
         clauses += [Tenant.ad_server.is_not(None), Tenant.ad_server != ""]
-    elif configured is False:
+    elif ad_server_selected is False:
         clauses.append(Tenant.ad_server.is_(None) | (Tenant.ad_server == ""))
     if has_activity is not None:
         # EXISTS rather than a join or a subquery count: one probe per tenant row.

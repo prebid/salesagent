@@ -3,6 +3,7 @@
 import logging
 import uuid
 from datetime import UTC, datetime
+from typing import TypedDict
 
 from flask import Blueprint, Response, jsonify, request
 from pydantic import ValidationError
@@ -101,22 +102,39 @@ def health_check():
     return jsonify({"status": "healthy", "timestamp": datetime.now(UTC).isoformat()})
 
 
+class TenantSummary(TypedDict):
+    """The fields this API reports for a tenant in its tenant list and in its tenant detail."""
+
+    tenant_id: str
+    name: str
+    subdomain: str
+    is_active: bool
+    billing_plan: str
+    ad_server: str | None
+    created_at: str
+
+
+def tenant_summary(tenant: Tenant) -> TenantSummary:
+    """*tenant*'s :class:`TenantSummary`."""
+    return {
+        "tenant_id": tenant.tenant_id,
+        "name": tenant.name,
+        "subdomain": tenant.subdomain,
+        # The migrated tenants.is_active is nullable (initial_schema), and a NULL reads as False.
+        "is_active": bool(tenant.is_active),
+        "billing_plan": tenant.billing_plan,
+        "ad_server": tenant.ad_server,
+        "created_at": tenant.created_at.isoformat(),
+    }
+
+
 @tenant_management_api.route("/tenants", methods=["GET"])
 @require_tenant_management_api_key
 def list_tenants():
     """List all tenants."""
     with get_db_session() as db_session:
         results = [
-            {
-                "tenant_id": tenant.tenant_id,
-                "name": tenant.name,
-                "subdomain": tenant.subdomain,
-                "is_active": bool(tenant.is_active),
-                "billing_plan": tenant.billing_plan,
-                "ad_server": tenant.ad_server,
-                "created_at": tenant.created_at.isoformat() if tenant.created_at else None,
-                "adapter_configured": tenant.adapter_config is not None,
-            }
+            {**tenant_summary(tenant), "adapter_configured": tenant.adapter_config is not None}
             for tenant in TenantLookupRepository(db_session).list_all()
         ]
 
@@ -344,14 +362,8 @@ def get_tenant(tenant_id):
             return jsonify({"error": "Tenant not found"}), 404
 
         result = {
-            "tenant_id": tenant.tenant_id,
-            "name": tenant.name,
-            "subdomain": tenant.subdomain,
-            "is_active": bool(tenant.is_active),
-            "billing_plan": tenant.billing_plan,
+            **tenant_summary(tenant),
             "billing_contact": tenant.billing_contact,
-            "ad_server": tenant.ad_server,
-            "created_at": tenant.created_at.isoformat() if tenant.created_at else None,
             "updated_at": tenant.updated_at.isoformat() if tenant.updated_at else None,
             "settings": {
                 # Note: max_daily_budget moved to currency_limits table (per models.py line 55)

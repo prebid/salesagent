@@ -105,7 +105,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/inventory.py", "_batch_fetch_ancestors"),  # FIXME(#1119): extract to repository
     ("src/admin/blueprints/inventory.py", "get_inventory_tree"),
     ("src/admin/blueprints/inventory.py", "get_orders"),
-    ("src/admin/blueprints/inventory.py", "get_sync_status"),
+    # get_sync_status removed — its last inventory job comes from SyncJobRepository.latest
     ("src/admin/blueprints/inventory.py", "get_targeting_data"),
     ("src/admin/blueprints/inventory.py", "get_targeting_values"),
     ("src/admin/blueprints/inventory.py", "inventory_browser"),

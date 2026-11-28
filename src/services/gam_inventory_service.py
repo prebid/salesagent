@@ -21,7 +21,7 @@ from src.adapters.gam_inventory_discovery import (
 from src.core.database.database_session import get_engine
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import GAMInventory, Product, ProductInventoryMapping
-from src.core.database.repositories.gam_inventory import GAMInventoryRepository
+from src.core.database.repositories.gam_inventory import GAMInventoryRepository, InventoryType
 from src.services.gam_product_config_service import product_gam_slots
 
 
@@ -85,39 +85,26 @@ class GAMInventoryService:
         sync_time = datetime.now(UTC)
         BATCH_SIZE = 500  # Write every 500 items to keep memory usage low
 
-        # Load ALL existing inventory IDs once (1 query instead of N)
-        existing_ids = GAMInventoryRepository(self.db, tenant_id).row_ids()
+        inventory = GAMInventoryRepository(self.db, tenant_id)
 
         # Track totals for logging
-        total_inserted = 0
-        total_updated = 0
+        total_written = 0
 
-        # Prepare batch insert and update lists
-        to_insert: list[dict[str, Any]] = []
-        to_update: list[dict[str, Any]] = []
+        # The current batch: the repository inserts a new item and updates a held one in place
+        batch: list[dict[str, Any]] = []
 
         def flush_batch():
             """Flush current batch to database with error handling."""
-            nonlocal total_inserted, total_updated
+            nonlocal total_written
             try:
-                if to_insert:
-                    self.db.bulk_insert_mappings(GAMInventory, to_insert)
-                    batch_inserted = len(to_insert)
-                    total_inserted += batch_inserted
-                    logger.info(f"Batch inserted {batch_inserted} inventory items")
-                    to_insert.clear()
-                if to_update:
-                    self.db.bulk_update_mappings(GAMInventory, to_update)
-                    batch_updated = len(to_update)
-                    total_updated += batch_updated
-                    logger.info(f"Batch updated {batch_updated} inventory items")
-                    to_update.clear()
+                if batch:
+                    inventory.upsert(batch)
+                    total_written += len(batch)
+                    logger.info("Batch wrote %s inventory items", len(batch))
+                    batch.clear()
                 self.db.commit()  # Commit each batch
             except Exception as e:
-                logger.error(
-                    f"Batch write failed at {total_inserted + total_updated} items: {e}",
-                    exc_info=True,
-                )
+                logger.error("Batch write failed at %s items: %s", total_written, e, exc_info=True)
                 self.db.rollback()
                 raise  # Re-raise to fail the sync properly
 
@@ -143,16 +130,10 @@ class GAMInventoryService:
                 "last_synced": sync_time,
             }
 
-            key = ("ad_unit", ad_unit.id)
-            if key in existing_ids:
-                # Add database ID for update
-                item_data["id"] = existing_ids[key]
-                to_update.append(item_data)
-            else:
-                to_insert.append(item_data)
+            batch.append(item_data)
 
             # Flush batch every BATCH_SIZE items
-            if (len(to_insert) + len(to_update)) >= BATCH_SIZE:
+            if len(batch) >= BATCH_SIZE:
                 flush_batch()
 
         # Flush remaining ad units
@@ -188,15 +169,10 @@ class GAMInventoryService:
                 "last_synced": sync_time,
             }
 
-            key = ("placement", placement.id)
-            if key in existing_ids:
-                item_data["id"] = existing_ids[key]
-                to_update.append(item_data)
-            else:
-                to_insert.append(item_data)
+            batch.append(item_data)
 
             # Flush batch every BATCH_SIZE items
-            if (len(to_insert) + len(to_update)) >= BATCH_SIZE:
+            if len(batch) >= BATCH_SIZE:
                 flush_batch()
 
         # Flush remaining placements
@@ -220,15 +196,10 @@ class GAMInventoryService:
                 "last_synced": sync_time,
             }
 
-            key = ("label", label.id)
-            if key in existing_ids:
-                item_data["id"] = existing_ids[key]
-                to_update.append(item_data)
-            else:
-                to_insert.append(item_data)
+            batch.append(item_data)
 
             # Flush batch every BATCH_SIZE items
-            if (len(to_insert) + len(to_update)) >= BATCH_SIZE:
+            if len(batch) >= BATCH_SIZE:
                 flush_batch()
 
         # Flush remaining labels
@@ -252,12 +223,7 @@ class GAMInventoryService:
                 "last_synced": sync_time,
             }
 
-            item_key = ("custom_targeting_key", targeting_key.id)
-            if item_key in existing_ids:
-                item_data["id"] = existing_ids[item_key]
-                to_update.append(item_data)
-            else:
-                to_insert.append(item_data)
+            batch.append(item_data)
 
             # Process values for this key
             values = discovery.custom_targeting_values.get(targeting_key.id, [])
@@ -279,15 +245,10 @@ class GAMInventoryService:
                     "last_synced": sync_time,
                 }
 
-                value_key = ("custom_targeting_value", value.id)
-                if value_key in existing_ids:
-                    value_data["id"] = existing_ids[value_key]
-                    to_update.append(value_data)
-                else:
-                    to_insert.append(value_data)
+                batch.append(value_data)
 
                 # Flush batch every BATCH_SIZE items (values can be huge)
-                if (len(to_insert) + len(to_update)) >= BATCH_SIZE:
+                if len(batch) >= BATCH_SIZE:
                     flush_batch()
 
         # Flush remaining targeting keys/values
@@ -314,15 +275,10 @@ class GAMInventoryService:
                 "last_synced": sync_time,
             }
 
-            key = ("audience_segment", segment.id)
-            if key in existing_ids:
-                item_data["id"] = existing_ids[key]
-                to_update.append(item_data)
-            else:
-                to_insert.append(item_data)
+            batch.append(item_data)
 
             # Flush batch every BATCH_SIZE items
-            if (len(to_insert) + len(to_update)) >= BATCH_SIZE:
+            if len(batch) >= BATCH_SIZE:
                 flush_batch()
 
         # Flush remaining audience segments
@@ -349,9 +305,7 @@ class GAMInventoryService:
         self.db.execute(update_stmt)
         self.db.commit()
 
-        logger.info(
-            f"Saved inventory to database: {total_inserted} new, {total_updated} updated (batched operations - prevents OOM)"
-        )
+        logger.info("Saved inventory to database: %s items written (batched operations - prevents OOM)", total_written)
 
     def _streaming_sync_all_inventory(self, tenant_id: str, discovery: "GAMInventoryDiscovery") -> dict[str, Any]:
         """
@@ -474,7 +428,7 @@ class GAMInventoryService:
         logger.info(f"Streaming sync completed in {duration:.2f}s: {counts}")
         return summary
 
-    def _write_inventory_batch(self, tenant_id: str, inventory_type: str, items: list, sync_time: datetime):
+    def _write_inventory_batch(self, tenant_id: str, inventory_type: InventoryType, items: list, sync_time: datetime):
         """Write a batch of inventory items to database efficiently.
 
         Args:
@@ -490,38 +444,25 @@ class GAMInventoryService:
 
         BATCH_SIZE = 500
 
-        # Load existing inventory IDs once
-        logger.info(f"🔍 Loading existing {inventory_type} IDs from database...")
-        existing_ids = GAMInventoryRepository(self.db, tenant_id).row_ids(inventory_type)
-        logger.info(f"✅ Found {len(existing_ids)} existing {inventory_type} items")
-
-        to_insert: list[dict[str, Any]] = []
-        to_update: list[dict[str, Any]] = []
+        batch: list[dict[str, Any]] = []
         batch_num = 0
 
         logger.info(f"🔄 Processing {len(items)} items (batch size: {BATCH_SIZE})...")
         for idx, item in enumerate(items):
-            item_data = self._convert_item_to_db_format(tenant_id, inventory_type, item, sync_time)
-
-            if (inventory_type, item.id) in existing_ids:
-                item_data["id"] = existing_ids[(inventory_type, item.id)]
-                to_update.append(item_data)
-            else:
-                to_insert.append(item_data)
+            batch.append(self._convert_item_to_db_format(tenant_id, inventory_type, item, sync_time))
 
             # Flush batch
-            if (len(to_insert) + len(to_update)) >= BATCH_SIZE:
+            if len(batch) >= BATCH_SIZE:
                 batch_num += 1
                 logger.info(f"💾 Flushing batch {batch_num} (processed {idx + 1}/{len(items)} items)...")
-                self._flush_batch(to_insert, to_update)
-                to_insert.clear()
-                to_update.clear()
+                self._flush_batch(tenant_id, batch)
+                batch.clear()
 
         # Flush remaining
-        if to_insert or to_update:
+        if batch:
             batch_num += 1
-            logger.info(f"💾 Flushing final batch {batch_num} ({len(to_insert)} new, {len(to_update)} updates)...")
-            self._flush_batch(to_insert, to_update)
+            logger.info("💾 Flushing final batch %s (%s items)...", batch_num, len(batch))
+            self._flush_batch(tenant_id, batch)
 
         logger.info(f"✅ Completed writing {len(items)} {inventory_type} items in {batch_num} batch(es)")
 
@@ -549,11 +490,7 @@ class GAMInventoryService:
             logger.warning(f"Connection test failed, will retry query: {e}")
             # Connection is stale - SQLAlchemy will automatically reconnect on next query
 
-        # Load existing key IDs once, with a fresh query to avoid stale connection issues
-        existing_ids = GAMInventoryRepository(self.db, tenant_id).row_ids("custom_targeting_key")
-
-        to_insert: list[dict[str, Any]] = []
-        to_update: list[dict[str, Any]] = []
+        batch: list[dict[str, Any]] = []
 
         for key in keys:
             item_data = {
@@ -571,20 +508,15 @@ class GAMInventoryService:
                 "last_synced": sync_time,
             }
 
-            if ("custom_targeting_key", key.id) in existing_ids:
-                item_data["id"] = existing_ids[("custom_targeting_key", key.id)]
-                to_update.append(item_data)
-            else:
-                to_insert.append(item_data)
+            batch.append(item_data)
 
             # Flush batch
-            if (len(to_insert) + len(to_update)) >= BATCH_SIZE:
-                self._flush_batch(to_insert, to_update)
-                to_insert.clear()
-                to_update.clear()
+            if len(batch) >= BATCH_SIZE:
+                self._flush_batch(tenant_id, batch)
+                batch.clear()
 
         # Flush remaining
-        self._flush_batch(to_insert, to_update)
+        self._flush_batch(tenant_id, batch)
 
     def _update_adapter_config_targeting_keys(self, tenant_id: str):
         """Update adapter_config.custom_targeting_keys from gam_inventory table.
@@ -700,12 +632,12 @@ class GAMInventoryService:
         else:
             raise ValueError(f"Unknown inventory type: {inventory_type}")
 
-    def _flush_batch(self, to_insert: list, to_update: list):
-        """Flush a batch of inserts and updates to database with timeout and connection recovery.
+    def _flush_batch(self, tenant_id: str, rows: list[dict[str, Any]]):
+        """Write a batch of rows and commit it, with timeout and connection recovery.
 
         Args:
-            to_insert: List of items to insert
-            to_update: List of items to update
+            tenant_id: Tenant ID
+            rows: The batch; each row inserts a new item or updates a held one in place
         """
         from sqlalchemy.exc import DBAPIError, OperationalError
 
@@ -718,22 +650,16 @@ class GAMInventoryService:
             self.db.commit()
 
         try:
-            if to_insert:
-                logger.info(f"📝 Starting bulk insert of {len(to_insert)} items...")
-                # SQLAlchemy accepts model class but mypy expects Mapper type
-                self.db.bulk_insert_mappings(GAMInventory, to_insert)  # type: ignore[arg-type]
-                logger.info(f"✅ Batch inserted {len(to_insert)} items")
-            if to_update:
-                logger.info(f"📝 Starting bulk update of {len(to_update)} items...")
-                # SQLAlchemy accepts model class but mypy expects Mapper type
-                self.db.bulk_update_mappings(GAMInventory, to_update)  # type: ignore[arg-type]
-                logger.info(f"✅ Batch updated {len(to_update)} items")
+            if rows:
+                logger.info("📝 Starting upsert of %s items...", len(rows))
+                GAMInventoryRepository(self.db, tenant_id).upsert(rows)
+                logger.info("✅ Batch wrote %s items", len(rows))
             logger.info("💾 Committing batch transaction (120s timeout)...")
             _commit_with_timeout()
             logger.info("✅ Batch committed successfully")
         except AdCPServiceUnavailableError as e:
             logger.error(f"⏰ Database commit timed out after 120s: {e}")
-            logger.error(f"   Insert count: {len(to_insert)}, Update count: {len(to_update)}")
+            logger.error("   Item count: %s", len(rows))
             logger.error("   This usually indicates: lost connection, lock contention, or large transaction")
             self.db.rollback()
             # A DB commit timeout is SERVICE_UNAVAILABLE, per AdCP.1
@@ -742,7 +668,7 @@ class GAMInventoryService:
         except (OperationalError, DBAPIError) as e:
             # Connection errors - log and re-raise with context
             logger.error(f"❌ Database connection error during batch write: {e}")
-            logger.error(f"   Insert count: {len(to_insert)}, Update count: {len(to_update)}")
+            logger.error("   Item count: %s", len(rows))
             logger.error("   Connection may have been lost during long-running sync")
             self.db.rollback()
             # Re-raise the original error with additional context
@@ -753,7 +679,7 @@ class GAMInventoryService:
             )
         except Exception as e:
             logger.error(f"❌ Batch write failed: {e}", exc_info=True)
-            logger.error(f"   Insert count: {len(to_insert)}, Update count: {len(to_update)}")
+            logger.error("   Item count: %s", len(rows))
             self.db.rollback()
             raise
 

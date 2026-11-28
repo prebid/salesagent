@@ -40,6 +40,7 @@ from src.core.database.repositories.audit_log import AuditLogRepository
 from src.core.database.repositories.creative import CreativeAssignmentRepository, CreativeRepository
 from src.core.database.repositories.currency_limit import CurrencyLimitRepository
 from src.core.database.repositories.effects import begin_effects, drain_after_commit, end_effects
+from src.core.database.repositories.gam_inventory import GAMInventoryRepository
 from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.principal import PrincipalRepository
@@ -570,3 +571,19 @@ class SyncJobUoW(BaseUoW):
     sync_jobs: SyncJobRepository | None
 
     _REPOSITORIES: ClassVar[Mapping[str, type]] = {"sync_jobs": SyncJobRepository}
+
+
+class GAMInventoryUoW(BaseUoW):
+    """Unit of Work for a tenant's synced GAM inventory.
+
+    For the admin inventory views, which read it with no session of their own open. The sync
+    writes the table through ``GAMInventoryService`` on a session of its own and commits each
+    batch there.
+
+    Args:
+        tenant_id: Tenant scope for all repository queries.
+    """
+
+    gam_inventory: GAMInventoryRepository | None
+
+    _REPOSITORIES: ClassVar[Mapping[str, type]] = {"gam_inventory": GAMInventoryRepository}

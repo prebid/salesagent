@@ -11,7 +11,7 @@ from src.admin.utils import require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
-from src.core.database.repositories.product import ProductRepository
+from src.core.database.repositories.uow import ProductUoW
 
 logger = logging.getLogger(__name__)
 
@@ -194,8 +194,9 @@ def get_product_suggestions(tenant_id):
     filtered_suggestions.sort(key=sort_key)
 
     # Check existing products to mark which are already created
-    with get_db_session() as db_session:
-        existing_ids = ProductRepository(db_session, tenant_id).product_ids()
+    with ProductUoW(tenant_id) as uow:
+        assert uow.products is not None
+        existing_ids = uow.products.product_ids()
 
     # Add metadata to suggestions
     for suggestion in filtered_suggestions:

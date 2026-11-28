@@ -19,6 +19,7 @@ from src.core.database.repositories.account import AccountRepository
 from src.core.database.repositories.adapter_config import AdapterConfigRepository, TenantNotConfiguredError
 from src.core.database.repositories.currency_limit import CurrencyLimitRepository
 from src.core.database.repositories.delivery_simulation import DeliverySimulationConfigRepository
+from src.core.database.repositories.gam_inventory import GAMInventoryRepository
 from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.product import ProductRepository
@@ -30,6 +31,7 @@ from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.database.repositories.tenant_lookup import TenantLookupRepository
 from src.core.database.repositories.uow import (
     AccountUoW,
+    GAMInventoryUoW,
     MediaBuyUoW,
     ProductUoW,
     PublisherUoW,
@@ -48,6 +50,8 @@ __all__ = [
     "TenantNotConfiguredError",
     "CurrencyLimitRepository",
     "DeliverySimulationConfigRepository",
+    "GAMInventoryRepository",
+    "GAMInventoryUoW",
     "IdempotencyAttemptRepository",
     "MediaBuyRepository",
     "MediaBuyUoW",
