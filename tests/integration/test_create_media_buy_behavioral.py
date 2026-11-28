@@ -57,6 +57,7 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.schemas import (
+    AssetStatus,
     CreateMediaBuyRequest,
     CreateMediaBuyResult,
     CreateMediaBuySubmitted,
@@ -345,6 +346,13 @@ class TestCreativeMissingUrl:
 _UNPUSHED_CREATIVE_ID = "creative_no_platform"
 
 
+def _request_naming_the_unpushed_creative() -> CreateMediaBuyRequest:
+    """One package carrying ``creative_ids``, which is what reaches the inline upload path."""
+    return _make_request(
+        packages=[PackageRequestFactory.payload(product_id="prod_1", creative_ids=[_UNPUSHED_CREATIVE_ID])]
+    )
+
+
 class TestCreativeUploadFailure:
     """GAP-004: Creative upload failure raises CREATIVE_UPLOAD_FAILED.
 
@@ -363,10 +371,7 @@ class TestCreativeUploadFailure:
 
         Anchors: media_buy_create.py:3162-3168
         """
-        # A package carrying ``creative_ids`` is what reaches the inline upload path.
-        req = _make_request(
-            packages=[PackageRequestFactory.payload(product_id="prod_1", creative_ids=[_UNPUSHED_CREATIVE_ID])]
-        )
+        req = _request_naming_the_unpushed_creative()
 
         with MediaBuyCreateEnv() as env:
             tenant, principal = env.setup_default_data()
@@ -388,6 +393,41 @@ class TestCreativeUploadFailure:
 
             assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
             assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
+
+    def test_the_push_status_is_read_by_creative_id(self, integration_db):
+        """The row takes its own creative's push status, not the first one the ad server reports.
+
+        The push reports another creative's placement first, naming that creative's ad server
+        id, then this creative's ``failed`` status. Read by position, the row would record the
+        other creative's id as its own, and the next push would associate that creative instead
+        of creating this one. Read by ``creative_id``, the refusal records nothing.
+        """
+        from src.core.database.repositories.uow import CreativeUoW
+
+        with MediaBuyCreateEnv() as env:
+            tenant, principal = env.setup_default_data()
+            env.setup_product_chain(tenant)
+            uploadable_creative(
+                CreativeFactory,
+                tenant=tenant,
+                principal=principal,
+                creative_id=_UNPUSHED_CREATIVE_ID,
+                status="approved",
+            )
+            env.mock["adapter"].return_value.add_creative_assets.return_value = [
+                AssetStatus(creative_id="another_creative", platform_creative_id="gam_other", status="approved"),
+                AssetStatus(creative_id=_UNPUSHED_CREATIVE_ID, status="failed", message="no native template"),
+            ]
+
+            env.call_impl(req=_request_naming_the_unpushed_creative())
+
+            with CreativeUoW(tenant.tenant_id) as uow:
+                assert uow.creatives is not None
+                row = uow.creatives.get_by_id(_UNPUSHED_CREATIVE_ID, principal.principal_id)
+                assert row is not None, "the seeded creative row is missing"
+                assert "ad_server_creative_id" not in (row.data or {}), (
+                    f"the row recorded another creative's ad server id; persisted data: {row.data}"
+                )
 
 
 # ===========================================================================
