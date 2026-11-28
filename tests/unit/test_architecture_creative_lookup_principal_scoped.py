@@ -15,15 +15,16 @@ AND every module under ``src/core/tools/``:
    alias such as ``DBCreative``/``CreativeModel``/``DBAssignment``, whole or as a
    column projection such as ``select(Creative.creative_id)``, through ``select``
    or a legacy ``<session>.query(...)``) that
-   compares ``creative_id`` (via ``==``, ``filter_by`` kwargs, or ``.in_()``)
-   without also comparing ``principal_id`` **in the same query chain**
+   filters ``creative_id`` (``==``, a ``filter_by`` keyword, or ``.in_()``)
+   without also filtering ``principal_id`` **in the same query**
    (per-QUERY granularity: a scoped query cannot credit an unscoped sibling
-   in the same function). The model and ``select`` resolve by import, as the
-   query's own scope sees them (``statement_root`` / ``statement_entity`` in
-   ``_architecture_helpers``, the answers the filter_by guard reads);
-   the chain is walked by the shared ``select_chain``, and only its filter
-   stages (``where`` / ``filter`` / ``filter_by``) count as comparisons, so a
-   join's ON clause never scopes a query.
+   in the same function). The queries are the ones ``iter_queries`` in
+   ``_architecture_helpers`` reads, the model and ``select`` resolved by import
+   as the query's own scope sees them, and the columns are the ones
+   ``filtered_columns`` reads off the filter stages (``where`` / ``filter`` /
+   ``filter_by``) -- the answers the filter_by and uniqueness guards read -- so a
+   join's ON clause, a comparison of two mapped columns and ``principal_id != pid``
+   never scope a query.
 
 2. **Admin-call detector** — any ``admin_get_by_id`` / ``admin_get_by_ids`` /
    ``admin_list_all`` repository call inside ``src/core/tools/``: buyer-facing
@@ -42,22 +43,13 @@ from pathlib import Path
 import pytest
 
 from tests.unit._architecture_helpers import (
-    SELECT_CHAIN_METHODS,
-    SELECT_FILTER_METHODS,
     assert_violations_match_allowlist,
-    call_callee_name,
-    fold_name,
+    filtered_columns,
     iter_call_expressions,
-    iter_scopes,
-    orm_references,
+    iter_queries,
+    mapped,
     parse_module,
-    query_bindings,
     rel,
-    scope_bindings,
-    scope_nodes,
-    select_chain,
-    statement_entity,
-    statement_root,
     walk_with_enclosing_function,
 )
 
@@ -67,7 +59,8 @@ _TOOLS_DIR = _REPO_ROOT / "src" / "core" / "tools"
 
 # ORM models whose PK/FK carries principal_id — lookups by creative_id on any
 # of them are principal-ambiguous unless the query also pins principal_id.
-_CREATIVE_MODELS = {"Creative", "CreativeReview", "CreativeAssignment"}
+# Checked against the mapper where the detector runs (``mapped``), so a rename fails.
+_CREATIVE_MODELS = ("Creative", "CreativeReview", "CreativeAssignment")
 
 _ADMIN_REPO_METHODS = {"admin_get_by_id", "admin_get_by_ids", "admin_list_all"}
 
@@ -90,91 +83,26 @@ _QUERY_ALLOWLIST: set[tuple[str, str]] = {
 _ADMIN_CALL_ALLOWLIST: set[tuple[str, str]] = set()
 
 
-def _model_attr(expr: ast.expr, references: dict[int, str]) -> str | None:
-    """The attribute of ``<Creative-family class>.<attr>``, the class resolved by import, else None."""
-    if isinstance(expr, ast.Attribute) and references.get(id(expr.value)) in _CREATIVE_MODELS:
-        return expr.attr
-    return None
-
-
-def _creative_query_chains(tree: ast.Module, relpath: str) -> list[tuple[ast.Call, list[ast.Call], str]]:
-    """Every query on a Creative-family model, once: ``(statement root, its filter stages, function)``.
-
-    Per scope (``iter_scopes``, which also names the function that holds the scope: the one
-    a row is reported under). Accumulator-style queries come first: every name the scope
-    binds by plain assignment alone (``scope_bindings``) is read through the shared
-    ``fold_name``, so ``name = select(...)...`` and every later ``name = name.where(...)``
-    are graded as ONE query on their FULL filter set (an unscoped accumulator is flagged;
-    principal_id pinned in a later statement is credited). For a parameter or a loop
-    target nothing is folded, and its inline chain is graded on its own.
-    Then the inline chains, longest first, so a sub-chain of a graded chain is skipped.
-    Chains are walked by ``select_chain``; only the filter stages are kept. A statement
-    starts where ``statement_root`` says (``select(...)`` or ``<session>.query(...)``) and
-    addresses the class ``statement_entity`` says, the answers every query guard reads.
-    """
-    chains: list[tuple[ast.Call, list[ast.Call], str]] = []
-    for scope, imports, function in iter_scopes(tree, query_bindings(relpath, tree)):
-        assigned = scope_bindings(scope)
-        # Opaque or not, a fold is graded on the calls it folded: a rebind it cannot read
-        # (``s = wrap(s)``) receives the statement with those filters already applied.
-        folded = [(fold.root, fold.calls) for name in assigned if (fold := fold_name(name, assigned, imports))]
-        chained = (select_chain(n, SELECT_CHAIN_METHODS) for n in scope_nodes(scope) if isinstance(n, ast.Call))
-        inline = [(root, calls) for base, calls in chained if (root := statement_root(base, imports)) is not None]
-        inline.sort(key=lambda chain: -len(chain[1]))
-        seen: set[int] = set()
-        for root, calls in [*folded, *inline]:
-            if id(root) in seen or statement_entity(root, imports) not in _CREATIVE_MODELS:
-                continue
-            seen.add(id(root))
-            chains.append((root, [c for c in calls if call_callee_name(c) in SELECT_FILTER_METHODS], function))
-    return chains
-
-
-def _attrs_compared_in_chain(parts: list[ast.Call], references: dict[int, str]) -> set[str]:
-    """Collect model attrs pinned by a single query chain's filter stages.
-
-    Counts ``Model.attr == value`` comparisons (excluding pure JOIN conditions
-    where both sides are model attrs), ``filter_by(attr=...)`` kwargs, and
-    ``Model.attr.in_(...)`` membership filters.
-    """
-    names: set[str] = set()
-    for part in parts:
-        if call_callee_name(part) == "filter_by":
-            for kw in part.keywords:
-                if kw.arg:
-                    names.add(kw.arg)
-            continue
-        for arg in part.args:
-            for node in ast.walk(arg):
-                if isinstance(node, ast.Compare):
-                    sides = [_model_attr(side, references) for side in (node.left, *node.comparators)]
-                    if all(sides):
-                        continue  # JOIN condition, not a lookup filter
-                    names.update(attr for attr in sides if attr)
-                elif (
-                    isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Attribute)
-                    and node.func.attr == "in_"
-                    and (attr := _model_attr(node.func.value, references))
-                ):
-                    names.add(attr)
-    return names
-
-
 def find_unscoped_creative_queries(tree: ast.Module, relpath: str) -> list[tuple[int, str]]:
-    """Return (lineno, function) per QUERY comparing creative_id without principal_id.
+    """Return (lineno, function) per QUERY filtering creative_id without principal_id.
 
-    Accumulator-style queries are graded on their merged filter set, which replaces the
-    grading of the bare initial chain (that would miss filters added by later
-    ``stmt = stmt.where(...)`` statements -- in either direction: unscoped accumulators
-    hid, later-scoped ones false-flagged).
+    One row per query ``iter_queries`` reads on a Creative-family class, under the function
+    that holds it. An accumulator (``stmt = select(...)`` and every later
+    ``stmt = stmt.where(...)``) is ONE query on its whole filter set, so an unscoped
+    accumulator is flagged and principal_id pinned in a later statement is credited; a chain
+    on a folded name (``session.scalars(stmt.where(...))``) is graded on the fold's filters
+    with its own on top. Opaque or not, a fold is graded on the calls it folded: a rebind it
+    cannot read (``s = wrap(s)``) receives the statement with those filters already applied.
+    A column counts on any Creative-family class (``filtered_columns``).
     """
-    references = orm_references(relpath, tree)
+    creative = mapped(*_CREATIVE_MODELS)
     violations: list[tuple[int, str]] = []
-    for root, filters, function in _creative_query_chains(tree, relpath):
-        compared = _attrs_compared_in_chain(filters, references)
+    for query in iter_queries(tree, relpath):
+        if query.entity not in creative:
+            continue
+        compared = {column for owner, column in filtered_columns(query) if owner in creative}
         if "creative_id" in compared and "principal_id" not in compared:
-            violations.append((root.lineno, function))
+            violations.append((query.root.lineno, query.holder))
     return violations
 
 
@@ -423,6 +351,29 @@ class TestDetectorMetaTests:
         )
         assert _flagged(source) == []
         assert _flagged(source.replace("    s = s.where(Creative.principal_id == p)\n", "")) == ["f"]
+
+    @pytest.mark.arch_guard
+    def test_detector_grades_a_chain_on_a_folded_name_with_the_folded_filters(self):
+        """``stmt.where(...)`` inside a call is a query of its own: the fold's filters with its
+        own on top. It used to be dropped because its base is a name, not a statement root."""
+        source = (
+            "from src.core.database.models import Creative\n"
+            "def f(session, tid, cid):\n"
+            "    stmt = select(Creative).where(Creative.tenant_id == tid)\n"
+            "    return session.scalars(stmt.where(Creative.creative_id == cid)).first()\n"
+        )
+        assert _flagged(source) == ["f"]
+
+    @pytest.mark.arch_guard
+    def test_a_principal_inequality_does_not_scope_the_query(self):
+        """``principal_id != pid`` pins no principal; only ``==``, ``filter_by`` and ``.in_()`` do."""
+        source = (
+            "from src.core.database.models import Creative\n"
+            "def f(session, tid, cid, pid):\n"
+            "    return session.scalars(select(Creative).where(\n"
+            "        Creative.tenant_id == tid, Creative.creative_id == cid, Creative.principal_id != pid)).first()\n"
+        )
+        assert _flagged(source) == ["f"]
 
     @pytest.mark.arch_guard
     def test_detector_reads_a_legacy_query_root(self):

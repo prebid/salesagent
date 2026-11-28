@@ -13,12 +13,16 @@ are also exempt.
 
 """
 
+import ast
+
 import pytest
 
 from tests.unit._architecture_helpers import (
     assert_violations_match_allowlist,
     find_raw_select_violations,
+    mapped,
     orm_classes,
+    raw_select_rows,
 )
 
 # ── Exempt directories and files ────────────────────────────────────
@@ -294,8 +298,55 @@ def _find_raw_selects() -> list[tuple[str, str, str, int]]:
     """
     return find_raw_select_violations(
         skip=lambda rel_path: rel_path.startswith(REPOSITORY_DIR) or rel_path in INFRASTRUCTURE_FILES,
-        model_names=ORM_MODEL_NAMES,
+        models=ORM_MODEL_NAMES,
     )
+
+
+_PREAMBLE = "from sqlalchemy import select\nfrom src.core.database.models import Tenant, User\n"
+
+# label -> (source after the preamble, the (function, model) rows the detector gives, in
+# scan order). At most one row per function, keyed by the function that holds the call.
+_TABLE: dict[str, tuple[str, list[tuple[str, str]]]] = {
+    "whole-class": ("def f():\n    return select(Tenant)\n", [("f", "Tenant")]),
+    "column-projection": ("def f():\n    return select(Tenant.tenant_id)\n", [("f", "Tenant")]),
+    "module-level": ("q = select(Tenant)\n", [("<module>", "Tenant")]),
+    "nested-def-counts-for-itself": (
+        "def f():\n    def g():\n        return select(Tenant)\n\n    return g\n",
+        [("g", "Tenant")],
+    ),
+    "lambda-counts-for-its-function": ("def f():\n    return lambda: select(Tenant)\n", [("f", "Tenant")]),
+    "comprehension-counts-for-its-function": (
+        "def f(xs):\n    return [select(Tenant) for x in xs]\n",
+        [("f", "Tenant")],
+    ),
+    "aliased-import": (
+        "from src.core.database.models import Tenant as DBTenant\ndef f():\n    return select(DBTenant)\n",
+        [("f", "Tenant")],
+    ),
+    "module-attribute": (
+        "from src.core.database import models\ndef f():\n    return select(models.Tenant)\n",
+        [("f", "Tenant")],
+    ),
+    "one-row-per-function": ("def f():\n    select(User)\n    return select(Tenant)\n", [("f", "User")]),
+    "two-functions-of-one-name-are-two-rows": (
+        "class A:\n    def load(self):\n        return select(Tenant)\n\n"
+        "class B:\n    def load(self):\n        return select(Tenant)\n",
+        [("load", "Tenant"), ("load", "Tenant")],
+    ),
+    # Not a raw select on a mapped class: nothing reported.
+    "pydantic-namesake": ("from src.core.schemas import Product\ndef f():\n    return select(Product)\n", []),
+    "select-parameter": ("def f(select):\n    return select(Tenant)\n", []),
+    "legacy-query": ("def f(session):\n    return session.query(Tenant)\n", []),
+}
+
+
+@pytest.mark.arch_guard
+@pytest.mark.parametrize("label", sorted(_TABLE))
+def test_detector_rows_per_shape(label: str) -> None:
+    """The LIVE detector, on one module: what it flags and what it leaves alone."""
+    source, rows = _TABLE[label]
+    found = raw_select_rows(ast.parse(_PREAMBLE + source), "src/x.py", mapped(*ORM_MODEL_NAMES))
+    assert [(function, model) for _, function, model, _ in found] == rows
 
 
 # ── Tests ───────────────────────────────────────────────────────────

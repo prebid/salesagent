@@ -28,11 +28,14 @@ import warnings
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import yaml
 
 from tests._collection_manifest import unpublished_env
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import DeclarativeBase
 
 # ---------------------------------------------------------------------------
 # Repo-root anchor
@@ -114,31 +117,37 @@ def iter_module_trees(scan_dirs: list[Path]) -> Iterator[tuple[ast.Module, str]]
             yield tree, rel(py_file)
 
 
-#: The function :func:`enclosing_function` names for code that no ``def`` encloses.
+#: The function :func:`function_name` names for code that no ``def`` encloses.
 MODULE_LEVEL = "<module>"
 
 
-def enclosing_function(node: ast.AST, outer: str) -> str:
-    """The function that holds *node*, when *outer* holds the code around it.
+def enclosing_function(node: ast.AST, outer: ast.AST) -> ast.AST:
+    """The ``def`` that holds *node*, when *outer* holds the code around it.
 
     A ``def`` holds itself. Anything else (a lambda, a comprehension, a class body, a
-    statement) is held by *outer*, which is :data:`MODULE_LEVEL` outside every ``def``. The
-    one rule behind :func:`walk_with_enclosing_function` (per node) and :func:`iter_scopes`
-    (per scope), so every guard reports a row under the same function.
+    statement) is held by *outer*, which is the module outside every ``def``. The one rule
+    behind :func:`walk_with_enclosing_function` (per node) and :func:`iter_scopes` (per
+    scope), so every guard reports a row under the same function; :func:`function_name`
+    gives the name the row is keyed by.
     """
-    return node.name if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) else outer
+    return node if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) else outer
+
+
+def function_name(holder: ast.AST) -> str:
+    """The name of a holder :func:`enclosing_function` gives: the ``def``'s own, else :data:`MODULE_LEVEL`."""
+    return holder.name if isinstance(holder, ast.FunctionDef | ast.AsyncFunctionDef) else MODULE_LEVEL
 
 
 def walk_with_enclosing_function(tree: ast.AST) -> Iterator[tuple[ast.AST, str]]:
     """Yield ``(node, enclosing_function_name)`` for every node in ``tree``; see :func:`enclosing_function`."""
 
-    def visit(node: ast.AST, outer: str) -> Iterator[tuple[ast.AST, str]]:
-        function = enclosing_function(node, outer)
-        yield node, function
+    def visit(node: ast.AST, outer: ast.AST) -> Iterator[tuple[ast.AST, str]]:
+        holder = enclosing_function(node, outer)
+        yield node, function_name(holder)
         for child in ast.iter_child_nodes(node):
-            yield from visit(child, function)
+            yield from visit(child, holder)
 
-    yield from visit(tree, MODULE_LEVEL)
+    yield from visit(tree, tree)
 
 
 def collect_error_aliases(tree: ast.AST) -> set[str]:
@@ -177,9 +186,6 @@ def parse_module(path: Path) -> ast.Module:
 
 MODELS_MODULE = REPO_ROOT / "src" / "core" / "database" / "models.py"
 
-#: Bases that make a class an ORM model. ``Base`` itself is excluded.
-_ORM_MODEL_BASES = frozenset({"Base", "JSONValidatorMixin"})
-
 
 def models_module_tree() -> ast.Module:
     """Parsed ``src/core/database/models.py``, shared by every guard that reads it.
@@ -195,16 +201,13 @@ def _orm_model_class_defs() -> Iterator[ast.ClassDef]:
     """Yield the ``ClassDef`` of every ORM model declared in ``models.py``.
 
     Private to the unique-key inventory below, which has to read what a class DECLARES
-    (``__table_args__``, ``unique=True``). Which classes are mapped is :func:`orm_classes`.
+    (``__table_args__``, ``unique=True``). Which classes are mapped is :func:`orm_classes`,
+    so a class is kept only when the mapper maps its name.
     """
+    mapped = orm_classes()
     for node in ast.walk(models_module_tree()):
-        if not isinstance(node, ast.ClassDef) or node.name == "Base":
-            continue
-        for base in node.bases:
-            base_name = base.attr if isinstance(base, ast.Attribute) else getattr(base, "id", "")
-            if base_name in _ORM_MODEL_BASES:
-                yield node
-                break
+        if isinstance(node, ast.ClassDef) and node.name in mapped:
+            yield node
 
 
 class UniqueKey(NamedTuple):
@@ -371,20 +374,33 @@ def module_name_for(relpath: str) -> str:
     return relpath[:-3].replace("/", ".").removesuffix(".__init__")
 
 
+def _package(relpath: str) -> str:
+    """The package a relative import in *relpath* resolves against: an ``__init__.py``'s own, else its parent."""
+    module = module_name_for(relpath)
+    return module if relpath.endswith("__init__.py") else module.rsplit(".", 1)[0]
+
+
+def _from_module(node: ast.ImportFrom, package: str) -> str:
+    """The module ``from <module> import ...`` reads, a relative one resolved against *package*."""
+    if not node.level:
+        return node.module or ""
+    base = package.rsplit(".", node.level - 1)[0] if node.level > 1 else package
+    return f"{base}.{node.module}" if node.module else base
+
+
 def import_map(relpath: str, tree: ast.Module) -> dict[str, tuple[str, str]]:
-    """Local name -> (module, original name), for ``from x import y`` including relative."""
-    package = (
-        module_name_for(relpath) if relpath.endswith("__init__.py") else module_name_for(relpath).rsplit(".", 1)[0]
-    )
+    """Local name -> (module, original name), for ``from x import y`` including relative.
+
+    One map for the whole file, so a later import of a name overwrites an earlier one
+    whichever scope holds either. Which class a query node denotes is not read from here:
+    imports bind per scope there (:class:`QueryBindings`).
+    """
+    package = _package(relpath)
     mapping: dict[str, tuple[str, str]] = {}
     for node in ast.walk(tree):
         if not isinstance(node, ast.ImportFrom):
             continue
-        if node.level:
-            base = package.rsplit(".", node.level - 1)[0] if node.level > 1 else package
-            target = f"{base}.{node.module}" if node.module else base
-        else:
-            target = node.module or ""
+        target = _from_module(node, package)
         for alias in node.names:
             mapping[alias.asname or alias.name] = (target, alias.name)
     return mapping
@@ -394,39 +410,25 @@ def import_map(relpath: str, tree: ast.Module) -> dict[str, tuple[str, str]]:
 ORM_MODELS_MODULE = module_name_for(rel(MODELS_MODULE))
 
 
-def orm_bindings(relpath: str, tree: ast.Module) -> dict[str, str]:
-    """Local name -> ORM class name, for every name *tree* imports from ``models.py``.
-
-    ``from src.core.database.models import User as DBUser`` -> ``{"DBUser": "User"}``;
-    an unaliased import maps to itself. A guard that grades a call against the mapper
-    resolves the callee through this map rather than by bare name: a Pydantic
-    ``Product`` is then never graded as the ORM one, and an alias cannot hide a model
-    (four raw selects did until #2128). Relative imports resolve through ``import_map``.
-    """
-    return {
-        local: original
-        for local, (module, original) in import_map(relpath, tree).items()
-        if module == ORM_MODELS_MODULE
-    }
-
-
 # ---------------------------------------------------------------------------
 # Query-entity resolution shared by the ORM guards
 #
 # Each question a guard asks about a query is answered here, once: which classes are
-# mapped (``orm_classes``), which local names denote one (``orm_bindings``), what a
-# scope sees and which function holds it (``iter_scopes``), how a chain is walked
+# mapped (``orm_classes``, and ``mapped`` for a name a guard writes down), what a scope
+# sees and which function holds it (``iter_scopes``), how a chain is walked
 # (``select_chain``), which statement a local name holds (``fold_name``), where a
 # statement starts and which class it addresses (``statement_root``,
-# ``statement_entity``), which class a ``select(...)`` addresses (``select_entity``)
-# and which class any node denotes (``orm_references``). A guard that answers one of
-# them itself is a second answer, and the two drift: one line was a raw-select
-# violation in one guard and unresolved in another.
+# ``statement_entity``), which class a ``select(...)`` addresses (``select_entity``),
+# which class any node denotes (``orm_references``), which queries a module builds
+# (``iter_queries``), which entity a ``filter_by`` reads (``filter_by_entity``) and which
+# columns a query filters on (``filtered_columns``). A guard that answers one of them
+# itself is a second answer, and the two drift: one line was a raw-select violation in
+# one guard and unresolved in another.
 # ---------------------------------------------------------------------------
 
 
 @functools.cache
-def orm_classes() -> Mapping[str, type[Any]]:
+def orm_classes() -> Mapping[str, type[DeclarativeBase]]:
     """Every mapped class by name, from the live SQLAlchemy registry.
 
     Imported lazily: most guards never need the models, and importing them pulls in the
@@ -439,10 +441,26 @@ def orm_classes() -> Mapping[str, type[Any]]:
     return MappingProxyType({mapper.class_.__name__: mapper.class_ for mapper in Base.registry.mappers})
 
 
+def mapped(*names: str) -> frozenset[str]:
+    """*names*, each the name of a class the mapper maps, else an ``AssertionError``.
+
+    The one way a guard names a model by string: a guard that scans for a renamed or
+    misspelled model finds nothing and passes, so the name is checked against
+    :func:`orm_classes` where the scan runs, and the rename fails there.
+    """
+    unknown = sorted(set(names) - set(orm_classes()))
+    if unknown:
+        raise AssertionError(f"no mapper maps {unknown}: a guard scanning for that name finds nothing and passes")
+    return frozenset(names)
+
+
 #: Where ``select`` may be imported from to count as SQLAlchemy's. ``from sqlalchemy import
 #: select`` is the one spelling under ``src/`` and ``scripts/``; the other three re-export
 #: the same object.
 SELECT_MODULES = frozenset({"sqlalchemy", "sqlalchemy.sql", "sqlalchemy.sql.expression", "sqlalchemy.future"})
+
+#: What an import of SQLAlchemy's ``select`` binds (:func:`_import_target`).
+_SELECT_TARGETS = frozenset(f"{module}.select" for module in SELECT_MODULES)
 
 #: The ``Select`` methods that join. ``Select._filter_by_zero`` reads its answer from the last.
 SELECT_JOIN_METHODS = frozenset({"join", "outerjoin", "join_from"})
@@ -502,60 +520,126 @@ SCOPE_NODES: tuple[type[ast.AST], ...] = (
 )
 
 
+def _import_target(node: ast.Import | ast.ImportFrom, alias: ast.alias, package: str) -> str:
+    """The dotted name *alias* binds: ``from m import a`` -> ``m.a``, ``import a.b as x`` -> ``a.b``,
+    ``import a.b`` -> ``a`` (the name it binds)."""
+    if isinstance(node, ast.ImportFrom):
+        return f"{_from_module(node, package)}.{alias.name}"
+    return alias.name if alias.asname else alias.name.split(".", 1)[0]
+
+
+def _orm_bindings(imports: Mapping[str, str]) -> dict[str, str]:
+    """Local name -> ORM class name, for every name *imports* binds to a class the mapper maps.
+
+    *imports* is one scope's import view (:attr:`QueryBindings.imports`): ``from
+    src.core.database.models import User as DBUser`` -> ``{"DBUser": "User"}``, and an
+    unaliased import maps to itself. A name ``models.py`` exports that no mapper maps (an
+    enum, a helper) is no class. The input to the scope view only: which class a node
+    denotes is :func:`orm_references`'s answer, so a Pydantic ``Product`` is never graded as
+    the ORM one and an alias cannot hide a model (four raw selects did until #2128).
+    """
+    classes, prefix = orm_classes(), f"{ORM_MODELS_MODULE}."
+    return {
+        local: target.removeprefix(prefix)
+        for local, target in imports.items()
+        if target.startswith(prefix) and target.removeprefix(prefix) in classes
+    }
+
+
 class QueryBindings(NamedTuple):
     """What a scope's imports let a query resolver see.
 
-    ``orm`` is :func:`orm_bindings` (local name -> ORM class name); ``select`` is the local
-    names bound to SQLAlchemy's ``select``. A name the scope ALSO binds another way
-    (``def select``, ``User = ...``, a parameter) is in neither: a read may see either binding.
+    ``imports`` is every name the scope sees bound by an import statement, and by nothing
+    else, with what it imports (:func:`_import_target`). A name the scope ALSO binds another
+    way (``def select``, ``User = ...``, a parameter), or imports twice from two places, is
+    absent: a read may see either binding. The other three are what a query resolver reads
+    off it: ``orm`` is :func:`_orm_bindings` (local name -> ORM class name), ``models`` the
+    names bound to ``models.py`` itself (``from src.core.database import models``,
+    ``import src.core.database.models as m``) and ``select`` the names bound to SQLAlchemy's
+    ``select``. ``package`` is what a relative import in the module resolves against.
     """
 
+    imports: dict[str, str]
     orm: dict[str, str]
+    models: frozenset[str]
     select: frozenset[str]
+    package: str
+
+    @classmethod
+    def of(cls, imports: dict[str, str], package: str) -> QueryBindings:
+        """The view of *imports*, with the three kinds a query resolver reads derived from it."""
+        return cls(
+            imports=imports,
+            orm=_orm_bindings(imports),
+            models=frozenset(local for local, target in imports.items() if target == ORM_MODELS_MODULE),
+            select=frozenset(local for local, target in imports.items() if target in _SELECT_TARGETS),
+            package=package,
+        )
 
     def in_scope(self, scope: ast.AST) -> QueryBindings:
-        """These bindings as seen inside *scope*: a name *scope* binds itself
-        (:func:`scope_bound_names`) shadows the import and resolves to nothing."""
-        names = scope_bound_names(scope)
-        return QueryBindings(
-            orm={local: original for local, original in self.orm.items() if local not in names},
-            select=self.select - names,
-        )
+        """These bindings as seen inside *scope*.
+
+        A name *scope* binds itself (:func:`scope_bound_names`) shadows the enclosing binding.
+        It resolves again only when *scope*'s own imports are its one binding there and agree
+        on what they import: then it is that import, for *scope* and the scopes nested in it.
+        """
+        plain, other, imported = _bindings(scope)
+        bound_otherwise = other | set(plain)
+        imports = {
+            local: target
+            for local, target in self.imports.items()
+            if local not in bound_otherwise and local not in imported
+        }
+        for local, statements in imported.items():
+            targets = {_import_target(node, alias, self.package) for node, alias in statements}
+            if len(targets) == 1 and local not in bound_otherwise:
+                imports[local] = targets.pop()
+        return QueryBindings.of(imports, self.package)
 
 
 def query_bindings(relpath: str, tree: ast.Module) -> QueryBindings:
-    """The module scope's view of its query imports; see :class:`QueryBindings`."""
-    select = frozenset(
-        local
-        for local, (module, original) in import_map(relpath, tree).items()
-        if original == "select" and module in SELECT_MODULES
-    )
-    return QueryBindings(orm=orm_bindings(relpath, tree), select=select).in_scope(tree)
+    """The module scope's view of its imports; see :class:`QueryBindings`."""
+    return QueryBindings.of({}, _package(relpath)).in_scope(tree)
 
 
-def orm_entity(expr: ast.expr | None, orm: dict[str, str]) -> str | None:
-    """The ORM class *expr* names through *orm*: ``M`` or ``M.column`` -> ``M``, else None.
+def _class_named(expr: ast.expr, bindings: QueryBindings) -> str | None:
+    """The mapped class *expr* itself names: ``M`` by import, or ``<models module>.M``, else None."""
+    if isinstance(expr, ast.Name):
+        return bindings.orm.get(expr.id)
+    if isinstance(expr, ast.Attribute) and isinstance(expr.value, ast.Name) and expr.value.id in bindings.models:
+        return expr.attr if expr.attr in orm_classes() else None
+    return None
 
-    ``models.M`` is None (``models`` is not a model import), as is anything deeper than one
-    attribute, a call, or a relationship such as ``M.tenant`` once it is joined (the caller
-    decides whether an attribute may stand for its class; ``select(M.column)`` may, because
-    ``Select._filter_by_zero`` takes the first raw column's entity).
+
+def orm_entity(expr: ast.expr | None, bindings: QueryBindings) -> str | None:
+    """The ORM class *expr* names as *bindings* see it, else None.
+
+    ``M`` and ``M.column`` name ``M`` when ``M`` is imported from ``models.py``, and
+    ``models.M`` and ``models.M.column`` name it when ``models`` is bound to the models
+    module and the mapper maps ``M``. Anything deeper, a call, or a relationship such as
+    ``M.tenant`` once it is joined is None (the caller decides whether an attribute may stand
+    for its class; ``select(M.column)`` may, because ``Select._filter_by_zero`` takes the
+    first raw column's entity).
     """
-    base = expr.value if isinstance(expr, ast.Attribute) else expr
-    return orm.get(base.id) if isinstance(base, ast.Name) else None
+    if expr is None:
+        return None
+    if (named := _class_named(expr, bindings)) is not None:
+        return named
+    return _class_named(expr.value, bindings) if isinstance(expr, ast.Attribute) else None
 
 
 def select_entity(call: ast.Call, bindings: QueryBindings) -> str | None:
     """The ORM class a ``select(...)`` call addresses, else None.
 
-    ``select(M)`` and ``select(M.column)`` both address ``M``, when ``select`` is SQLAlchemy's
-    by import and ``M`` is imported from ``models.py``, as *bindings* (the call's scope) sees
-    them. A module-local ``def select``, ``sa.select(M)``, ``select(models.M)``, a Pydantic
-    namesake, ``select(func.count())`` and a legacy ``session.query(M)`` are all None.
+    ``select(M)``, ``select(M.column)`` and ``select(models.M)`` all address ``M``, when
+    ``select`` is SQLAlchemy's by import and ``M`` is a mapped class by import
+    (:func:`orm_entity`), as *bindings* (the call's scope) sees them. A module-local
+    ``def select``, ``sa.select(M)``, a Pydantic namesake, ``select(func.count())`` and a
+    legacy ``session.query(M)`` are all None.
     """
     if not (isinstance(call.func, ast.Name) and call.func.id in bindings.select and call.args):
         return None
-    return orm_entity(call.args[0], bindings.orm)
+    return orm_entity(call.args[0], bindings)
 
 
 def scope_nodes(scope: ast.AST) -> Iterator[ast.AST]:
@@ -594,13 +678,20 @@ def _bound_by_statement(node: ast.AST) -> Iterator[str]:
         yield node.rest
 
 
-def _bindings(scope: ast.AST) -> tuple[dict[str, list[ast.expr]], set[str]]:
-    """``(plain, other)`` for *scope*: the values bound by plain ``name = value`` statements,
-    and every name bound by any OTHER form except an import statement -- parameter, ``for`` /
-    ``with ... as`` / ``except ... as`` target, tuple unpacking, ``+=``, annotated or walrus
-    assignment, ``def``, ``class``, ``global`` / ``nonlocal``, ``match`` capture, ``del``."""
+#: One import of a name: the statement and the alias in it that binds the name.
+_Import = tuple[ast.Import | ast.ImportFrom, ast.alias]
+
+
+def _bindings(scope: ast.AST) -> tuple[dict[str, list[ast.expr]], set[str], dict[str, list[_Import]]]:
+    """``(plain, other, imported)`` for *scope*: the values bound by plain ``name = value``
+    statements; every name bound by any other form except an import statement -- parameter,
+    ``for`` / ``with ... as`` / ``except ... as`` target, tuple unpacking, ``+=``, annotated or
+    walrus assignment, ``def``, ``class``, ``global`` / ``nonlocal``, ``match`` capture,
+    ``del``; and the imports that bind each name, an import being a binding of the scope whose
+    own nodes hold it, as Python binds it (``from m import *`` binds no name it can tell)."""
     plain: dict[str, list[ast.expr]] = {}
     other: set[str] = set(_arguments(scope))
+    imported: dict[str, list[_Import]] = {}
     plain_targets: set[int] = set()
     for node in scope_nodes(scope):
         if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
@@ -610,33 +701,37 @@ def _bindings(scope: ast.AST) -> tuple[dict[str, list[ast.expr]], set[str]]:
             isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)) and id(node) not in plain_targets
         ):
             other.add(node.id)
+        elif isinstance(node, ast.Import | ast.ImportFrom):
+            for alias in node.names:
+                if alias.name != "*":
+                    imported.setdefault(alias.asname or alias.name.split(".", 1)[0], []).append((node, alias))
         else:
             other.update(_bound_by_statement(node))
-    return plain, other
+    return plain, other, imported
 
 
 def scope_bindings(scope: ast.AST) -> dict[str, list[ast.expr]]:
     """Name -> the values bound to it in *scope*, in source order, for names bound ONLY by
     plain ``name = value`` statements.
 
-    A name *scope* also binds another way (see :func:`_bindings`) is absent: a resolver
-    cannot know which binding a later read sees, so it must not guess. A comprehension or
-    lambda is a scope of its own (:data:`SCOPE_NODES`), so its targets never reach here and
-    a name it shares with the enclosing scope is two names.
+    A name *scope* also binds another way (see :func:`_bindings`), an import included, is
+    absent: a resolver cannot know which binding a later read sees, so it must not guess. A
+    comprehension or lambda is a scope of its own (:data:`SCOPE_NODES`), so its targets never
+    reach here and a name it shares with the enclosing scope is two names.
     """
-    plain, other = _bindings(scope)
-    return {name: values for name, values in plain.items() if name not in other}
+    plain, other, imported = _bindings(scope)
+    return {name: values for name, values in plain.items() if name not in other and name not in imported}
 
 
 def scope_bound_names(scope: ast.AST) -> set[str]:
-    """Every name *scope* binds by a form other than an import statement, plain assignment
-    included.
+    """Every name *scope* binds, by any form: plain assignment and import statements included.
 
-    Inside such a scope an import-bound name of the same spelling (``select``, a model) is
-    shadowed and must not resolve; :meth:`QueryBindings.in_scope` applies this.
+    Inside such a scope a binding of the same spelling in an enclosing scope (``select``, a
+    model) is shadowed; :meth:`QueryBindings.in_scope` applies this, and gives back a name
+    the scope binds by its own import alone.
     """
-    plain, other = _bindings(scope)
-    return other | set(plain)
+    plain, other, imported = _bindings(scope)
+    return other | set(plain) | set(imported)
 
 
 class Fold(NamedTuple):
@@ -671,7 +766,7 @@ def statement_entity(root: ast.Call, bindings: QueryBindings) -> str | None:
     ``test_architecture_helpers_contract.py::test_statement_entity_answers_for_each_statement_root``.
     """
     if isinstance(root.func, ast.Attribute) and root.func.attr == "query":
-        return orm_entity(root.args[0], bindings.orm) if root.args else None
+        return orm_entity(root.args[0], bindings) if root.args else None
     return select_entity(root, bindings)
 
 
@@ -718,52 +813,208 @@ def _fold(
     return fold._replace(opaque=opaque) if fold else None
 
 
-def iter_scopes(tree: ast.Module, bindings: QueryBindings) -> Iterator[tuple[ast.AST, QueryBindings, str]]:
+def iter_scopes(tree: ast.Module, bindings: QueryBindings) -> Iterator[tuple[ast.AST, QueryBindings, str, ast.AST]]:
     """Every scope in *tree*, the module first, each with the query bindings it sees and the
-    function that holds it.
+    function that holds it, by name and by node.
 
     *bindings* is the module's view (:func:`query_bindings`). A nested scope sees what its
-    enclosing scope sees minus what it binds itself (:meth:`QueryBindings.in_scope`), so
-    ``def f(select): return lambda: select(User)`` resolves nothing inside the lambda. A class
-    body is the exception Python makes: what it binds is invisible to the functions nested in
-    it, so they see what the class's enclosing scope sees. With :func:`scope_nodes`, every
-    node is visited under exactly one scope.
+    enclosing scope sees, minus what it binds itself and plus what it imports itself
+    (:meth:`QueryBindings.in_scope`), so ``def f(select): return lambda: select(User)``
+    resolves nothing inside the lambda, and an import inside one function binds nothing in
+    another. A class body is the exception Python makes: what it binds is invisible to the
+    functions nested in it, so they see what the class's enclosing scope sees. With
+    :func:`scope_nodes`, every node is visited under exactly one scope.
 
-    The function is :func:`enclosing_function`'s: a ``def``'s own name, else the innermost
-    ``def`` around the scope, else ``"<module>"``. A lambda, comprehension or class body is
-    held by the function around it. It is the name a guard keys a row by.
+    The holder is :func:`enclosing_function`'s: the ``def`` itself, else the innermost ``def``
+    around the scope, else the module; a lambda, comprehension or class body is held by the
+    function around it. Its name (:func:`function_name`) is what a guard keys a row by, and
+    the node tells apart two functions of one name.
     """
-    # (scope, what it sees, what the scopes nested in it inherit, the function that holds it)
-    pending: list[tuple[ast.AST, QueryBindings, QueryBindings, str]] = [(tree, bindings, bindings, MODULE_LEVEL)]
+    # (scope, what it sees, what the scopes nested in it inherit, the def that holds it)
+    pending: list[tuple[ast.AST, QueryBindings, QueryBindings, ast.AST]] = [(tree, bindings, bindings, tree)]
     while pending:
-        scope, view, inherited, function = pending.pop()
-        yield scope, view, function
+        scope, view, inherited, holder = pending.pop()
+        yield scope, view, function_name(holder), holder
         nested = [node for node in scope_nodes(scope) if isinstance(node, SCOPE_NODES)]
         for node in reversed(nested):
             node_view = inherited.in_scope(node)
-            holder = enclosing_function(node, function)
-            pending.append((node, node_view, inherited if isinstance(node, ast.ClassDef) else node_view, holder))
+            inherits = inherited if isinstance(node, ast.ClassDef) else node_view
+            pending.append((node, node_view, inherits, enclosing_function(node, holder)))
 
 
 def orm_references(relpath: str, tree: ast.Module) -> dict[int, str]:
     """``id(node)`` -> ORM class name, for every node in *tree* that denotes a mapped class.
 
-    Two kinds of node: an ``ast.Name`` bound to a class imported from ``models.py``
-    (``DBUser`` after ``import User as DBUser`` -> ``"User"``), and a ``select(...)`` call
-    that addresses one (:func:`select_entity`). Each resolves with the bindings of the scope
-    it is read in (:func:`iter_scopes`), so a parameter, a local ``def select`` or a
-    comprehension variable that shadows an import resolves to nothing. Keyed by node
-    identity, so it answers for this *tree* only. A guard that asks which model a node
+    Three kinds of node: an ``ast.Name`` bound to a mapped class imported from ``models.py``
+    (``DBUser`` after ``import User as DBUser`` -> ``"User"``); ``<models module>.M``
+    (``models.User`` after ``from src.core.database import models``); and a statement root
+    (:func:`statement_root`) whose statement addresses one (:func:`statement_entity`):
+    ``select(User)``, ``select(User.email)``, ``session.query(User)``. Each resolves with the
+    bindings of the scope it is read in (:func:`iter_scopes`), so a parameter, a local
+    ``def select``, a comprehension variable or a local import that shadows an import
+    resolves to nothing, and an import inside one function binds nothing in another. Keyed by
+    node identity, so it answers for this *tree* only. A guard that asks which model a node
     denotes asks here.
     """
     references: dict[int, str] = {}
-    for scope, view, _ in iter_scopes(tree, query_bindings(relpath, tree)):
+    for scope, view, _, _ in iter_scopes(tree, query_bindings(relpath, tree)):
         for node in scope_nodes(scope):
-            if isinstance(node, ast.Name) and node.id in view.orm:
-                references[id(node)] = view.orm[node.id]
-            elif isinstance(node, ast.Call) and (entity := select_entity(node, view)):
-                references[id(node)] = entity
+            if isinstance(node, ast.Name | ast.Attribute):
+                named = _class_named(node, view)
+            elif isinstance(node, ast.Call) and statement_root(node, view) is not None:
+                named = statement_entity(node, view)
+            else:
+                continue
+            if named is not None:
+                references[id(node)] = named
     return references
+
+
+def _class_reference(expr: ast.expr, references: Mapping[int, str]) -> str | None:
+    """The mapped class *expr* is, through *references*: ``M`` or ``models.M``. A statement root,
+    which :func:`orm_references` also maps, is a query on a class, not the class."""
+    return references.get(id(expr)) if isinstance(expr, ast.Name | ast.Attribute) else None
+
+
+def _mapped_column(expr: ast.expr, references: Mapping[int, str]) -> tuple[str, str] | None:
+    """``(class, attribute)`` for ``M.attribute``, ``M`` a class reference (:func:`_class_reference`), else None."""
+    if isinstance(expr, ast.Attribute) and (owner := _class_reference(expr.value, references)) is not None:
+        return owner, expr.attr
+    return None
+
+
+class Query(NamedTuple):
+    """One statement a scope builds, as :func:`iter_queries` reads it."""
+
+    #: Where the statement starts (:func:`statement_root`).
+    root: ast.Call
+    #: The mapped class *root* addresses (:func:`statement_entity`), else None.
+    entity: str | None
+    #: Every chain call on *root*, outermost (latest) first: the chain's own, then those folded
+    #: from the local name it starts at (:func:`fold_name`).
+    calls: list[ast.Call]
+    #: The calls in :data:`SELECT_FILTER_METHODS`, in the same order.
+    filters: list[ast.Call]
+    #: A read of the name the statement is folded from may see another statement (:class:`Fold`).
+    opaque: bool
+    #: The function that holds the query's scope (:func:`iter_scopes`): the name a row is keyed by.
+    holder: str
+    #: The module's :func:`orm_references`, the answer the readers take a class from.
+    references: Mapping[int, str]
+
+
+#: ``(root, calls, opaque)``: a statement a scope builds, before :func:`iter_queries` records it.
+_Statement = tuple[ast.Call, list[ast.Call], bool]
+
+
+def _chain_statement(
+    base: ast.expr, calls: list[ast.Call], view: QueryBindings, folds: Mapping[str, Fold]
+) -> _Statement | None:
+    """The statement a chain of *calls* on *base* builds: on a statement root, the chain's own;
+    on a local name *folds* reads, the fold's with *calls* on top. Else None."""
+    if (root := statement_root(base, view)) is not None:
+        return root, calls, False
+    if isinstance(base, ast.Name) and (fold := folds.get(base.id)) is not None:
+        return fold.root, calls + fold.calls, fold.opaque
+    return None
+
+
+def _scope_statements(scope: ast.AST, view: QueryBindings) -> Iterator[_Statement]:
+    """Every statement *scope* builds, once; see :func:`iter_queries`."""
+    assigned = scope_bindings(scope)
+    folds = {name: fold for name in assigned if (fold := fold_name(name, assigned, view)) is not None}
+    # A binding that starts or extends a fold's statement is read with the fold.
+    read_by_a_fold = {
+        id(value)
+        for name, fold in folds.items()
+        for value in assigned[name]
+        if (statement := _chain_statement(*select_chain(value, SELECT_CHAIN_METHODS), view, folds)) is not None
+        and statement[0] is fold.root
+    }
+    chains = [
+        (node, *select_chain(node, SELECT_CHAIN_METHODS)) for node in scope_nodes(scope) if isinstance(node, ast.Call)
+    ]
+    walked_through = {id(part) for node, base, calls in chains for part in (base, *calls) if part is not node}
+    for fold in folds.values():
+        yield fold.root, fold.calls, fold.opaque
+    for node, base, calls in chains:
+        if id(node) in walked_through or id(node) in read_by_a_fold:
+            continue
+        if (statement := _chain_statement(base, calls, view, folds)) is not None:
+            yield statement
+
+
+def iter_queries(tree: ast.Module, relpath: str) -> Iterator[Query]:
+    """Every query each scope of *tree* builds (:func:`iter_scopes`), once.
+
+    A query is an outermost chain (:func:`select_chain` over :data:`SELECT_CHAIN_METHODS`), so
+    no part of a chain is read again on its own. It starts at a statement root
+    (:func:`statement_root`), or at a local name whose statement :func:`fold_name` reads, and
+    then its calls go on top of the fold's: ``session.scalars(stmt.where(...))`` is read with
+    every filter ``stmt`` holds. A name the scope builds by plain assignment is one query on
+    its whole fold, so ``stmt = select(M)`` and each later ``stmt = stmt.where(...)`` are read
+    together and a binding the fold reads is not read again; a binding it does not read (a
+    statement the name held before it was rebound) is a query of its own.
+    """
+    references = orm_references(relpath, tree)
+    for scope, view, holder, _ in iter_scopes(tree, query_bindings(relpath, tree)):
+        for root, calls, opaque in _scope_statements(scope, view):
+            yield Query(
+                root=root,
+                entity=statement_entity(root, view),
+                calls=calls,
+                filters=[call for call in calls if call_callee_name(call) in SELECT_FILTER_METHODS],
+                opaque=opaque,
+                holder=holder,
+                references=references,
+            )
+
+
+def filter_by_entity(query: Query, call: ast.Call) -> str | None:
+    """The mapped class the ``filter_by`` *call* (one of ``query.calls``) looks its keywords up on.
+
+    ``Select._filter_by_zero`` over the calls made before it: the last ``join`` / ``outerjoin``
+    / ``join_from`` target, else the first ``select_from``, else the class the root addresses
+    (:attr:`Query.entity`). A target names its class only as a class reference (``M``,
+    ``models.M``); a relationship (``M.tenant``), a statement or anything else is None:
+    unresolved, never guessed.
+    """
+    select_from: ast.expr | None = None
+    for earlier in query.calls[query.calls.index(call) + 1 :]:  # outermost first: the calls before it
+        method, args = call_callee_name(earlier), earlier.args
+        if method in SELECT_JOIN_METHODS:
+            position = 1 if method == "join_from" else 0  # join_from(left, right)
+            return _class_reference(args[position], query.references) if len(args) > position else None
+        if method == "select_from" and args:
+            select_from = args[0]
+    return query.entity if select_from is None else _class_reference(select_from, query.references)
+
+
+def filtered_columns(query: Query) -> frozenset[tuple[str, str]]:
+    """``(class, column)`` for every column *query*'s filter stages compare to a value.
+
+    Only a filter stage (:attr:`Query.filters`) filters rows; a join's ON clause does not. A
+    ``filter_by`` keyword is a column of :func:`filter_by_entity`'s class. In a ``where`` or
+    ``filter`` argument, ``M.col == value`` (either way round) and ``M.col.in_(...)`` are, ``M``
+    a class reference (``M`` or ``models.M``, through :attr:`Query.references`). A comparison
+    of two mapped attributes is a join condition and filters nothing, and no other operator
+    (``!=``, ``<``, ``.is_(...)``) pins a column to a value.
+    """
+    columns: set[tuple[str, str]] = set()
+    for call in query.filters:
+        if call_callee_name(call) == "filter_by":
+            if (entity := filter_by_entity(query, call)) is not None:
+                columns.update((entity, keyword.arg) for keyword in call.keywords if keyword.arg)
+            continue
+        for node in (inner for arg in call.args for inner in ast.walk(arg)):
+            if isinstance(node, ast.Compare) and len(node.ops) == 1 and isinstance(node.ops[0], ast.Eq):
+                sides = [_mapped_column(side, query.references) for side in (node.left, *node.comparators)]
+                if not all(sides):
+                    columns.update(side for side in sides if side is not None)
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "in_":
+                if (column := _mapped_column(node.func.value, query.references)) is not None:
+                    columns.add(column)
+    return frozenset(columns)
 
 
 def parse_sources(sources: dict[str, str]) -> tuple[dict[str, ast.Module], dict[str, list[str]]]:
@@ -1000,11 +1251,9 @@ def iter_statement_scoped_nodes(stmt: ast.stmt, *, skip_deferred: bool = False) 
     ``skip_deferred`` additionally stops at lambda bodies and generator
     expressions. They are BUILT where they are written but RUN somewhere else,
     so a guard reasoning about what executes here (``find_import_time_fs_io_violations``)
-    must not count them, while a guard reasoning about what the statement
-    lexically contains (the uniqueness pre-check guard, which has to see a
-    ``select(...)`` wherever it is spelled) must. Off by default: skipping is
-    the narrower, execution-semantics reading, and only the caller that needs
-    it asks for it.
+    must not count them, while a reading of what the statement lexically contains
+    must. Off by default: skipping is the narrower, execution-semantics reading,
+    and only the caller that needs it asks for it.
     """
     stack: list[ast.AST] = [stmt]
     while stack:
@@ -1087,93 +1336,88 @@ def called_function_names(node: ast.AST) -> set[str]:
     return names
 
 
+class SelectCall(NamedTuple):
+    """One query :func:`extract_select_calls` finds in a function."""
+
+    #: The mapped class the query addresses (:attr:`Query.entity`).
+    model: str
+    #: The query's filter stages pin that class's ``tenant_id`` to a value (:func:`filtered_columns`).
+    has_tenant_filter: bool
+    #: The line the statement starts on.
+    lineno: int
+
+
 def extract_select_calls(
     source_path: Path,
     func_name: str,
+    *,
+    models: Iterable[str],
     class_name: str | None = None,
-    model_predicate: Callable[[str], bool] | None = None,
-) -> list[dict[str, Any]]:
-    """Extract ``select(Model)`` call info from a function or method using AST.
+) -> list[SelectCall]:
+    """The queries a function or method builds on *models*, one per :func:`iter_queries` record.
 
     Args:
         source_path: Absolute path to the Python source file.
-        func_name: Function or method name to scan.
+        func_name: Function or method name to scan; a query anywhere inside it counts, in a
+            nested ``def`` too.
+        models: The mapped classes to report, by name, checked by :func:`mapped`.
         class_name: If set, look for the method inside this class only.
-        model_predicate: If set, only keep calls whose model name satisfies it.
 
-    Returns:
-        List of dicts with keys ``model``, ``has_tenant_filter``, ``lineno``.
-        ``model`` is the ORM class :func:`orm_references` resolves, so
-        ``select(DBCreative.creative_id)`` is ``"Creative"``.
-        ``has_tenant_filter`` is True when "tenant_id" appears in the source
-        lines from the select() call through the next ten lines (the full
-        statement can span multiple lines).
+    A query is a ``select(...)`` or a legacy ``<session>.query(...)`` whose class resolves by
+    import, so ``select(DBCreative.creative_id)`` is ``"Creative"``.
     """
+    wanted = mapped(*models)
     tree = parse_module(source_path)
-    lines = source_path.read_text(encoding="utf-8").splitlines()
-    references = orm_references(rel(source_path), tree)
+    owners: list[ast.AST] = (
+        [node for node in ast.walk(tree) if isinstance(node, ast.ClassDef) and node.name == class_name]
+        if class_name is not None
+        else [tree]
+    )
+    inside = {
+        id(node)
+        for owner in owners
+        for function in ast.walk(owner)
+        if isinstance(function, ast.FunctionDef | ast.AsyncFunctionDef) and function.name == func_name
+        for node in ast.walk(function)
+    }
+    return [
+        SelectCall(query.entity, (query.entity, "tenant_id") in filtered_columns(query), query.root.lineno)
+        for query in iter_queries(tree, rel(source_path))
+        if query.entity in wanted and id(query.root) in inside
+    ]
 
-    target_nodes: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
-    for node in ast.walk(tree):
-        if class_name is not None:
-            if isinstance(node, ast.ClassDef) and node.name == class_name:
-                target_nodes.extend(
-                    child
-                    for child in ast.walk(node)
-                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == func_name
-                )
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
-            target_nodes.append(node)
 
-    results: list[dict[str, Any]] = []
-    for func_node in target_nodes:
-        for call in iter_call_expressions(func_node):
-            model_name = references.get(id(call))
-            if not model_name or (model_predicate is not None and not model_predicate(model_name)):
-                continue
-            stmt_text = "\n".join(lines[call.lineno - 1 : call.lineno + 10])
-            results.append(
-                {
-                    "model": model_name,
-                    "has_tenant_filter": "tenant_id" in stmt_text,
-                    "lineno": call.lineno,
-                }
-            )
-    return results
+def raw_select_rows(tree: ast.Module, relpath: str, models: frozenset[str]) -> Iterator[tuple[str, str, str, int]]:
+    """``(relpath, function, model, lineno)`` for the first raw ``select(...)`` on a class in *models* in each function.
+
+    At most one row per function: one violation per function is enough for a guard. The
+    function is the one that holds the call (:func:`iter_scopes`): a call in a nested ``def``
+    counts for that ``def`` alone, one in a lambda or comprehension for the function around
+    it, code outside every ``def`` for ``<module>``, and two functions of one name are two rows.
+
+    The entity is :func:`select_entity`'s: ``select`` must be SQLAlchemy's and the model a
+    mapped class by import, both as the call's own scope sees them (an alias hid four raw
+    selects until #2128; a Pydantic namesake, or a parameter named ``select``, is not graded
+    -- there is no fallback to the spelling). A column projection addresses its model.
+    """
+    reported: set[int] = set()
+    for scope, view, function, holder in iter_scopes(tree, query_bindings(relpath, tree)):
+        if id(holder) in reported:
+            continue
+        for node in scope_nodes(scope):
+            if isinstance(node, ast.Call) and (model := select_entity(node, view)) in models:
+                yield relpath, function, model, node.lineno
+                reported.add(id(holder))
+                break  # One violation per function is enough
 
 
 def find_raw_select_violations(
-    *,
-    skip: Callable[[str], bool],
-    model_names: set[str],
+    *, skip: Callable[[str], bool], models: Iterable[str]
 ) -> list[tuple[str, str, str, int]]:
-    """Find raw ``select(Model)`` / ``select(Model.column)`` calls in src/ for models in *model_names*.
-
-    Returns ``(rel_path, function_name, model_name, lineno)`` tuples — at most
-    one per function (one violation per function is enough for a guard). The function is
-    the one that holds the call (:func:`iter_scopes`): a call in a nested ``def`` counts for
-    that ``def`` alone, and one in a lambda or comprehension for the function around it.
-    Files where ``skip(rel_path)`` is True are excluded from the scan.
-
-    The entity is :func:`select_entity`'s: ``select`` must be SQLAlchemy's and the model
-    imported from ``models.py``, both as the call's own scope sees them (an alias hid four
-    raw selects until #2128; a Pydantic namesake, or a parameter named ``select``, is not
-    graded -- there is no fallback to the spelling). A column projection addresses its model.
-    """
-    violations: list[tuple[str, str, str, int]] = []
-    for tree, rel_path in iter_module_trees([repo_root() / "src"]):
-        if skip(rel_path):
-            continue
-        reported: set[str] = set()
-        for scope, view, function in iter_scopes(tree, query_bindings(rel_path, tree)):
-            if function in reported:
-                continue
-            for node in scope_nodes(scope):
-                if isinstance(node, ast.Call) and (model_name := select_entity(node, view)) in model_names:
-                    violations.append((rel_path, function, model_name, node.lineno))
-                    reported.add(function)
-                    break  # One violation per function is enough
-    return violations
+    """:func:`raw_select_rows` for *models* (checked by :func:`mapped`) over every module under
+    ``src/`` that ``skip(relpath)`` does not name (:func:`scan_rows`)."""
+    wanted = mapped(*models)
+    return scan_rows([repo_root() / "src"], lambda tree, relpath: raw_select_rows(tree, relpath, wanted), skip=skip)
 
 
 def iter_architecture_guard_trees(
@@ -2264,6 +2508,40 @@ def scan_src(
         )
 
     return findings
+
+
+def scan_rows[Row](
+    roots: Iterable[Path],
+    detector: Callable[[ast.Module, str], Iterable[Row]],
+    *,
+    skip: Callable[[str], bool] | None = None,
+) -> list[Row]:
+    """Every row *detector* gives over the ``.py`` files under *roots*, in scan order.
+
+    The sibling of :func:`scan_src` for a guard whose rows are keys, ``(path, function, ...)``,
+    rather than line numbers: ``detector(tree, relpath)`` yields one module's rows
+    (:func:`iter_module_trees` parses it and gives the :func:`rel` path), and this owns the
+    walk and the accumulation, so a guard supplies only what it detects. A file
+    ``skip(relpath)`` names is not scanned.
+
+    It RAISES on a root that is not a directory and on a scan that grades no module. A guard
+    pointed at a directory that does not exist, or one whose skip names every file, finds
+    nothing and passes, which is indistinguishable from a clean tree.
+    """
+    roots = list(roots)
+    missing = sorted(rel(root) for root in roots if not root.is_dir())
+    if missing:
+        raise AssertionError(f"scan root(s) {missing} are not directories: the scan would grade nothing and pass")
+    rows: list[Row] = []
+    scanned = 0
+    for tree, relpath in iter_module_trees(roots):
+        if skip is not None and skip(relpath):
+            continue
+        scanned += 1
+        rows.extend(detector(tree, relpath))
+    if not scanned:
+        raise AssertionError(f"no module under {[rel(root) for root in roots]} was scanned: the guard grades nothing")
+    return rows
 
 
 def assert_guard_subject_resolves(module_path: str, *names: str, why: str) -> None:

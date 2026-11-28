@@ -10,7 +10,8 @@ This guard catches the mistake at test time instead.
 The JSONType column inventory is mapper-derived (``orm_classes()``, the live
 registry), not name-matched, so Text columns that legitimately store JSON strings
 (e.g. ``SyncJob.summary``) are never dragged in. Form A (constructor kwarg)
-is import-resolving like test_guards_orm_constructor_kwargs; form B
+is import-resolving like test_guards_orm_constructor_kwargs: the callee's class is
+the one ``orm_references`` gives as the call's own scope binds it; form B
 (attribute assignment) matches any ``obj.<attr> = json.dumps(...)`` where
 ``<attr>`` is a JSONType column name on any mapper — a name-based
 approximation whose residual risk is documented in the meta-tests.
@@ -19,14 +20,17 @@ approximation whose residual risk is documented in the meta-tests.
 from __future__ import annotations
 
 import ast
-from pathlib import Path
 
 from sqlalchemy.orm import class_mapper
 
 from src.core.database.json_type import JSONType
-from tests.unit._architecture_helpers import orm_bindings, orm_classes, rel
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
+from tests.unit._architecture_helpers import (
+    assert_violations_match_allowlist,
+    orm_classes,
+    orm_references,
+    repo_root,
+    scan_rows,
+)
 
 # (file, "ClassName.attr" or ".attr") pairs permitted to violate — shrink-only.
 ALLOWLIST: set[tuple[str, str]] = set()
@@ -59,21 +63,17 @@ def _is_json_dumps(node: ast.expr) -> bool:
     )
 
 
-def _scan_file(path: Path, by_class: dict[str, set[str]]) -> list[tuple[str, str, int]]:
+def _scan_file(tree: ast.Module, relpath: str, by_class: dict[str, set[str]]) -> list[tuple[str, str, int]]:
     """(rel_path, target-description, lineno) per violation in one file."""
     all_json_cols = set().union(*by_class.values()) if by_class else set()
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    relpath = rel(path, REPO_ROOT)
-    bindings = orm_bindings(relpath, tree)
+    references = orm_references(relpath, tree)
     hits: list[tuple[str, str, int]] = []
     for node in ast.walk(tree):
-        # Form A: Model(col=json.dumps(...)) with Model imported from models.py
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            orm = bindings.get(node.func.id)
-            if orm in by_class:
-                for kw in node.keywords:
-                    if kw.arg in by_class[orm] and _is_json_dumps(kw.value):
-                        hits.append((relpath, f"{orm}.{kw.arg}", node.lineno))
+        # Form A: Model(col=json.dumps(...)) with Model a mapped class as the call's scope binds it
+        if isinstance(node, ast.Call) and (orm := references.get(id(node.func))) in by_class:
+            for kw in node.keywords:
+                if kw.arg in by_class[orm] and _is_json_dumps(kw.value):
+                    hits.append((relpath, f"{orm}.{kw.arg}", node.lineno))
         # Form B: obj.col = json.dumps(...) where col is a JSONType column name
         if isinstance(node, ast.Assign) and _is_json_dumps(node.value):
             for tgt in node.targets:
@@ -84,40 +84,26 @@ def _scan_file(path: Path, by_class: dict[str, set[str]]) -> list[tuple[str, str
 
 def _scan_src() -> list[tuple[str, str, int]]:
     by_class = _jsontype_cols_by_class()
-    hits: list[tuple[str, str, int]] = []
-    for path in sorted((REPO_ROOT / "src").rglob("*.py")):
-        hits.extend(_scan_file(path, by_class))
-    return hits
+    return scan_rows([repo_root() / "src"], lambda tree, relpath: _scan_file(tree, relpath, by_class))
 
 
 class TestJsonDumpsJsontypeGuard:
     def test_no_json_dumps_into_jsontype_columns(self):
-        violations = [v for v in _scan_src() if (v[0], v[1]) not in ALLOWLIST]
-        assert not violations, (
-            "json.dumps bound to a JSONType column — the column takes dicts/lists "
-            "directly; the str raises TypeError at bind time (was: silent {} data loss):\n"
-            + "\n".join(f"  {f}:{line} {target} = json.dumps(...)" for f, target, line in violations)
+        """No json.dumps reaches a JSONType column in src/, and every allowlist entry still violates."""
+        assert_violations_match_allowlist(
+            {(path, target) for path, target, _line in _scan_src()},
+            ALLOWLIST,
+            fix_hint=(
+                "json.dumps bound to a JSONType column — the column takes dicts/lists "
+                "directly; the str raises TypeError at bind time (was: silent {} data loss). "
+                "Pass the value itself -- do not allowlist."
+            ),
         )
-
-    def test_allowlist_entries_still_violate(self):
-        """Stale-entry check: every allowlisted pair still has a live violation."""
-        actual = {(v[0], v[1]) for v in _scan_src()}
-        stale = ALLOWLIST - actual
-        assert not stale, f"Allowlist entries no longer violating — remove them: {sorted(stale)}"
 
 
 class TestGuardMetaTests:
     def _scan_source(self, source: str) -> list[tuple[str, str, int]]:
-        import tempfile
-
-        by_class = _jsontype_cols_by_class()
-        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".py", dir=REPO_ROOT, delete=False) as fh:
-            fh.write(source)
-            tmp = Path(fh.name)
-        try:
-            return _scan_file(tmp, by_class)
-        finally:
-            tmp.unlink()
+        return _scan_file(ast.parse(source), "src/x.py", _jsontype_cols_by_class())
 
     def test_positive_constructor_kwarg(self):
         src = "import json\nfrom src.core.database.models import AuditLog\na = AuditLog(details=json.dumps({'x': 1}))\n"
@@ -152,6 +138,16 @@ class TestGuardMetaTests:
 
     def test_negative_plain_dict_passes(self):
         src = "from src.core.database.models import AuditLog\na = AuditLog(details={'x': 1})\n"
+        assert self._scan_source(src) == []
+
+    def test_negative_a_parameter_shadows_the_import(self):
+        """Inside ``f`` the name is the parameter, not the model: the call's own scope decides."""
+        src = (
+            "import json\n"
+            "from src.core.database.models import AuditLog\n"
+            "def f(AuditLog):\n"
+            "    return AuditLog(details=json.dumps({'x': 1}))\n"
+        )
         assert self._scan_source(src) == []
 
     def test_would_be_missed_indirect_dumps_documented(self):

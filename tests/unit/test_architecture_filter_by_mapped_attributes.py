@@ -11,14 +11,17 @@ strings, which is exactly what a static scan can check against the live mapper.
 Which entity a keyword is looked up on follows ``Select._filter_by_zero``: the last
 ``join`` / ``outerjoin`` / ``join_from`` target, else the first ``select_from``, else
 the entity the statement root addresses (``statement_entity``) -- ``select(M)``,
-``select(M.column)`` or a legacy ``<session>.query(M)``. Resolution is closed-world, on
-the helpers every ORM guard shares (``tests/unit/_architecture_helpers.py``):
+``select(M.column)``, ``select(models.M)`` or a legacy ``<session>.query(M)``. That rule is
+``filter_by_entity``, read over the queries ``iter_queries`` gives; resolution is
+closed-world, on the helpers every ORM guard shares (``tests/unit/_architecture_helpers.py``):
 
-- ``select`` and ``M`` resolve by IMPORT (``query_bindings`` / ``statement_entity``):
-  ``select`` must come from ``sqlalchemy``, ``M`` from ``models.py`` (``... import User as
-  DBUser`` included), and neither may be rebound in the module or the scope. A Pydantic
-  ``Product``, a module-local ``def select``, ``sa.select(M)``, ``select(models.M)`` and
-  ``select(func.sum(...))`` are unresolved.
+- ``select`` and ``M`` resolve by IMPORT, as the scope that reads them binds it
+  (``query_bindings`` / ``iter_scopes``): ``select`` must come from ``sqlalchemy``, ``M`` from
+  ``models.py`` (``... import User as DBUser`` and ``models.User`` included), and neither may
+  be rebound in the scope or an enclosing one; an import inside one function binds nothing
+  in another. A Pydantic ``Product``, a module-local ``def select``, ``sa.select(M)`` and
+  ``select(func.sum(...))`` are unresolved, and so is a join target that is no class
+  reference (``M.tenant``).
 - The chain is crossed only through the ``Select`` methods in ``SELECT_CHAIN_METHODS``
   (``select_chain``), which keep the entity; ``with_only_columns``, ``add_columns``,
   ``subquery`` and anything else not named there ends resolution.
@@ -37,126 +40,77 @@ Unresolved means skipped, never guessed. Each keyword must be in
 hybrids, the names ``filter_by`` can look up on the entity -- and only the installed
 mapper (``orm_classes``) is consulted, so the inventory cannot go stale.
 
-Scanned: every scope under ``src/`` and ``scripts/`` (``iter_module_trees``; vendored
-source binds no model and grades nothing). A row names the function ``iter_scopes`` gives
-the site's scope: a site in a lambda, comprehension or class body is reported under the
-function that holds it. ``TestDetectorMetaTests`` pins one row per shape above, including
-the valid queries an earlier version of this scan misreported.
+Scanned: every scope under ``src/`` and ``scripts/`` (``scan_rows``; vendored source binds
+no model and grades nothing). A row names the function ``iter_scopes`` gives the site's
+scope: a site in a lambda, comprehension or class body is reported under the function
+that holds it. ``TestDetectorMetaTests`` pins one row per shape above, including the
+valid queries an earlier version of this scan misreported.
 
-No allowlist: the only violation at creation was the #2206 site, deleted in the same
-change. A row added here needs a ``# FIXME(#<gh-issue>)`` at the source.
+No allowlist: the only violation at creation, the #2206 site, was deleted on main by
+#2689. A row added here needs a ``# FIXME(#<gh-issue>)`` at the source.
 """
 
 from __future__ import annotations
 
 import ast
-from collections.abc import Iterator
-from typing import Any
+from collections.abc import Callable, Iterable, Iterator
 
 import pytest
 from sqlalchemy import inspect
 
 from tests.unit._architecture_helpers import (
     SELECT_CHAIN_METHODS,
-    SELECT_JOIN_METHODS,
-    QueryBindings,
     assert_violations_match_allowlist,
     call_callee_name,
-    fold_name,
-    iter_module_trees,
-    iter_scopes,
+    filter_by_entity,
+    iter_queries,
     orm_classes,
-    parse_module,
-    query_bindings,
     repo_root,
-    scope_bindings,
-    scope_nodes,
+    scan_rows,
     select_chain,
-    statement_entity,
-    statement_root,
 )
 
 # (relpath, enclosing function per ``iter_scopes``, "Model.kwarg"). Shrink-only.
 ALLOWLIST: set[tuple[str, str, str]] = set()
 
+#: The trees the guard grades. The reach test scans the same ones.
+_ROOTS = ("src", "scripts")
 
-def _anchor(calls: list[ast.Call]) -> tuple[bool, ast.expr | None]:
-    """What ``Select._filter_by_zero`` takes from a statement's *calls*, outermost first, ahead
-    of the entity its root addresses.
 
-    ``(True, target)``: the first join met is the LAST in source order, so it decides; else the
-    last ``select_from`` met, which is the FIRST in source order. ``(False, None)`` when the
-    calls hold neither, and the root decides (``statement_entity``).
+def _scan[Row](detector: Callable[[ast.Module, str], Iterable[Row]]) -> list[Row]:
+    return scan_rows([repo_root() / root for root in _ROOTS], detector)
+
+
+def _graded_sites(tree: ast.Module, relpath: str) -> Iterator[tuple[str, str, ast.Call]]:
+    """``(function, model, filter_by call)`` for every site whose entity resolves; *function*
+    is the one ``iter_scopes`` gives the site's scope.
+
+    In an opaque query a site reached through the name may see another statement, so it is
+    skipped, never guessed; one written on the statement root itself reads no name and is
+    graded (``stmt = select(M).filter_by(...)`` in a name bound in two branches).
     """
-    select_from: ast.expr | None = None
-    for call in calls:
-        method, args = call_callee_name(call), call.args
-        if method in SELECT_JOIN_METHODS:
-            position = 1 if method == "join_from" else 0  # join_from(left, right)
-            return True, args[position] if len(args) > position else None
-        if method == "select_from" and args:
-            select_from = args[0]
-    return select_from is not None, select_from
-
-
-class _Scope:
-    """One scope's view: its plain bindings, and the imports it sees (``iter_scopes``)."""
-
-    def __init__(self, scope: ast.AST, imports: QueryBindings) -> None:
-        self._imports = imports
-        self._assigned = scope_bindings(scope)
-        self.nodes = list(scope_nodes(scope))
-
-    def _imported(self, node: ast.expr | None) -> str | None:
-        """The ORM class a bare name denotes by import, else None (an attribute never does)."""
-        return self._imports.orm.get(node.id) if isinstance(node, ast.Name) else None
-
-    def target(self, expr: ast.expr) -> type[Any] | None:
-        """The entity ``filter_by`` addresses on *expr*, or None when it cannot be told."""
-        base, calls = select_chain(expr, SELECT_CHAIN_METHODS)
-        if isinstance(base, ast.Name):
-            fold = fold_name(base.id, self._assigned, self._imports)
-            if fold is None or fold.opaque:
-                return None  # the name may hold another statement: skipped, never guessed
-            base, calls = fold.root, calls + fold.calls
-        anchored, node = _anchor(calls)
-        if anchored:
-            name = self._imported(node)
-        elif (root := statement_root(base, self._imports)) is not None:
-            name = statement_entity(root, self._imports)
-        else:
-            name = None
-        return orm_classes().get(name) if name else None
-
-
-def _graded_sites(tree: ast.Module, relpath: str) -> Iterator[tuple[str, type[Any], ast.Call]]:
-    """``(function, model, filter_by call)`` for every site whose target resolves; *function*
-    is the one ``iter_scopes`` gives the site's scope."""
-    for scope_node, imports, function in iter_scopes(tree, query_bindings(relpath, tree)):
-        scope = _Scope(scope_node, imports)
-        for node in scope.nodes:
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "filter_by":
-                model = scope.target(node.func.value)
-                if model is not None:
-                    yield function, model, node
+    for query in iter_queries(tree, relpath):
+        for call in query.filters:
+            if call_callee_name(call) != "filter_by":
+                continue
+            if query.opaque and select_chain(call, SELECT_CHAIN_METHODS)[0] is not query.root:
+                continue
+            if (model := filter_by_entity(query, call)) is not None:
+                yield query.holder, model, call
 
 
 def _find_in_module(tree: ast.Module, relpath: str) -> set[tuple[str, str, str]]:
     found: set[tuple[str, str, str]] = set()
     for function, model, call in _graded_sites(tree, relpath):
-        mapped = set(inspect(model).all_orm_descriptors.keys())
+        mapped = set(inspect(orm_classes()[model]).all_orm_descriptors.keys())
         for kw in call.keywords:
             if kw.arg is not None and kw.arg not in mapped:
-                found.add((relpath, function, f"{model.__name__}.{kw.arg}"))
+                found.add((relpath, function, f"{model}.{kw.arg}"))
     return found
 
 
 def _find_phantom_filter_by() -> set[tuple[str, str, str]]:
-    repo = repo_root()
-    found: set[tuple[str, str, str]] = set()
-    for tree, relpath in iter_module_trees([repo / "src", repo / "scripts"]):
-        found |= _find_in_module(tree, relpath)
-    return found
+    return set(_scan(_find_in_module))
 
 
 @pytest.mark.arch_guard
@@ -204,6 +158,15 @@ _TABLE: dict[str, tuple[str, set[tuple[str, str]]]] = {
         "from sqlalchemy import select as sa_select\ndef f():\n    return sa_select(User).filter_by(is_admin=True)\n",
         {("f", "User.is_admin")},
     ),
+    "module-attribute": (
+        "import src.core.database.models as models\ndef f():\n    return select(models.User).filter_by(nope=1)\n",
+        {("f", "User.nope")},
+    ),
+    "join-on-a-module-attribute": (
+        "from src.core.database import models\n"
+        "def f():\n    return select(Tenant).join(models.User).filter_by(subdomain='x')\n",
+        {("f", "User.subdomain")},
+    ),
     "select-from": (
         "def f():\n    return select(func.count()).select_from(User).filter_by(is_admin=True)\n",
         {("f", "User.is_admin")},
@@ -232,6 +195,11 @@ _TABLE: dict[str, tuple[str, set[tuple[str, str]]]] = {
         "def f():\n    return select(Tenant).join_from(Tenant, User).filter_by(subdomain='x')\n",
         {("f", "User.subdomain")},
     ),
+    "written-on-the-root-of-a-name-bound-in-two-branches": (
+        "def f(c):\n    if c:\n        s = select(User).filter_by(nope=1)\n    else:\n"
+        "        s = select(Tenant).filter_by(nope=2)\n    return s\n",
+        {("f", "User.nope"), ("f", "Tenant.nope")},
+    ),
     # A row names the innermost enclosing function, whatever scope holds the site.
     "module-level": ("stmt = select(User).filter_by(is_admin=True)\n", {("<module>", "User.is_admin")}),
     "lambda": ("f = lambda: select(User).filter_by(is_admin=True)\n", {("<module>", "User.is_admin")}),
@@ -256,11 +224,27 @@ _TABLE: dict[str, tuple[str, set[tuple[str, str]]]] = {
         "class K:\n    select = None\n\n    def m(self):\n        return select(User).filter_by(is_admin=True)\n",
         {("m", "User.is_admin")},
     ),
+    # An import binds the scope that holds it, as Python binds it.
+    "an-import-in-one-function-binds-nothing-in-another": (
+        "def f():\n    from src.core.database.models import Product\n    return select(Product).filter_by(nope=1)\n\n"
+        "def g():\n    return select(Tenant).join(Product).filter_by(nope=2)\n",
+        {("f", "Product.nope")},
+    ),
+    "a-local-import-shadows-the-module-import-in-its-function-only": (
+        "def f():\n    from src.core.schemas import User\n    return select(User).filter_by(nope=1)\n\n"
+        "def g():\n    return select(User).filter_by(nope=2)\n",
+        {("g", "User.nope")},
+    ),
     # Valid queries: nothing reported.
     "mapped-column-and-relationship": ("def f(t):\n    return select(User).filter_by(email='a', tenant=t)\n", set()),
     "join-then-a-joined-column": ("def f():\n    return select(Tenant).join(User).filter_by(email='x')\n", set()),
     "joined-accumulator": (
         "def f():\n    s = select(Tenant)\n    s = s.join(User)\n    return s.filter_by(email='x')\n",
+        set(),
+    ),
+    # A keyword is looked up on the entity at the call, from the calls before it.
+    "a-later-join-does-not-move-an-earlier-filter_by": (
+        "def f():\n    s = select(Tenant)\n    s = s.filter_by(subdomain='x')\n    s = s.join(User)\n    return s\n",
         set(),
     ),
     "rebound-after-use": (
@@ -319,14 +303,18 @@ _TABLE: dict[str, tuple[str, set[tuple[str, str]]]] = {
     "model-rebound-in-the-module": ("User = object()\ndef f():\n    return select(User).filter_by(nope=1)\n", set()),
     "relationship-join": ("def f():\n    return select(User).join(User.tenant).filter_by(nope=1)\n", set()),
     "aggregate": ("def f():\n    return select(func.sum(User.user_id)).filter_by(nope=1)\n", set()),
-    "module-attribute": (
-        "import src.core.database.models as models\ndef f():\n    return select(models.User).filter_by(nope=1)\n",
-        set(),
-    ),
     "pydantic-namesake": (
         "from src.core.schemas import Product\ndef f():\n    return select(Product).filter_by(nope=1)\n",
         set(),
     ),
+}
+
+#: Real sites the live scan must grade: a 2.0 ``select(M)`` and a legacy ``db.query(M)`` under
+#: ``src/``, and a site under ``scripts/``, so a root dropped from ``_ROOTS`` fails here.
+_REACHED = {
+    ("src/core/database/repositories/principal.py", "Principal"),  # select(M)
+    ("src/admin/blueprints/operations.py", "MediaBuy"),  # legacy db.query(M)
+    ("scripts/setup/init_database_ci.py", "Tenant"),
 }
 
 
@@ -338,10 +326,6 @@ class TestDetectorMetaTests:
         assert "User" in orm_classes() and "Tenant" in orm_classes()
 
     @pytest.mark.arch_guard
-    def test_the_table_covers_both_verdicts(self) -> None:
-        assert any(rows for _, rows in _TABLE.values()) and any(not rows for _, rows in _TABLE.values())
-
-    @pytest.mark.arch_guard
     @pytest.mark.parametrize("label", sorted(_TABLE))
     def test_rows_per_shape(self, label: str) -> None:
         source, rows = _TABLE[label]
@@ -349,14 +333,7 @@ class TestDetectorMetaTests:
         assert _find_in_module(ast.parse(_PREAMBLE + source), "x.py") == expected
 
     @pytest.mark.arch_guard
-    @pytest.mark.parametrize(
-        ("relpath", "model"),
-        [
-            ("src/core/database/repositories/principal.py", "Principal"),  # select(M)
-            ("src/admin/blueprints/operations.py", "MediaBuy"),  # legacy db.query(M)
-        ],
-    )
-    def test_live_scan_reaches_a_real_site(self, relpath: str, model: str) -> None:
-        """The tree scan grades real sites, through both the 2.0 and the legacy spelling."""
-        graded = {m.__name__ for _, m, _ in _graded_sites(parse_module(repo_root() / relpath), relpath)}
-        assert model in graded
+    def test_live_scan_reaches_real_sites(self) -> None:
+        """The scan the guard runs grades real sites, through both spellings and both roots."""
+        graded = set(_scan(lambda tree, relpath: ((relpath, model) for _, model, _ in _graded_sites(tree, relpath))))
+        assert _REACHED <= graded, f"the live scan no longer grades {sorted(_REACHED - graded)}"
