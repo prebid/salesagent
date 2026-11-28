@@ -17,6 +17,7 @@ from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from enum import StrEnum
 from typing import Any
+from urllib.parse import urlencode
 
 from sqlalchemy import delete
 from sqlalchemy.orm import Session
@@ -374,11 +375,29 @@ class AdminAccountEnv:
 
     def post_management_api_tenant(self, body: dict[str, str]) -> AdminResponse:
         """POST *body* to the tenant management API's create route, with a key it accepts."""
+        return self._tenant_management_api("post", "tenants", json=body)
+
+    def list_management_api_tenants(self) -> AdminResponse:
+        """GET the tenant management API's list of every tenant, with a key it accepts."""
+        return self._tenant_management_api("get", "tenants")
+
+    def _tenant_management_api(
+        self,
+        method: str,
+        path: str,
+        *,
+        json: dict[str, str] | None = None,
+        headers: dict[str, str | None] | None = None,
+    ) -> AdminResponse:
+        """Send *method* to the tenant management API's *path*, with a key it accepts and *headers* besides."""
         return self.client.request(
-            "post",
-            "/api/v1/tenant-management/tenants",
-            json=body,
-            headers={"X-Tenant-Management-API-Key": self._stored_api_key("tenant_management_api_key")},
+            method,
+            f"/api/v1/tenant-management/{path}",
+            json=json,
+            headers={
+                **(headers or {}),
+                "X-Tenant-Management-API-Key": self._stored_api_key("tenant_management_api_key"),
+            },
         )
 
     def _stored_api_key(self, config_key: str) -> str:
@@ -774,14 +793,7 @@ class AdminAccountEnv:
 
     def delete_tenant_by_management_api(self, tenant_id: str) -> AdminResponse:
         """DELETE *tenant_id* through the tenant management API as curl does: no body and ``Accept: */*``."""
-        return self.client.request(
-            "delete",
-            f"/api/v1/tenant-management/tenants/{tenant_id}",
-            headers={
-                "Accept": "*/*",
-                "X-Tenant-Management-API-Key": self._stored_api_key("tenant_management_api_key"),
-            },
-        )
+        return self._tenant_management_api("delete", f"tenants/{tenant_id}", headers={"Accept": "*/*"})
 
     def post_business_rules_by_fetch(self, form_data: dict[str, str]) -> AdminResponse:
         """POST the business-rules form as the settings page's script does: its FormData through ``fetch()``."""
@@ -812,9 +824,9 @@ class AdminAccountEnv:
         """Send *method* to *path* as a page's script does with fetch(): *body* as JSON, if any, and ``Accept: */*``."""
         return self.client.request(method, path, json=body, headers={"Accept": "*/*"})
 
-    def open_admin_home(self) -> AdminResponse:
-        """GET ``/admin/``, the page a sign-in lands on."""
-        return self.client.request("get", "/admin/")
+    def open_admin_home(self, query: dict[str, str] | None = None) -> AdminResponse:
+        """GET ``/admin/``, the page a sign-in lands on, with *query* as its query string (the index's filters)."""
+        return self.client.request("get", f"/admin/?{urlencode(query)}" if query else "/admin/")
 
     def submit_tenant_form(self, tenant_id: str, path: str, form_data: dict[str, str]) -> AdminResponse:
         """POST *form_data* to *tenant_id*'s ``/tenant/<id>/<path>`` as a browser's form post from no page."""

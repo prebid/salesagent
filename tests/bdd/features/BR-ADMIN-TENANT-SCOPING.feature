@@ -306,3 +306,70 @@ Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
     When the caller sends GET to the policy page of the target tenant
     Then the page returns status 200
     And the policy page says the tenant has saved no policy, with policy checks off
+
+  # The five inventory views read the tenant's synced copy of its GAM inventory, and the sync
+  # status reads its sync jobs too. The seeded inventory holds every type the views count in
+  # three statuses, ACTIVE, INACTIVE and STALE, so a count of ACTIVE items differs from a count
+  # of every item. Its newest item was created, and last synced, the day before the tenant's
+  # latest sync, which a re-sync recorded on the items it found without creating any: the
+  # newest item's creation time is not when the tenant last synced. The tenant's newest
+  # inventory sync job failed, after the one that synced its items, and an orders sync started
+  # after both. Another tenant holds an ACTIVE ad unit and a STALE label synced, and an
+  # inventory sync started, after every one of the target tenant's. Each Then compares the
+  # whole body with the one tests/harness/admin_tenant_scoping.py pins beside the seeded rows.
+  @T-ADMIN-SCOPE-020 @auth @main-flow
+  Scenario: The inventory sync check reports when the tenant last synced, not when its newest item was created
+    Given the caller is an active member of the target tenant
+    And the target tenant holds synced GAM inventory and sync jobs, and another tenant synced after it
+    When the caller sends GET to the inventory sync check of the target tenant
+    Then the page returns status 200
+    And the inventory sync check counts every item of the target tenant and reports its latest sync
+
+  @T-ADMIN-SCOPE-021 @auth @main-flow
+  Scenario: The sync status counts each inventory type in every status and shows the newest inventory sync job
+    Given the caller is an active member of the target tenant
+    And the target tenant holds synced GAM inventory and sync jobs, and another tenant synced after it
+    When the caller sends GET to the sync status API of the target tenant
+    Then the page returns status 200
+    And the sync status counts each inventory type of the target tenant in every status, with the type's latest sync and the tenant's newest inventory sync job
+
+  @T-ADMIN-SCOPE-022 @auth @main-flow
+  Scenario: The targeting data lists the tenant's keys, audience segments and labels with its latest sync
+    Given the caller is an active member of the target tenant
+    And the target tenant holds synced GAM inventory and sync jobs, and another tenant synced after it
+    When the caller sends GET to the targeting data API of the target tenant
+    Then the page returns status 200
+    And the targeting data lists the target tenant's keys, audience segments and labels, with its latest sync
+
+  @T-ADMIN-SCOPE-023 @auth @main-flow
+  Scenario: The inventory tree lists the tenant's active root ad units and counts only its active items
+    Given the caller is an active member of the target tenant
+    And the target tenant holds synced GAM inventory and sync jobs, and another tenant synced after it
+    When the caller sends GET to the inventory tree API of the target tenant
+    Then the page returns status 200
+    And the inventory tree lists the target tenant's active root ad units, counts its active items and reports its latest sync
+
+  @T-ADMIN-SCOPE-024 @auth @main-flow
+  Scenario: The inventory stats count the tenant's items of each type in each status
+    Given the caller is an active member of the target tenant
+    And the target tenant holds synced GAM inventory and sync jobs, and another tenant synced after it
+    When the caller sends GET to the inventory stats API of the target tenant
+    Then the page returns status 200
+    And the inventory stats count the target tenant's items of each type in each status
+
+  # Before its first sync the tenant holds no inventory and no sync job, so every count is
+  # zero and every sync time is null.
+  @T-ADMIN-SCOPE-025 @auth @main-flow
+  Scenario Outline: Before its first sync the tenant's inventory views report no inventory
+    Given the caller is an active member of the target tenant
+    When the caller sends GET to the <route> of the target tenant
+    Then the page returns status 200
+    And the <route> reports that the target tenant has synced no inventory
+
+    Examples:
+      | route                |
+      | inventory sync check |
+      | sync status API      |
+      | targeting data API   |
+      | inventory tree API   |
+      | inventory stats API  |

@@ -105,6 +105,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.admin_super_admin",
     "tests.bdd.steps.domain.admin_unexpected_errors",
     "tests.bdd.steps.domain.admin_tenant_scoping",
+    "tests.bdd.steps.domain.admin_tenant_listings",
     "tests.bdd.steps.domain.admin_workflow_step_review",
     "tests.bdd.steps.domain.admin_inventory_profiles",
     "tests.bdd.steps.domain.admin_signing_keys",
@@ -6775,6 +6776,13 @@ ENV_ROUTES: list[EnvRoute] = [
         tag="admin-workflow-step-review",
         when=lambda m: any(t.startswith("T-ADMIN-STEPREVIEW-") for t in m),
         env_builder=_admin_env_builder("tests.harness.admin_workflow_step_review.AdminWorkflowStepReviewEnv"),
+    ),
+    # BR-ADMIN-TENANT-LISTINGS carries T-ADMIN-LIST- and grades the listings of every tenant
+    # the deployment holds, so its env stores no tenant of its own; it is claimed here the same way.
+    EnvRoute(
+        tag="admin-tenant-listings",
+        when=lambda m: any(t.startswith("T-ADMIN-LIST-") for t in m),
+        env_builder=_admin_env_builder("tests.harness.admin_tenant_listings.AdminTenantListingEnv"),
     ),
     # ── @ctxecho (local context-echo-on-every-outcome feature) ──────────────
     # Same reason the @egress rows below are UNSCOPED `when` rows: these

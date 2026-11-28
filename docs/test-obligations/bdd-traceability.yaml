@@ -7384,6 +7384,60 @@ mappings:
       upstream_refs: []
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-ADMIN-SCOPE-019"
+      adcp_feature: "BR-ADMIN-TENANT-SCOPING.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-ADMIN-SCOPE-020"
+      adcp_feature: "BR-ADMIN-TENANT-SCOPING.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-ADMIN-SCOPE-021"
+      adcp_feature: "BR-ADMIN-TENANT-SCOPING.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-ADMIN-SCOPE-022"
+      adcp_feature: "BR-ADMIN-TENANT-SCOPING.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-ADMIN-SCOPE-023"
+      adcp_feature: "BR-ADMIN-TENANT-SCOPING.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-ADMIN-SCOPE-024"
+      adcp_feature: "BR-ADMIN-TENANT-SCOPING.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-ADMIN-SCOPE-025"
+      adcp_feature: "BR-ADMIN-TENANT-SCOPING.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-ADMIN-LIST-001"
+      adcp_feature: "BR-ADMIN-TENANT-LISTINGS.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-ADMIN-LIST-002"
+      adcp_feature: "BR-ADMIN-TENANT-LISTINGS.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-ADMIN-STEPREVIEW-001"
       adcp_feature: "BR-ADMIN-WORKFLOW-STEP-REVIEW.feature"
       obligation_id: null
