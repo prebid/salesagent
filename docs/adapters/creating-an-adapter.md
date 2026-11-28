@@ -90,6 +90,9 @@ under-report your platform:
 - `get_packages_snapshot(...)` — near-real-time delivery snapshots. The
   default raises `NotImplementedError`; override only when the platform can
   serve snapshots.
+- `approve_order(order_id)` — approves a booked order once its creatives are
+  on it, called after a manual approval. The default returns `True` (nothing
+  to approve); override when the platform books orders for later approval.
 - `get_available_inventory()` — inventory discovery for AI-driven product
   configuration; returns empty inventory by default.
 - `creative_formats(tenant_id)` — a classmethod returning the `Format`

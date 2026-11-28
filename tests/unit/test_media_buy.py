@@ -1267,21 +1267,19 @@ class TestCreateMediaBuyAdapterInteraction:
         mock_adapter = MagicMock()
         mock_adapter.create_media_buy.side_effect = RuntimeError("GAM API timeout")
 
-        # Two signature changes, both from the adapter-contract split (ecfdd7771 and
-        # a1b79d22d): the adapters read an AdapterCreateRequest projected from the buyer's
-        # DTO through one of its two constructors — nothing builds one by hand — and the
-        # function takes the one ResolvedIdentity rather than a loose principal, so the
-        # tenant and the principal cannot be handed over as a mismatched pair.
-        with patch("src.core.tools.media_buy_create.get_adapter", return_value=mock_adapter):
-            with pytest.raises(RuntimeError, match="GAM API timeout"):
-                _execute_adapter_media_buy_creation(
-                    request=AdapterCreateRequest.from_buyer_request(_make_request()),
-                    packages=[],
-                    start_time=datetime.now(UTC),
-                    end_time=datetime.now(UTC) + timedelta(days=7),
-                    package_pricing_info={},
-                    identity=_make_identity(),
-                )
+        # Two signature changes: the adapters read an AdapterCreateRequest projected from the
+        # buyer's DTO through one of its two constructors (ecfdd7771) — nothing builds one by
+        # hand — and the function takes the caller's adapter rather than an identity to build
+        # one from, so there is nothing to patch here.
+        with pytest.raises(RuntimeError, match="GAM API timeout"):
+            _execute_adapter_media_buy_creation(
+                request=AdapterCreateRequest.from_buyer_request(_make_request()),
+                packages=[],
+                start_time=datetime.now(UTC),
+                end_time=datetime.now(UTC) + timedelta(days=7),
+                package_pricing_info={},
+                adapter=mock_adapter,
+            )
 
     # test_dry_run_skips_adapter (UC-002-AD03 / UC-002-MAIN-19) is REMOVED. It drove
     # _create_media_buy_impl with an identity whose testing context said dry_run=True and

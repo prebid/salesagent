@@ -208,6 +208,25 @@ class TestGAMManualApprovalPath:
             assert exc_info.value.error_code == "WORKFLOW_CREATION_FAILED"
 
 
+_PUSHED_ASSETS = [
+    {
+        "creative_id": "cr_1",
+        "package_assignments": [{"package_id": "pkg_1", "weight": 100, "platform_line_item_id": "1001"}],
+    }
+]
+
+
+class TestGAMCreativePushUnconfigured:
+    """A creative push GAM is not configured for refuses each creative by name."""
+
+    def test_a_push_an_unconfigured_adapter_refuses_names_each_creative(self, adapter):
+        """The refusal names its creative, so a caller matching statuses by creative_id reads its message."""
+        with patch.object(adapter, "creatives_manager", None):
+            statuses = adapter.add_creative_assets("9000001", _PUSHED_ASSETS, datetime.now(UTC))
+
+        assert [(status.creative_id, status.status) for status in statuses] == [("cr_1", "failed")]
+
+
 class TestGAMActivationWorkflowPath:
     """Test GAM adapter activation workflow path returns packages correctly."""
 

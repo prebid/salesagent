@@ -41,6 +41,31 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     And Google Ad Manager created one image creative for advertiser "3000001" showing "https://example.com/banner.png"
     And Google Ad Manager associated that creative with line items "5000001"
 
+  # A seller whose GAM connection requires manual approval (gam_manual_approval_required) still
+  # has a creative the sync clears created in GAM: the approval that clears the creative is the
+  # one its push needs, and the adapter does not queue the push for another.
+  @T-UC-006-local-gam-manual-approval-assignment-traffics
+  Scenario: Under manual approval of GAM operations, a synced creative assigned to a booked package is created in GAM
+    Given the seller requires manual approval of its Google Ad Manager operations
+    And the buyer syncs a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-banner-a"
+    When the Buyer Agent syncs the creative with assignments
+    Then creative "cr-banner" is assigned to package "pkg-banner-a"
+    And Google Ad Manager created one image creative for advertiser "3000001" showing "https://example.com/banner.png"
+    And Google Ad Manager associated that creative with line items "5000001"
+
+  # The same seller with the creative held for its review: the seller's approval of the creative
+  # is the approval its push carries.
+  @T-UC-006-local-gam-manual-approval-held-creative
+  Scenario: Under manual approval of GAM operations, a creative held for review is created in GAM when the seller approves it
+    Given the seller requires manual approval of its Google Ad Manager operations
+    And the tenant has approval_mode "require-human"
+    And the buyer syncs a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-banner-a"
+    When the Buyer Agent syncs the creative with assignments
+    Then Google Ad Manager created no creative
+    When the seller approves creative "cr-banner"
+    Then Google Ad Manager created one image creative for advertiser "3000001" showing "https://example.com/banner.png"
+    And Google Ad Manager associated that creative with line items "5000001"
+
   # sync_creatives records the creative agent's preview link as an HTML creative's URL. The
   # markup is what GAM serves; the preview page is not sent to GAM as an image.
   @T-UC-006-local-gam-html-creative
@@ -98,9 +123,24 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     And Google Ad Manager associated that creative with line items "5000001, 5000007"
 
     Examples:
-      | reason                                          | code                | recovery  |
-      | QuotaError.EXCEEDED_QUOTA                       | RATE_LIMITED        | transient |
-      | AuthenticationError.NETWORK_API_ACCESS_DISABLED | CONFIGURATION_ERROR | terminal  |
+      | reason                    | code         | recovery  |
+      | QuotaError.EXCEEDED_QUOTA | RATE_LIMITED | transient |
+
+  # A GAM fault the seller classifies as CONFIGURATION_ERROR is a seller misconfiguration, a code
+  # AdCP 3.2.7 places at the operation level ("Wire placement",
+  # docs/snippets/compliance-error-codes.mdx § CONFIGURATION_ERROR @ 3.2.7): it never rides the
+  # creative's own errors[], and the packages GAM did not take, in assignment_errors, are the
+  # creative's report. Ungraded at 3.2.7: no storyboard under dist/compliance/3.2.7/ grades it.
+  @T-UC-006-local-gam-misconfiguration-stays-off-the-creative
+  Scenario: GAM refusing one association for a seller misconfiguration reports the packages, not the code, on the creative
+    Given the buyer holds a buy booked in Google Ad Manager as order "6000007" whose package "pkg-two-a" is line item "5000007" accepting 300x250 and package "pkg-two-b" is line item "5000008" accepting 300x250
+    And the buyer synced a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-banner-a"
+    And Google Ad Manager refuses associations on line item "5000008" with "AuthenticationError.NETWORK_API_ACCESS_DISABLED"
+    When the Buyer Agent references library creative "cr-banner", without resending it, assigned to packages "pkg-two-a, pkg-two-b"
+    Then creative "cr-banner" reports package "pkg-two-a" in assignment_errors and not in assigned_to
+    And creative "cr-banner" reports package "pkg-two-b" in assignment_errors and not in assigned_to
+    And creative "cr-banner" is reported unchanged, with no error of its own
+    And Google Ad Manager associated that creative with line items "5000001, 5000007"
 
   # Every push starts by reading the order's line items, ahead of the per-creative work.
   @T-UC-006-local-gam-read-refusal-keeps-its-code

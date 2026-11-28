@@ -197,6 +197,31 @@ def test_a_native_declaration_is_placed_as_a_1x1_native_slot():
     ]
 
 
+def test_a_native_slot_names_the_products_native_style_id_as_its_creative_template():
+    """A native placeholder names the creative template its creatives are built against (GH #1516).
+
+    The product's ``native_style_id`` is that template. GAM reports it back on the line item,
+    which is where the creative push reads it, so the display slot beside it stays as it was.
+    """
+    line_item = _placed_line_item(
+        _canonical_only_package(
+            _snapshot(format_kind="native_in_feed", params={}),
+            _snapshot(format_kind="image", params={"width": 970, "height": 250}),
+        ),
+        impl_config={"creative_placeholders": [SEEDED_FALLBACK], "native_style_id": "987654"},
+    )
+
+    assert line_item["creativePlaceholders"] == [
+        {
+            "size": {"width": 1, "height": 1},
+            "expectedCreativeCount": 1,
+            "creativeSizeType": "NATIVE",
+            "creativeTemplateId": "987654",
+        },
+        {"size": {"width": 970, "height": 250}, "expectedCreativeCount": 1, "creativeSizeType": "PIXEL"},
+    ]
+
+
 def test_the_snapshot_answers_before_the_packages_deprecated_references():
     """Both arms present: the canonical contract decides, and the legacy name is not consulted.
 

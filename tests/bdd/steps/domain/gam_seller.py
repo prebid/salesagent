@@ -52,6 +52,7 @@ from tests.helpers.gam_client import gam_delivery_row
         r'"(?P<ad_unit_id>[^"]+)", and the buyer is its advertiser "(?P<advertiser_id>[^"]+)"'
         r'(?:, on a network (?:in time zone "(?P<network_time_zone>[^"]+)"'
         r'|that refuses to name its time zone with "(?P<network_fault>[^"]+)"))?'
+        r"(?P<native>, selling a native format beside its display format)?"
         r"(?:, with product settings '(?P<product_settings>[^']*)')?"
     )
 )
@@ -62,6 +63,7 @@ def given_seller_sells_through_gam(
     advertiser_id: str,
     network_time_zone: str | None,
     network_fault: str | None,
+    native: str | None,
     product_settings: str | None,
 ) -> None:
     """Onboard the env's tenant to GAM and sell every product the scenario built on one ad unit.
@@ -73,7 +75,8 @@ def given_seller_sells_through_gam(
 
     The optional network clause states the GAM network's own time zone, or the ``ApiError``
     reason with which the network refuses to name it; without it the stand-in network keeps
-    its default zone. The optional
+    its default zone. The optional native clause has each product also declare a native
+    in-feed format option beside its display one (``GAM_FORMAT_OPTIONS``). The optional
     product-settings clause is a JSON object of ``implementation_config`` keys the seller
     wrote over the generated GAM configuration of each product it sells. A scenario that
     needs another seller fact adds a clause to this sentence rather than a second seller
@@ -95,7 +98,35 @@ def given_seller_sells_through_gam(
         network_time_zone=network_time_zone,
         network_fault=network_fault,
         implementation_config=json.loads(product_settings) if product_settings is not None else None,
+        native=native is not None,
     )
+
+
+@given("the seller requires manual approval of its Google Ad Manager operations")
+def given_seller_requires_gam_manual_approval(ctx: dict) -> None:
+    """The seller's GAM connection queues orders and line item changes for its approval.
+
+    A scenario step rather than a clause of the seller sentence, because a feature that states
+    the seller once in its Background needs the fact for some of its scenarios only.
+    """
+    ctx["env"].require_manual_approval_of_gam_operations()
+
+
+@given("the buyer's package selects the product's display and native format options")
+def given_package_selects_display_and_native_options(ctx: dict) -> None:
+    """The package names both of the product's ``GAM_FORMAT_OPTIONS`` by ref, and no deprecated format_ids.
+
+    ``media-buy/package-request.json @ 3.2.7``: a package names its formats on one arm, so the
+    deprecated ``format_ids`` the shared builder puts on it goes.
+    """
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
+    from tests.harness.gam import GAM_FORMAT_OPTIONS
+
+    (package,) = _ensure_request_defaults(ctx)["packages"]
+    package.pop("format_ids", None)
+    package["format_option_refs"] = [
+        {"scope": "product", "format_option_id": option["format_option_id"]} for option in GAM_FORMAT_OPTIONS
+    ]
 
 
 @given(parsers.re(r"the seller's (?P<delivery>guaranteed|non-guaranteed) products? (?:has|have) pricing options:"))
@@ -820,6 +851,20 @@ def then_creative_failed_with(ctx: dict, creative_id: str, code: str, recovery: 
     assert reported == ("failed", [(code, recovery)]), f"expected {code} {recovery} on a failed entry; got {entry}"
 
 
+@then(parsers.parse('creative "{creative_id}" is reported unchanged, with no error of its own'))
+def then_creative_unchanged_without_error(ctx: dict, creative_id: str) -> None:
+    """The buyer's entry for the creative is ``unchanged`` and its ``errors[]`` is empty.
+
+    An operation-level code (CONFIGURATION_ERROR, ``docs/snippets/compliance-error-codes.mdx``
+    § CONFIGURATION_ERROR @ 3.2.7, "Wire placement") never rides a creative's own entry: what the
+    ad server did not take is the entry's ``assignment_errors``.
+    """
+    entry = wire_entry(ctx, "creatives", creative_id=creative_id)
+    errors = wire_entry_errors(ctx, "creatives", creative_id=creative_id)
+    reported = (entry.get("action"), errors)
+    assert reported == ("unchanged", []), f"expected an unchanged entry with no errors; got {entry}"
+
+
 @then(parsers.parse('Google Ad Manager holds one creative, showing "{url}"'))
 def then_gam_holds_one_creative(ctx: dict, url: str) -> None:
     """Of everything the seller sent, GAM holds exactly one creative, and it shows *url*."""
@@ -979,6 +1024,28 @@ _LINE_ITEM_READERS = {
 
 #: The columns whose cells are integers in GAM's line item.
 _INTEGER_COLUMNS = frozenset({"priority", "costPerUnitMicros", "units"})
+
+
+@then("Google Ad Manager received one line item, whose creative placeholders are:")
+def then_line_item_placeholders(ctx: dict, datatable: Any) -> None:
+    """The one line item the seller sent GAM carries exactly these creative placeholders, in order.
+
+    Columns: ``size`` (``<width>x<height>``) | ``creativeSizeType`` | ``creativeTemplateId``,
+    empty for a placeholder that names no creative template. The whole list is compared, so a
+    missing, extra or reordered placeholder fails it.
+    """
+    line_items = ctx["env"].gam_objects_sent("LineItemService", "createLineItems")
+    assert len(line_items) == 1, f"expected GAM to receive one line item; it received {len(line_items)}"
+    sent = [
+        {
+            "size": f"{placeholder['size']['width']}x{placeholder['size']['height']}",
+            "creativeSizeType": placeholder.get("creativeSizeType", ""),
+            "creativeTemplateId": str(placeholder.get("creativeTemplateId", "")),
+        }
+        for placeholder in line_items[0]["creativePlaceholders"]
+    ]
+    expected = table_rows(datatable)
+    assert sent == expected, f"expected GAM to receive placeholders {expected}; it received {sent}"
 
 
 @then("Google Ad Manager received these line items, in package order:")

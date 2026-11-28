@@ -3472,12 +3472,21 @@ class MediaPackage(SalesAgentBaseModel):
     paused: bool = False
 
 
+#: What an ad server reported for one pushed creative: placed (``approved``), queued for its own
+#: review (``pending``), or refused (``rejected`` by that review, ``failed`` for anything else).
+AssetPushStatus = Literal["approved", "pending", "rejected", "failed"]
+
+#: The statuses that place nothing at the ad server.
+ASSET_PUSH_REFUSALS: frozenset[AssetPushStatus] = frozenset({"rejected", "failed"})
+
+
 class AssetStatus(SalesAgentBaseModel):
-    asset_id: str | None = None  # Asset identifier
-    creative_id: str | None = None  # The asset's creative_id, echoed
+    """What an ad server push reported for one creative, matched to it by ``creative_id``."""
+
+    creative_id: str  # The asset's creative_id, echoed
     # The ad server's own id for the creative it created; None when nothing was created.
     platform_creative_id: str | None = None
-    status: str  # Status: draft, active, submitted, failed, etc.
+    status: AssetPushStatus
     message: str | None = None  # Status message
     # Seller-side concept enrichment (#1506). AdCP exposes read-only
     # concept_id/concept_name on list_creatives but carries no concept on
@@ -3493,6 +3502,13 @@ class AssetStatus(SalesAgentBaseModel):
     error: SkipJsonSchema[AdCPSalesAgentError | None] = Field(default=None, exclude=True)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    @model_validator(mode="after")
+    def _a_refusal_names_no_platform_creative(self) -> "AssetStatus":
+        """A refused push placed nothing, so it names no ad server creative."""
+        if self.status in ASSET_PUSH_REFUSALS and self.platform_creative_id is not None:
+            raise ValueError(f"a {self.status} push placed no creative, so it names no platform_creative_id")
+        return self
 
 
 # Unified update models

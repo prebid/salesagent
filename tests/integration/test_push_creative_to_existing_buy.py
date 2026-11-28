@@ -28,13 +28,16 @@ session, so a test that stubbed it would grade nothing.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, patch
 
 import pytest
 
+from src.adapters.base import AdServerAdapter
+from src.adapters.google_ad_manager import GoogleAdManager
+from src.adapters.mock_ad_server import MockAdServer
 from src.core.schemas import AssetStatus
-from src.core.tools.media_buy_create import push_creative_to_existing_buy
-from tests.helpers.media_buy_approval import uploadable_creative
+from src.core.tools.media_buy_create import CreativePushFailure, push_creative_to_existing_buy
+from tests.helpers.media_buy_approval import adapter_declaring, uploadable_creative
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -46,8 +49,10 @@ PLATFORM_CONCEPT_ID = "gam-order-90210"
 PLATFORM_CREATIVE_ID = "gam_creative_4242"
 
 
-def _seed_live_buy_with_assigned_creative():
+def _seed_live_buy_with_assigned_creative(platform_order_id: str | None = "gam_order_777") -> tuple[str, str, str, str]:
     """A creative approved but not yet pushed, assigned to a package on a LIVE buy.
+
+    The buy is booked as the ad server order *platform_order_id*; None seeds a buy booked as no order.
 
     Returns (tenant_id, creative_id, media_buy_id, principal_id) -- the principal because
     the buyer-path repository read used for the assertion is principal-scoped.
@@ -74,23 +79,22 @@ def _seed_live_buy_with_assigned_creative():
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
     # platform_order_id is what the function refuses to push without: it is the live ad
     # server order the creative is being attached to.
-    MediaPackageFactory(
-        media_buy=media_buy,
-        package_id="pkg_live",
-        package_config={"product_id": "prod_001", "platform_order_id": "gam_order_777"},
-    )
+    package_config = {"product_id": "prod_001"}
+    if platform_order_id is not None:
+        package_config["platform_order_id"] = platform_order_id
+    MediaPackageFactory(media_buy=media_buy, package_id="pkg_live", package_config=package_config)
     CreativeAssignmentFactory(creative=creative, media_buy=media_buy, package_id="pkg_live")
     return tenant.tenant_id, creative.creative_id, media_buy.media_buy_id, principal.principal_id
 
 
-def _adapter_reporting(creative_id: str) -> MagicMock:
-    """An adapter whose creatives_manager accepts the asset and reports enrichment back."""
-    adapter = MagicMock()
-    adapter.creatives_manager.add_creative_assets.return_value = [
+def _adapter_reporting(creative_id: str) -> AdServerAdapter:
+    """A GAM-capable adapter whose push accepts the asset and reports enrichment back."""
+    adapter = adapter_declaring(GoogleAdManager.capabilities)
+    adapter.add_creative_assets.return_value = [
         AssetStatus(
             creative_id=creative_id,
             platform_creative_id=PLATFORM_CREATIVE_ID,
-            status="active",
+            status="approved",
             concept_id=PLATFORM_CONCEPT_ID,
             concept_name="Q4 Brand Push",
             concept_source="gam_order",
@@ -125,10 +129,8 @@ def test_push_persists_the_adapter_enrichment(integration_db, factory_session):
     """The enrichment the adapter reported is on the ROW after the push returns."""
     tenant_id, creative_id, media_buy_id, principal_id = _seed_live_buy_with_assigned_creative()
 
-    with patch(
-        "src.core.tools.media_buy_create.get_adapter",
-        return_value=_adapter_reporting(creative_id),
-    ):
+    adapter = _adapter_reporting(creative_id)
+    with patch("src.core.tools.media_buy_create.get_adapter", return_value=adapter):
         failure = push_creative_to_existing_buy(
             creative_id=creative_id,
             media_buy_id=media_buy_id,
@@ -136,6 +138,7 @@ def test_push_persists_the_adapter_enrichment(integration_db, factory_session):
         )
 
     assert failure is None, f"push failed: {failure}"
+    adapter.add_creative_assets.assert_called_once_with("gam_order_777", ANY, ANY)
 
     data = _persisted_creative_data(tenant_id, creative_id, principal_id)
     assert data.get("concept_id") == PLATFORM_CONCEPT_ID, (
@@ -147,3 +150,34 @@ def test_push_persists_the_adapter_enrichment(integration_db, factory_session):
         "ad_server_creative_id is what the function's own re-approval guard reads; without "
         "it a second approval pushes this creative to the ad server again"
     )
+
+
+@pytest.mark.parametrize(
+    ("capabilities", "platform_order_id", "refusal"),
+    [
+        pytest.param(
+            MockAdServer.capabilities,
+            "gam_order_777",
+            "Adapter does not support creative upload",
+            id="adapter-traffics-no-creatives",
+        ),
+        pytest.param(
+            GoogleAdManager.capabilities,
+            None,
+            "No ad server order to push to — the buy may not be live yet",
+            id="buy-booked-as-no-order",
+        ),
+    ],
+)
+def test_a_push_with_nowhere_to_go_is_refused(
+    integration_db, factory_session, capabilities, platform_order_id, refusal
+):
+    """The push refuses an adapter that traffics no creatives, and a buy booked as no order, and calls nothing on the adapter."""
+    tenant_id, creative_id, media_buy_id, _principal_id = _seed_live_buy_with_assigned_creative(platform_order_id)
+    adapter = adapter_declaring(capabilities)
+
+    with patch("src.core.tools.media_buy_create.get_adapter", return_value=adapter):
+        failure = push_creative_to_existing_buy(creative_id=creative_id, media_buy_id=media_buy_id, tenant_id=tenant_id)
+
+    assert failure == CreativePushFailure(refusal)
+    assert adapter.mock_calls == []

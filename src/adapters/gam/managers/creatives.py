@@ -7,12 +7,21 @@ for Google Ad Manager campaigns.
 
 import base64
 import logging
+from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 
+from zeep.helpers import serialize_object
+
 from src.core.errors.details import CreativeRejectionDetails
-from src.core.exceptions import AdCPCreativeRejectedError, AdCPInternalError, AdCPSalesAgentError
+from src.core.exceptions import (
+    AdCPConfigurationError,
+    AdCPCreativeRejectedError,
+    AdCPInternalError,
+    AdCPSalesAgentError,
+)
 from src.core.schemas import AssetStatus
 
 from ..utils.error_handler import map_gam_exception
@@ -40,6 +49,43 @@ def _line_item_weights(package_assignments: list[dict[str, Any]]) -> list[tuple[
         else:
             logger.warning(f"Package {assignment.get('package_id')} has no GAM line item; assignment skipped")
     return result
+
+
+@dataclass(frozen=True)
+class LineItemPlaceholder:
+    """A creative placeholder of a GAM line item, read once off GAM's answer.
+
+    ``size`` is None when GAM reports none. ``template_id`` is the creative template a native
+    placeholder's creatives are built against, None when the placeholder names none.
+    """
+
+    size: tuple[int, int] | None
+    template_id: str | None
+
+    @classmethod
+    def from_gam(cls, placeholder: object) -> "LineItemPlaceholder":
+        """Translate one placeholder GAM reported: a Zeep object, or a test stand-in's dict.
+
+        ``serialize_object`` reads both by key, so every field is read the same way on both.
+        """
+        fields = serialize_object(placeholder, dict)
+        size = fields.get("size")
+        template_id = fields.get("creativeTemplateId")
+        return cls(
+            size=(int(size.get("width") or 0), int(size.get("height") or 0)) if size else None,
+            template_id=str(template_id) if template_id else None,
+        )
+
+
+def _asset_placeholders(
+    asset: dict[str, Any], placeholders: dict[str, list[LineItemPlaceholder]]
+) -> list[LineItemPlaceholder]:
+    """The placeholders of the line items an asset's packages map to (see :func:`_line_item_weights`)."""
+    return [
+        placeholder
+        for line_item_id, _ in _line_item_weights(asset.get("package_assignments", []))
+        for placeholder in placeholders.get(line_item_id, [])
+    ]
 
 
 class GAMCreativesManager:
@@ -133,8 +179,12 @@ class GAMCreativesManager:
             else:
                 validation_issues = self._validate_creative_for_gam(asset)
 
+            # The placeholders of the line items this asset's packages map to: its size is checked
+            # against them, and a native one carries the creative template the asset is built against.
+            asset_placeholders = _asset_placeholders(asset, creative_placeholders)
+
             # Add creative size validation against placeholders
-            size_validation_issues = self._validate_creative_size_against_placeholders(asset, creative_placeholders)
+            size_validation_issues = self._validate_creative_size_against_placeholders(asset, asset_placeholders)
             validation_issues.extend(size_validation_issues)
 
             if validation_issues:
@@ -164,11 +214,6 @@ class GAMCreativesManager:
                 self._configure_vast_for_line_items(media_buy_id, asset)
                 created_asset_statuses.append(_approved(asset["creative_id"]))
                 continue
-
-            # Get placeholders for this asset's package assignments
-            asset_placeholders = []
-            for line_item_id, _ in _line_item_weights(asset.get("package_assignments", [])):
-                asset_placeholders.extend(creative_placeholders.get(line_item_id, []))
 
             # Create GAM creative object
             try:
@@ -276,7 +321,7 @@ class GAMCreativesManager:
         lica_service.performLineItemCreativeAssociationAction({"xsi_type": action}, statement.ToStatement())
         logger.info(f"{action} for GAM creative {gam_creative_id}")
 
-    def _get_line_item_placeholders(self, media_buy_id: str, line_item_service) -> dict[str, list]:
+    def _get_line_item_placeholders(self, media_buy_id: str, line_item_service) -> dict[str, list[LineItemPlaceholder]]:
         """The creative placeholders of each line item in an order, keyed by line item id.
 
         Args:
@@ -284,7 +329,7 @@ class GAMCreativesManager:
             line_item_service: GAM LineItemService
 
         Returns:
-            ``{line_item_id: creativePlaceholders}``
+            ``{line_item_id: placeholders}``, each translated once from GAM's answer
         """
         statement = (
             self.client_manager.get_statement_builder()
@@ -294,7 +339,13 @@ class GAMCreativesManager:
         response = line_item_service.getLineItemsByStatement(statement.ToStatement())
         # GAM API returns a LineItemPage object (Zeep SOAP), not a dict
         line_items = getattr(response, "results", [])
-        return {str(item["id"]): getattr(item, "creativePlaceholders", []) for item in line_items}
+        return {
+            str(item["id"]): [
+                LineItemPlaceholder.from_gam(placeholder)
+                for placeholder in getattr(item, "creativePlaceholders", None) or []
+            ]
+            for item in line_items
+        }
 
     def _update_line_items_for_weighted_creatives(self, assets: list[dict[str, Any]], line_item_service) -> None:
         """Update line items to use MANUAL rotation if creatives have non-default weights.
@@ -424,25 +475,18 @@ class GAMCreativesManager:
         return self.validator.validate_creative_asset(asset)
 
     def _validate_creative_size_against_placeholders(
-        self, asset: dict[str, Any], creative_placeholders: dict[str, list]
+        self, asset: dict[str, Any], placeholders: Sequence[LineItemPlaceholder]
     ) -> list[str]:
         """Validate that creative format and asset requirements match available LineItem placeholders.
 
         Args:
             asset: Creative asset dictionary
-            creative_placeholders: Line item id -> that line item's creative placeholders
+            placeholders: The placeholders of the asset's line items (:func:`_asset_placeholders`)
 
         Returns:
             List of validation error messages
         """
         validation_errors = []
-
-        # Helper function to safely get attribute from dict or object
-        def _get_attr(obj, name, default=None):
-            """Get attribute from dict or object."""
-            if isinstance(obj, dict):
-                return obj.get(name, default)
-            return getattr(obj, name, default)
 
         # Get asset dimensions
         try:
@@ -460,61 +504,54 @@ class GAMCreativesManager:
                 logger.warning(f"Creative {asset.get('creative_id', 'unknown')} has no package assignments")
             return validation_errors
 
-        placeholders = [p for line_item_id in line_item_ids for p in creative_placeholders.get(line_item_id, [])]
         matching_placeholders_found = False
         for placeholder in placeholders:
-            # Placeholder can be a Zeep object or dict (in tests)
-            placeholder_size = _get_attr(placeholder, "size", None)
-            if not placeholder_size:
+            if placeholder.size is None:
                 continue
-            placeholder_width = _get_attr(placeholder_size, "width", 0)
-            placeholder_height = _get_attr(placeholder_size, "height", 0)
 
             # 1x1 placeholders are wildcards in GAM (native templates or programmatic)
             # They accept creatives of any size
-            if placeholder_width == 1 and placeholder_height == 1:
+            if placeholder.size == (1, 1):
                 matching_placeholders_found = True
-                template_id = _get_attr(placeholder, "creativeTemplateId", None)
-                if template_id:
+                if placeholder.template_id:
                     logger.info(
-                        f"Creative {asset_width}x{asset_height} matches 1x1 placeholder "
-                        f"with GAM native template {template_id}"
+                        "Creative %sx%s matches 1x1 placeholder with GAM native template %s",
+                        asset_width,
+                        asset_height,
+                        placeholder.template_id,
                     )
                 else:
                     logger.info(
-                        f"Creative {asset_width}x{asset_height} matches 1x1 wildcard placeholder "
-                        f"(programmatic/third-party)"
+                        "Creative %sx%s matches 1x1 wildcard placeholder (programmatic/third-party)",
+                        asset_width,
+                        asset_height,
                     )
                 break
 
             # Standard placeholders require exact dimension match
-            if asset_width == placeholder_width and asset_height == placeholder_height:
+            if placeholder.size == (asset_width, asset_height):
                 matching_placeholders_found = True
                 break
 
         if not matching_placeholders_found:
-            available_sizes = []
-            for placeholder in placeholders:
-                size = _get_attr(placeholder, "size", None)
-                if size:
-                    available_sizes.append(f"{_get_attr(size, 'width', 0)}x{_get_attr(size, 'height', 0)}")
-
+            available_sizes = {f"{size[0]}x{size[1]}" for size in (p.size for p in placeholders) if size}
             validation_errors.append(
                 f"Creative size {asset_width}x{asset_height} does not match any LineItem placeholders. "
-                f"Available sizes in assigned packages: {', '.join(set(available_sizes))}"
+                f"Available sizes in assigned packages: {', '.join(available_sizes)}"
             )
 
         return validation_errors
 
     def _create_gam_creative(
-        self, asset: dict[str, Any], creative_type: str, placeholders: list[dict] = None
+        self, asset: dict[str, Any], creative_type: str, placeholders: Sequence[LineItemPlaceholder] = ()
     ) -> dict[str, Any] | None:
         """Create a GAM creative object based on the asset type.
 
         Args:
             asset: Creative asset dictionary
             creative_type: Type of creative to create
-            placeholders: List of creative placeholders for validation
+            placeholders: The creative placeholders of the asset's line items, as GAM reports
+                them; a native one carries the creative template its creatives use
 
         Returns:
             GAM creative dictionary or None if unsupported
@@ -522,7 +559,7 @@ class GAMCreativesManager:
         if creative_type == "third_party_tag":
             return self._create_third_party_creative(asset)
         elif creative_type == "native":
-            return self._create_native_creative(asset)
+            return self._create_native_creative(asset, self._get_native_template_id(asset, placeholders))
         elif creative_type == "html5":
             return self._create_html5_creative(asset)
         elif creative_type == "hosted_asset":
@@ -551,9 +588,8 @@ class GAMCreativesManager:
         self._add_tracking_urls_to_creative(creative, asset)
         return creative
 
-    def _create_native_creative(self, asset: dict[str, Any]) -> dict[str, Any]:
-        """Create a native creative for GAM."""
-        template_id = self._get_native_template_id(asset)
+    def _create_native_creative(self, asset: dict[str, Any], template_id: str) -> dict[str, Any]:
+        """Create a native creative (a GAM TemplateCreative) against the given creative template."""
         template_variables = self._build_native_template_variables(asset)
 
         creative = {
@@ -769,10 +805,42 @@ class GAMCreativesManager:
         else:
             return "image"
 
-    def _get_native_template_id(self, asset: dict[str, Any]) -> str:
-        """Get the GAM native template ID for the asset."""
-        # This would need to be configured per network
-        return "123456"  # Placeholder
+    def _get_native_template_id(self, asset: dict[str, Any], placeholders: Sequence[LineItemPlaceholder]) -> str:
+        """The GAM creative template a native asset is built against.
+
+        GAM's own answer: the ``creativeTemplateId`` on the native placeholders of the asset's
+        line items. ``GAMOrdersManager.create_line_items`` sets it when it books a line item,
+        from the format's ``creative_placeholder.creative_template_id`` or else the product's
+        ``implementation_config.native_style_id``; a programmatic 1x1 placeholder carries none.
+        One GAM creative carries one template and serves every line item it is placed on, so
+        those placeholders must name exactly one.
+
+        None, or two different ones, is a seller misconfiguration the buyer cannot correct:
+        CONFIGURATION_ERROR, terminal, which carries no ``details``
+        (``docs/snippets/compliance-error-codes.mdx`` § CONFIGURATION_ERROR @ 3.2.7). The template
+        ids are the seller's, so they go to the log. ``add_creative_assets`` fails this one
+        creative with the error on its status. 3.2.7 places the code at the operation level, so a
+        caller answering a buyer reports the creative's packages in its ``assignment_errors`` and
+        never puts the code in the creative's own ``errors[]``. Ungraded at 3.2.7: no storyboard
+        under ``dist/compliance/3.2.7/`` grades a seller emitting it. There is no fallback id.
+        """
+        template_ids = sorted({p.template_id for p in placeholders if p.template_id})
+        if len(template_ids) == 1:
+            return template_ids[0]
+        if template_ids:
+            logger.error(
+                "Native creative %s: its line items name different GAM creative templates %s; a GAM "
+                "creative carries one, so the products it is assigned to must set the same native_style_id",
+                asset.get("creative_id"),
+                template_ids,
+            )
+        else:
+            logger.error(
+                "Native creative %s: no GAM creative template on its line items' placeholders; set "
+                "native_style_id on the product (a line item booked before it was set keeps its placeholders)",
+                asset.get("creative_id"),
+            )
+        raise AdCPConfigurationError(field="native_style_id")
 
     def _build_native_template_variables(self, asset: dict[str, Any]) -> list[dict[str, Any]]:
         """Build native template variables from asset."""

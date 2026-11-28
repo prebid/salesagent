@@ -57,17 +57,19 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.schemas import (
+    AssetStatus,
     CreateMediaBuyRequest,
     CreateMediaBuyResult,
     CreateMediaBuySubmitted,
     CreateMediaBuySuccess,
     PricingOption,
 )
-from tests.factories import stamp_format_identity
+from tests.factories import CreativeFactory, PackageRequestFactory, stamp_format_identity
 from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.harness.media_buy_create import MediaBuyCreateEnv
 from tests.helpers.envelope_assertions import assert_envelope_shape, raises_adcp
+from tests.helpers.media_buy_approval import uploadable_creative
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -340,6 +342,17 @@ class TestCreativeMissingUrl:
             assert exc_info.value.error_code == "VALIDATION_ERROR"
 
 
+#: A creative the ad server does not hold yet (no ``ad_server_creative_id``), so the push creates it.
+_UNPUSHED_CREATIVE_ID = "creative_no_platform"
+
+
+def _request_naming_the_unpushed_creative() -> CreateMediaBuyRequest:
+    """One package carrying ``creative_ids``, which is what reaches the inline upload path."""
+    return _make_request(
+        packages=[PackageRequestFactory.payload(product_id="prod_1", creative_ids=[_UNPUSHED_CREATIVE_ID])]
+    )
+
+
 class TestCreativeUploadFailure:
     """GAP-004: Creative upload failure raises CREATIVE_UPLOAD_FAILED.
 
@@ -354,43 +367,21 @@ class TestCreativeUploadFailure:
         _create_media_buy_impl wraps it as ToolError('CREATIVE_UPLOAD_FAILED').
 
         Exercises the real code path at media_buy_create.py:3132-3168 by seeding a
-        real creative (no platform_creative_id) and an adapter whose upload raises.
+        real creative (no ad_server_creative_id) and an adapter whose upload raises.
 
         Anchors: media_buy_create.py:3162-3168
         """
-        # Request with a package that has creative_ids (triggers the creative upload path)
-        req = _make_request(
-            packages=[
-                {
-                    "product_id": "prod_1",
-                    "budget": 5000.0,
-                    "pricing_option_id": "cpm_usd_fixed",
-                    "creative_ids": ["creative_no_platform"],
-                },
-            ]
-        )
+        req = _request_naming_the_unpushed_creative()
 
         with MediaBuyCreateEnv() as env:
-            from tests.factories import CreativeFactory
-
             tenant, principal = env.setup_default_data()
             env.setup_product_chain(tenant)
-            # Creative exists, no platform_creative_id, with extractable url/dimensions
-            # so _build_adapter_asset_from_creative succeeds and the upload runs.
-            # status is load-bearing: media_buy_create.py holds pending_review creatives
-            # back from the adapter upload (#1038), so the upload this test exercises only
-            # runs for a creative that is NOT pending_review. It used to run by accident —
-            # CreativeFactory defaulted to the non-spec "pending", which fell through to
-            # the upload branch. Now that the factory writes a real AdCP status, the state
-            # this test needs has to be stated (salesagent-zm5l).
-            CreativeFactory(
+            uploadable_creative(
+                CreativeFactory,
                 tenant=tenant,
                 principal=principal,
-                creative_id="creative_no_platform",
-                format="display_300x250",
-                agent_url="https://creative.adcontextprotocol.org",
+                creative_id=_UNPUSHED_CREATIVE_ID,
                 status="approved",
-                data={"url": "https://example.com/ad.jpg", "width": 300, "height": 250},
             )
 
             # Adapter create succeeds; the creative upload raises a generic exception.
@@ -402,6 +393,41 @@ class TestCreativeUploadFailure:
 
             assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
             assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
+
+    def test_the_push_status_is_read_by_creative_id(self, integration_db):
+        """The row takes its own creative's push status, not the first one the ad server reports.
+
+        The push reports another creative's placement first, naming that creative's ad server
+        id, then this creative's ``failed`` status. Read by position, the row would record the
+        other creative's id as its own, and the next push would associate that creative instead
+        of creating this one. Read by ``creative_id``, the refusal records nothing.
+        """
+        from src.core.database.repositories.uow import CreativeUoW
+
+        with MediaBuyCreateEnv() as env:
+            tenant, principal = env.setup_default_data()
+            env.setup_product_chain(tenant)
+            uploadable_creative(
+                CreativeFactory,
+                tenant=tenant,
+                principal=principal,
+                creative_id=_UNPUSHED_CREATIVE_ID,
+                status="approved",
+            )
+            env.mock["adapter"].return_value.add_creative_assets.return_value = [
+                AssetStatus(creative_id="another_creative", platform_creative_id="gam_other", status="approved"),
+                AssetStatus(creative_id=_UNPUSHED_CREATIVE_ID, status="failed", message="no native template"),
+            ]
+
+            env.call_impl(req=_request_naming_the_unpushed_creative())
+
+            with CreativeUoW(tenant.tenant_id) as uow:
+                assert uow.creatives is not None
+                row = uow.creatives.get_by_id(_UNPUSHED_CREATIVE_ID, principal.principal_id)
+                assert row is not None, "the seeded creative row is missing"
+                assert "ad_server_creative_id" not in (row.data or {}), (
+                    f"the row recorded another creative's ad server id; persisted data: {row.data}"
+                )
 
 
 # ===========================================================================

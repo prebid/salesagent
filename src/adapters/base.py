@@ -136,12 +136,15 @@ class TargetingCapabilities:
         return errors
 
 
-@dataclass
+@dataclass(frozen=True)
 class AdapterCapabilities:
     """UI and feature capabilities declared by an adapter.
 
     Controls which UI sections are shown and what features are available.
     Used by admin UI to show/hide relevant configuration sections.
+
+    Frozen: one instance per adapter class is its declaration, so a variant is built with
+    ``dataclasses.replace`` rather than written onto the shared instance.
     """
 
     # Inventory management
@@ -163,7 +166,9 @@ class AdapterCapabilities:
     supports_webhooks: bool = False  # Supports webhook notifications
     supports_realtime_reporting: bool = False  # Supports real-time delivery reporting
 
-    # Creatives: sync_creatives pushes an approved creative assigned to a booked package
+    # Creatives: the adapter takes creatives onto line items it booked earlier. Gates every push
+    # made after booking: sync_creatives' assignment push, the approval executor's push and the
+    # retroactive push. create_media_buy's push of the creatives it names reaches every adapter.
     supports_creative_trafficking: bool = False
 
 
@@ -599,8 +604,16 @@ class AdServerAdapter(ABC):
     def add_creative_assets(
         self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
     ) -> list[AssetStatus]:
-        """Adds creative assets to an existing media buy."""
+        """Adds creative assets to an existing media buy: one status per asset, naming its creative."""
         pass
+
+    def approve_order(self, order_id: str) -> bool:
+        """Approve the booked order once its creatives are on it. True when there is nothing to approve.
+
+        An ad server that books an order for later approval overrides this; every other adapter
+        has nothing to approve.
+        """
+        return True
 
     @abstractmethod
     def associate_creatives(self, line_item_ids: list[str], platform_creative_ids: list[str]) -> list[dict[str, Any]]:

@@ -534,10 +534,14 @@ class MediaBuyCreateEnv(
             order_name_template=None,
             tenant_ai_config=None,
         ).validate_media_buy_request
-        mock_adapter.add_creative_assets.return_value = None
+        # A push answers one status per creative; this stand-in reports none.
+        mock_adapter.add_creative_assets.return_value = []
         mock_adapter.associate_creatives.return_value = None
         mock_adapter.manual_approval_required = False
         mock_adapter.manual_approval_operations = []
+        # What the Mock adapter declares, as the live e2e server's MockAdServer does: no creative
+        # trafficking, so the approval and retroactive pushes skip it on every transport.
+        mock_adapter.capabilities = MockAdServer.capabilities
         self.mock["adapter"].return_value = mock_adapter
 
         # The audit logger is NOT patched: it is our own code, and the audit trail it writes
@@ -630,11 +634,11 @@ class MediaBuyCreateEnv(
         fields is the only place they are observable at all: the click destination appears
         in no response the buyer sees, which is precisely why dropping it is silent.
 
-        Reads ``adapter.add_creative_assets``, the spelling the SYNCHRONOUS create path
-        uses. The approval and retroactive-push paths go through
-        ``adapter.creatives_manager.add_creative_assets`` instead; a scenario wanting those
-        needs its own seam rather than a widened one here, because which path ran is part of
-        what it is asserting.
+        Reads ``adapter.add_creative_assets``, the call the SYNCHRONOUS create path makes.
+        The approval and retroactive-push paths make it too, but only on an adapter that
+        declares creative trafficking, which this env's Mock adapter does not; a scenario
+        wanting those needs its own seam rather than a widened one here, because which path
+        ran is part of what it is asserting.
 
         Every adapter in :meth:`adapter_mocks` is read: an upload the update path makes lands
         on the update module's adapter and nowhere else, so reading only the create module's

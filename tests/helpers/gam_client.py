@@ -48,14 +48,32 @@ class SoapObject(dict):
             raise AttributeError(name) from exc
 
 
-def gam_line_item(name: str, *, item_id: str = "1001", sizes: tuple[tuple[int, int], ...] = ((728, 90),)) -> SoapObject:
-    """One line item in a GAM order, carrying the creative sizes it accepts."""
+def gam_placeholder(width: int, height: int, *, template_id: int | None = None) -> SoapObject:
+    """One creative placeholder as GAM reports it off a line item.
+
+    NATIVE naming its creative template, as the booking writes a native slot, when *template_id*
+    is given; PIXEL of this size otherwise.
+    """
+    placeholder = SoapObject(
+        size=SoapObject(width=width, height=height), creativeSizeType="PIXEL" if template_id is None else "NATIVE"
+    )
+    if template_id is not None:
+        placeholder["creativeTemplateId"] = template_id
+    return placeholder
+
+
+def gam_line_item(
+    name: str,
+    *,
+    item_id: str = "1001",
+    sizes: tuple[tuple[int, int], ...] = ((728, 90),),
+    template_id: int | None = None,
+) -> SoapObject:
+    """One line item in a GAM order, carrying the creative sizes it accepts (see :func:`gam_placeholder`)."""
     return SoapObject(
         name=name,
         id=item_id,
-        creativePlaceholders=[
-            SoapObject(size=SoapObject(width=width, height=height), creativeSizeType="PIXEL") for width, height in sizes
-        ],
+        creativePlaceholders=[gam_placeholder(width, height, template_id=template_id) for width, height in sizes],
     )
 
 
