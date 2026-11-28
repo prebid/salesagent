@@ -104,7 +104,7 @@ def given_seller_sells_through_gam(
 
 @given("the seller requires manual approval of its Google Ad Manager operations")
 def given_seller_requires_gam_manual_approval(ctx: dict) -> None:
-    """The seller's GAM connection queues orders, line item changes and creative pushes for its approval.
+    """The seller's GAM connection queues orders and line item changes for its approval.
 
     A scenario step rather than a clause of the seller sentence, because a feature that states
     the seller once in its Background needs the fact for some of its scenarios only.
@@ -116,7 +116,7 @@ def given_seller_requires_gam_manual_approval(ctx: dict) -> None:
 def given_package_selects_display_and_native_options(ctx: dict) -> None:
     """The package names both of the product's ``GAM_FORMAT_OPTIONS`` by ref, and no deprecated format_ids.
 
-    ``media-buy/package-request.json``: a package names its formats on one arm, so the
+    ``media-buy/package-request.json @ 3.2.7``: a package names its formats on one arm, so the
     deprecated ``format_ids`` the shared builder puts on it goes.
     """
     from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
@@ -849,6 +849,20 @@ def then_creative_failed_with(ctx: dict, creative_id: str, code: str, recovery: 
     errors = wire_entry_errors(ctx, "creatives", creative_id=creative_id)
     reported = (entry.get("action"), [(error.get("code"), error.get("recovery")) for error in errors])
     assert reported == ("failed", [(code, recovery)]), f"expected {code} {recovery} on a failed entry; got {entry}"
+
+
+@then(parsers.parse('creative "{creative_id}" is reported unchanged, with no error of its own'))
+def then_creative_unchanged_without_error(ctx: dict, creative_id: str) -> None:
+    """The buyer's entry for the creative is ``unchanged`` and its ``errors[]`` is empty.
+
+    An operation-level code (CONFIGURATION_ERROR, ``docs/snippets/compliance-error-codes.mdx``
+    § CONFIGURATION_ERROR @ 3.2.7, "Wire placement") never rides a creative's own entry: what the
+    ad server did not take is the entry's ``assignment_errors``.
+    """
+    entry = wire_entry(ctx, "creatives", creative_id=creative_id)
+    errors = wire_entry_errors(ctx, "creatives", creative_id=creative_id)
+    reported = (entry.get("action"), errors)
+    assert reported == ("unchanged", []), f"expected an unchanged entry with no errors; got {entry}"
 
 
 @then(parsers.parse('Google Ad Manager holds one creative, showing "{url}"'))

@@ -972,7 +972,7 @@ class MockAdServer(AdServerAdapter):
         return self._build_create_success(media_buy_id, packages)
 
     def add_creative_assets(
-        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime, *, already_approved: bool = False
+        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
     ) -> list[AssetStatus]:
         """Simulates adding creatives with HITL support."""
 

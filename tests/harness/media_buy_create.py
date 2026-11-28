@@ -534,7 +534,8 @@ class MediaBuyCreateEnv(
             order_name_template=None,
             tenant_ai_config=None,
         ).validate_media_buy_request
-        mock_adapter.add_creative_assets.return_value = None
+        # A push answers one status per creative; this stand-in reports none.
+        mock_adapter.add_creative_assets.return_value = []
         mock_adapter.associate_creatives.return_value = None
         mock_adapter.manual_approval_required = False
         mock_adapter.manual_approval_operations = []
@@ -634,10 +635,10 @@ class MediaBuyCreateEnv(
         in no response the buyer sees, which is precisely why dropping it is silent.
 
         Reads ``adapter.add_creative_assets``, the call the SYNCHRONOUS create path makes.
-        The approval and retroactive-push paths make it with ``already_approved=True``, but
-        only on an adapter that declares creative trafficking, which this env's Mock adapter
-        does not; a scenario wanting those needs its own seam rather than a widened one here,
-        because which path ran is part of what it is asserting.
+        The approval and retroactive-push paths make it too, but only on an adapter that
+        declares creative trafficking, which this env's Mock adapter does not; a scenario
+        wanting those needs its own seam rather than a widened one here, because which path
+        ran is part of what it is asserting.
 
         Every adapter in :meth:`adapter_mocks` is read: an upload the update path makes lands
         on the update module's adapter and nowhere else, so reading only the create module's

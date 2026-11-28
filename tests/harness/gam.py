@@ -308,8 +308,8 @@ class GamSellerMixin:
     def require_manual_approval_of_gam_operations(self) -> None:
         """The seller's GAM connection requires manual approval (``gam_manual_approval_required``).
 
-        The adapter then queues the orders, line item changes and creative pushes it is asked
-        for, for the seller to approve, unless the call carries an approval already given.
+        The adapter then queues the orders and line item changes it is asked for, for the seller
+        to approve, unless the call carries an approval already given.
         """
         tenant, _principal = self.setup_default_data()
         tenant.adapter_config.gam_manual_approval_required = True

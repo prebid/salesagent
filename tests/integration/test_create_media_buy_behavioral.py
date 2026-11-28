@@ -57,14 +57,13 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.schemas import (
-    AssetStatus,
     CreateMediaBuyRequest,
     CreateMediaBuyResult,
     CreateMediaBuySubmitted,
     CreateMediaBuySuccess,
     PricingOption,
 )
-from tests.factories import CreativeFactory, stamp_format_identity
+from tests.factories import CreativeFactory, PackageRequestFactory, stamp_format_identity
 from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.harness.media_buy_create import MediaBuyCreateEnv
@@ -346,20 +345,6 @@ class TestCreativeMissingUrl:
 _UNPUSHED_CREATIVE_ID = "creative_no_platform"
 
 
-def _request_naming_the_unpushed_creative() -> CreateMediaBuyRequest:
-    """One package carrying ``creative_ids``, which is what reaches the inline upload path."""
-    return _make_request(
-        packages=[
-            {
-                "product_id": "prod_1",
-                "budget": 5000.0,
-                "pricing_option_id": "cpm_usd_fixed",
-                "creative_ids": [_UNPUSHED_CREATIVE_ID],
-            },
-        ]
-    )
-
-
 class TestCreativeUploadFailure:
     """GAP-004: Creative upload failure raises CREATIVE_UPLOAD_FAILED.
 
@@ -378,7 +363,10 @@ class TestCreativeUploadFailure:
 
         Anchors: media_buy_create.py:3162-3168
         """
-        req = _request_naming_the_unpushed_creative()
+        # A package carrying ``creative_ids`` is what reaches the inline upload path.
+        req = _make_request(
+            packages=[PackageRequestFactory.payload(product_id="prod_1", creative_ids=[_UNPUSHED_CREATIVE_ID])]
+        )
 
         with MediaBuyCreateEnv() as env:
             tenant, principal = env.setup_default_data()
@@ -400,51 +388,6 @@ class TestCreativeUploadFailure:
 
             assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
             assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
-
-    def test_failed_upload_status_leaves_no_ad_server_creative_id(self, integration_db):
-        """An AssetStatus of ``failed`` is a refusal, not a creative (GH #1516).
-
-        The GAM creatives manager reports a creative it could not build (a native creative
-        with no template, say) as ``status="failed"`` rather than raising. The buy still
-        completes, but the push placed nothing, so the row must keep no
-        ``ad_server_creative_id``, whatever id the status names: that field is what the
-        next push reads to decide between creating the creative and associating an id.
-        The push reports another creative's result first, so the status is the one matched
-        by this creative's id and not the first one.
-        """
-        from src.core.database.repositories.uow import CreativeUoW
-
-        req = _request_naming_the_unpushed_creative()
-
-        with MediaBuyCreateEnv() as env:
-            tenant, principal = env.setup_default_data()
-            env.setup_product_chain(tenant)
-            uploadable_creative(
-                CreativeFactory,
-                tenant=tenant,
-                principal=principal,
-                creative_id=_UNPUSHED_CREATIVE_ID,
-                status="approved",
-            )
-            env.mock["adapter"].return_value.add_creative_assets.return_value = [
-                AssetStatus(creative_id="another_creative", platform_creative_id="gam_other", status="approved"),
-                AssetStatus(
-                    creative_id=_UNPUSHED_CREATIVE_ID,
-                    platform_creative_id="gam_creative_4242",
-                    status="failed",
-                    message="no native template",
-                ),
-            ]
-
-            env.call_impl(req=req)
-
-            with CreativeUoW(tenant.tenant_id) as uow:
-                assert uow.creatives is not None
-                row = uow.creatives.get_by_id(_UNPUSHED_CREATIVE_ID, principal.principal_id)
-                assert row is not None, "the seeded creative row is missing"
-                assert "ad_server_creative_id" not in (row.data or {}), (
-                    f"a failed push must not record an ad server id; persisted data: {row.data}"
-                )
 
 
 # ===========================================================================

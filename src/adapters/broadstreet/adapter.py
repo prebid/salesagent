@@ -462,7 +462,7 @@ class BroadstreetAdapter(AdServerAdapter):
         )
 
     def add_creative_assets(
-        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime, *, already_approved: bool = False
+        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
     ) -> list[AssetStatus]:
         """Add creative assets to a media buy.
 

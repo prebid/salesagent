@@ -12,6 +12,7 @@ from src.core.database.repositories.media_buy import stored_line_item_id
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.errors.details import CreativeRefDetails, EntityRefDetails, ValidationDetails
 from src.core.exceptions import (
+    AdCPConfigurationError,
     AdCPCreativeNotFoundError,
     AdCPPackageNotFoundError,
     AdCPValidationError,
@@ -474,7 +475,13 @@ def _process_assignments(
                     assigned.remove(package_id)
                     errors[package_id] = f"The ad server did not accept creative {creative_id} for package {package_id}"
                 index = next(i for i, r in enumerate(results) if r.creative_id == creative_id)
-                if creative_id in referenced_only and not assigned:
+                # A seller misconfiguration never rides the creative's own errors[]: 3.2.7 places
+                # CONFIGURATION_ERROR at the operation level ("Wire placement",
+                # docs/snippets/compliance-error-codes.mdx § CONFIGURATION_ERROR @ 3.2.7), so the
+                # packages in assignment_errors are the creative's whole report. Ungraded at 3.2.7:
+                # no storyboard under dist/compliance/3.2.7/ grades a seller emitting it.
+                operation_level = isinstance(failure.error, AdCPConfigurationError)
+                if creative_id in referenced_only and not assigned and not operation_level:
                     # Nothing of a referenced creative was assigned. core/error.json: correctable
                     # is "fix the request and resend", so the ad server's own fault keeps its
                     # code; the adapter's own refusal (a size) has no error and is the buyer's.

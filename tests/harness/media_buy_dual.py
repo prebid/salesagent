@@ -106,7 +106,8 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         mock_adapter.manual_approval_required = False
         mock_adapter.manual_approval_operations = []
         mock_adapter.validate_media_buy_request.return_value = None
-        mock_adapter.add_creative_assets.return_value = None
+        # A push answers one status per creative; this stand-in reports none.
+        mock_adapter.add_creative_assets.return_value = []
         mock_adapter.associate_creatives.return_value = None
 
         mock_adapter.update_media_buy.side_effect = make_adapter_update_side_effect()

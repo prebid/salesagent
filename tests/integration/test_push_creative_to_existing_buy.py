@@ -32,6 +32,7 @@ from unittest.mock import ANY, patch
 
 import pytest
 
+from src.adapters.base import AdServerAdapter
 from src.adapters.google_ad_manager import GoogleAdManager
 from src.adapters.mock_ad_server import MockAdServer
 from src.core.schemas import AssetStatus
@@ -48,7 +49,7 @@ PLATFORM_CONCEPT_ID = "gam-order-90210"
 PLATFORM_CREATIVE_ID = "gam_creative_4242"
 
 
-def _seed_live_buy_with_assigned_creative(platform_order_id: str | None = "gam_order_777"):
+def _seed_live_buy_with_assigned_creative(platform_order_id: str | None = "gam_order_777") -> tuple[str, str, str, str]:
     """A creative approved but not yet pushed, assigned to a package on a LIVE buy.
 
     The buy is booked as the ad server order *platform_order_id*; None seeds a buy booked as no order.
@@ -86,14 +87,14 @@ def _seed_live_buy_with_assigned_creative(platform_order_id: str | None = "gam_o
     return tenant.tenant_id, creative.creative_id, media_buy.media_buy_id, principal.principal_id
 
 
-def _adapter_reporting(creative_id: str):
+def _adapter_reporting(creative_id: str) -> AdServerAdapter:
     """A GAM-capable adapter whose push accepts the asset and reports enrichment back."""
     adapter = adapter_declaring(GoogleAdManager.capabilities)
     adapter.add_creative_assets.return_value = [
         AssetStatus(
             creative_id=creative_id,
             platform_creative_id=PLATFORM_CREATIVE_ID,
-            status="active",
+            status="approved",
             concept_id=PLATFORM_CONCEPT_ID,
             concept_name="Q4 Brand Push",
             concept_source="gam_order",
@@ -137,8 +138,7 @@ def test_push_persists_the_adapter_enrichment(integration_db, factory_session):
         )
 
     assert failure is None, f"push failed: {failure}"
-    # The creative's approval is what this push carries, so the adapter's own gate must not queue it again.
-    adapter.add_creative_assets.assert_called_once_with("gam_order_777", ANY, ANY, already_approved=True)
+    adapter.add_creative_assets.assert_called_once_with("gam_order_777", ANY, ANY)
 
     data = _persisted_creative_data(tenant_id, creative_id, principal_id)
     assert data.get("concept_id") == PLATFORM_CONCEPT_ID, (

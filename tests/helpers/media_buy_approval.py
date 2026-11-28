@@ -35,8 +35,7 @@ def adapter_declaring(capabilities: AdapterCapabilities) -> AdServerAdapter:
 
     Spec'd on the contract, so a call or an attribute off it fails, and carrying an adapter's
     real capabilities, so a gate on them is graded rather than answered by a truthy child mock.
-    What one adapter builds beyond the contract, such as GAM's ``orders_manager``, is not here:
-    a test that models that adapter attaches it.
+    The capabilities are frozen, so holding an adapter class's own declaration here is safe.
     """
     from unittest.mock import create_autospec
 
@@ -44,6 +43,8 @@ def adapter_declaring(capabilities: AdapterCapabilities) -> AdServerAdapter:
 
     adapter = create_autospec(AdServerAdapter, instance=True)
     adapter.capabilities = capabilities
+    # What the contract answers for an order with nothing standing in the way of its approval.
+    adapter.approve_order.return_value = True
     return adapter
 
 

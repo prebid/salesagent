@@ -1270,7 +1270,7 @@ class TestCreateMediaBuyAdapterInteraction:
         # Two signature changes: the adapters read an AdapterCreateRequest projected from the
         # buyer's DTO through one of its two constructors (ecfdd7771) — nothing builds one by
         # hand — and the function takes the caller's adapter rather than an identity to build
-        # one from (GH #1516), so there is nothing to patch here.
+        # one from, so there is nothing to patch here.
         with pytest.raises(RuntimeError, match="GAM API timeout"):
             _execute_adapter_media_buy_creation(
                 request=AdapterCreateRequest.from_buyer_request(_make_request()),

@@ -779,6 +779,10 @@ class GoogleAdManager(AdServerAdapter):
             return False
         return self.orders_manager.archive_order(order_id)
 
+    def approve_order(self, order_id: str) -> bool:
+        """Approve a booked GAM order once its creatives are on it (delegated to orders manager)."""
+        return self._require_orders_manager().approve_order(order_id)
+
     def get_advertisers(
         self, search_query: str | None = None, limit: int = 500, fetch_all: bool = False
     ) -> list[dict[str, Any]]:
@@ -795,9 +799,13 @@ class GoogleAdManager(AdServerAdapter):
         return self.orders_manager.get_advertisers(search_query=search_query, limit=limit, fetch_all=fetch_all)
 
     def add_creative_assets(
-        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime, *, already_approved: bool = False
+        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
     ) -> list[AssetStatus]:
-        """Create and associate creatives with line items (delegated to creatives manager)."""
+        """Create and associate creatives with line items (delegated to creatives manager).
+
+        No approval gate here: whether a push runs is decided before it is asked for, so each
+        push this receives carries the approval it needs.
+        """
 
         # Validate that creatives manager is initialized
         if not self.creatives_manager:
@@ -811,51 +819,9 @@ class GoogleAdManager(AdServerAdapter):
 
             self.log(f"[red]Error: {error_msg}[/red]")
             return [
-                AssetStatus(
-                    asset_id=asset.get("asset_id", f"failed_{i}"),
-                    status="failed",
-                    message=error_msg,
-                    creative_id=asset["creative_id"],
-                )
-                for i, asset in enumerate(assets)
+                AssetStatus(creative_id=asset["creative_id"], status="failed", message=error_msg) for asset in assets
             ]
 
-        # Check if manual approval is required for creative assets; a push that carries an
-        # approval already given (the buy's, or the creative's) would only be queued again
-        if not already_approved and self._requires_manual_approval("add_creative_assets"):
-            self.log("[yellow]Manual approval mode - creating workflow step for creative asset approval[/yellow]")
-
-            # Create approval workflow step
-            step_id = self.workflow_manager.create_approval_workflow_step(media_buy_id, "creative_assets_approval")
-
-            if step_id:
-                # Return asset statuses indicating they are awaiting approval
-                asset_statuses: list[AssetStatus] = []
-                for asset in assets:
-                    asset_statuses.append(
-                        AssetStatus(
-                            asset_id=asset.get("asset_id", f"pending_{len(asset_statuses)}"),
-                            status="submitted",
-                            message=f"Creative asset submitted for approval. Workflow step: {step_id}",
-                            creative_id=asset["creative_id"],
-                        )
-                    )
-                return asset_statuses
-            else:
-                # Return failed statuses if workflow creation failed
-                asset_statuses = []
-                for asset in assets:
-                    asset_statuses.append(
-                        AssetStatus(
-                            asset_id=asset.get("asset_id", f"failed_{len(asset_statuses)}"),
-                            status="failed",
-                            message="Failed to create approval workflow step",
-                            creative_id=asset["creative_id"],
-                        )
-                    )
-                return asset_statuses
-
-        # Automatic mode - process creatives directly
         # Pass placement_targeting_map for creative-level targeting (adcp#208)
         placement_targeting_map = getattr(self, "_placement_targeting_map", None)
         return self.creatives_manager.add_creative_assets(

@@ -216,40 +216,15 @@ _PUSHED_ASSETS = [
 ]
 
 
-class TestGAMCreativePushApprovalGate:
-    """A creative push the seller must approve is queued, unless it carries an approval already given."""
-
-    def test_a_push_the_seller_must_approve_is_queued(self, adapter):
-        with (
-            patch.object(adapter, "_requires_manual_approval", return_value=True),
-            patch.object(adapter.workflow_manager, "create_approval_workflow_step", return_value="step_1") as step,
-            patch.object(adapter.creatives_manager, "add_creative_assets") as push,
-        ):
-            statuses = adapter.add_creative_assets("9000001", _PUSHED_ASSETS, datetime.now(UTC))
-
-        assert [(status.creative_id, status.status) for status in statuses] == [("cr_1", "submitted")]
-        step.assert_called_once_with("9000001", "creative_assets_approval")
-        push.assert_not_called()
+class TestGAMCreativePushUnconfigured:
+    """A creative push GAM is not configured for refuses each creative by name."""
 
     def test_a_push_an_unconfigured_adapter_refuses_names_each_creative(self, adapter):
         """The refusal names its creative, so a caller matching statuses by creative_id reads its message."""
         with patch.object(adapter, "creatives_manager", None):
-            statuses = adapter.add_creative_assets("9000001", _PUSHED_ASSETS, datetime.now(UTC), already_approved=True)
+            statuses = adapter.add_creative_assets("9000001", _PUSHED_ASSETS, datetime.now(UTC))
 
         assert [(status.creative_id, status.status) for status in statuses] == [("cr_1", "failed")]
-
-    def test_an_already_approved_push_passes_the_gate(self, adapter):
-        """The buy's manual approval, or the creative's own, is the approval: queueing it again would loop."""
-        today = datetime.now(UTC)
-        with (
-            patch.object(adapter, "_requires_manual_approval", return_value=True),
-            patch.object(adapter.workflow_manager, "create_approval_workflow_step") as step,
-            patch.object(adapter.creatives_manager, "add_creative_assets", return_value=[]) as push,
-        ):
-            adapter.add_creative_assets("9000001", _PUSHED_ASSETS, today, already_approved=True)
-
-        step.assert_not_called()
-        push.assert_called_once_with("9000001", _PUSHED_ASSETS, today, placement_targeting_map={})
 
 
 class TestGAMActivationWorkflowPath:

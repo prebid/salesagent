@@ -15,7 +15,7 @@ import uuid
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypedDict, assert_never, cast
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -422,68 +422,90 @@ def _merge_creative_enrichment(existing_data: dict | None, status: AssetStatus) 
 
 
 def _record_push_status(
-    creatives: CreativeRepository, creative: DBCreative, statuses: Sequence[AssetStatus] | None
+    creative_repo: CreativeRepository, creative: DBCreative, statuses: Sequence[AssetStatus]
 ) -> "CreativePushFailure | None":
     """Fold what an ad server push reported for ``creative`` into its row: None, or the refusal.
 
-    The one reading of a push result, shared by all three GAM push paths (auto-approval
-    create, manual-approval execution, and retroactive per-creative push — #1506). The status
-    is the one whose ``creative_id`` is the creative's. A ``failed`` status is a refusal, and
-    so is no status for the creative at all; either records nothing, and what a refusal means
-    is the caller's to decide on its path. Any other status is merged
-    (:func:`_merge_creative_enrichment`) and, when that adds something, persisted through
-    ``CreativeRepository.update_data``.
+    The one reading of a push result (:func:`_push_creatives` reads every status through it).
+    The status is the one whose ``creative_id`` is the creative's, and no status for the
+    creative is a refusal. So are ``failed`` and ``rejected``; a refusal records nothing, and
+    what it means is the caller's to decide on its path. ``pending`` is a creative the ad
+    server queued for its own review: nothing is placed yet, so nothing is recorded.
+    ``approved`` is merged (:func:`_merge_creative_enrichment`) and, when that adds something,
+    persisted through ``CreativeRepository.update_data``.
     """
-    status = next((s for s in statuses or () if s.creative_id == creative.creative_id), None)
+    status = next((s for s in statuses if s.creative_id == creative.creative_id), None)
     if status is None:
         return CreativePushFailure(f"Adapter did not report status for creative {creative.creative_id}")
-    if status.status == "failed":
-        return CreativePushFailure(status.message or "Adapter reported upload failure", status.error)
-    merged = _merge_creative_enrichment(creative.data, status)
-    if merged != (creative.data or {}):
-        logger.info(
-            log_safe(
-                f"Enriched creative {creative.creative_id} from adapter push "
-                f"(ad_server_creative_id={merged.get('ad_server_creative_id')}, "
-                f"concept_source={merged.get('concept_source')})"
+    match status.status:
+        case "failed" | "rejected":
+            return CreativePushFailure(status.message or f"Adapter reported the creative {status.status}", status.error)
+        case "pending":
+            logger.info(
+                "Ad server queued creative %s for its own review; nothing recorded", log_safe(creative.creative_id)
             )
-        )
-        creatives.update_data(creative, merged)
+        case "approved":
+            merged = _merge_creative_enrichment(creative.data, status)
+            if merged != (creative.data or {}):
+                logger.info(
+                    "Enriched creative %s from adapter push (ad_server_creative_id=%s, concept_source=%s)",
+                    log_safe(creative.creative_id),
+                    log_safe(merged.get("ad_server_creative_id")),
+                    log_safe(merged.get("concept_source")),
+                )
+                creative_repo.update_data(creative, merged)
+        case unreachable:
+            assert_never(unreachable)
     return None
+
+
+def _push_creatives(
+    adapter: AdServerAdapter,
+    order_id: str,
+    creative_repo: CreativeRepository,
+    pushes: Sequence[tuple[DBCreative, dict[str, Any]]],
+) -> "dict[str, CreativePushFailure]":
+    """Push creatives to the ad server order ``order_id``: the refusals, by creative id.
+
+    The one call to ``adapter.add_creative_assets`` in core, used by every push path.
+    ``pushes`` pairs each creative with the asset built from it. What the ad server reported for
+    each one is read through :func:`_record_push_status`, and each refusal is logged here. An
+    empty result means no creative was refused. What the adapter raises propagates, because each
+    caller handles it its own way.
+    """
+    statuses = adapter.add_creative_assets(order_id, [asset for _creative, asset in pushes], datetime.now(UTC))
+    failures: dict[str, CreativePushFailure] = {}
+    for creative, _asset in pushes:
+        failure = _record_push_status(creative_repo, creative, statuses)
+        if failure is not None:
+            logger.error(
+                "Ad server order %s refused creative %s: %s",
+                log_safe(order_id),
+                log_safe(creative.creative_id),
+                log_safe(failure.reason),
+            )
+            failures[creative.creative_id] = failure
+    return failures
 
 
 def _push_cleared_creatives(
     adapter: AdServerAdapter,
     order_id: str | None,
-    creatives: CreativeRepository,
+    creative_repo: CreativeRepository,
     pushes: Sequence[tuple[DBCreative, dict[str, Any]]],
-) -> "dict[str, CreativePushFailure]":
-    """Push creatives the seller cleared to the ad server order ``order_id``: the refusals, by creative id.
+) -> "PushNotAttempted | dict[str, CreativePushFailure]":
+    """Push creatives the seller cleared to a buy booked earlier, as order ``order_id``.
 
-    The one post-approval push, shared by the approval executor and the retroactive push
-    (#1038). ``pushes`` pairs each creative with the asset built from it. The approval is
-    what the push carries, so ``already_approved=True`` keeps the adapter's own
-    manual-approval gate from queueing it again. Every creative is refused when the adapter
-    traffics no creatives or the buy has no order to push to; otherwise what the ad server
-    reported for each one is recorded through :func:`_record_push_status`. An empty result
-    means every creative was placed. What the adapter raises propagates, because each caller
-    handles it its own way.
+    The push after booking, shared by the approval executor and the retroactive push (#1038).
+    Nothing is attempted when the adapter traffics no creatives
+    (``AdapterCapabilities.supports_creative_trafficking``) or the buy has no order to push to;
+    otherwise this is :func:`_push_creatives`.
     """
     if not adapter.capabilities.supports_creative_trafficking:
-        refusal = CreativePushFailure("Adapter does not support creative upload")
-    elif not order_id:
-        refusal = CreativePushFailure("No ad server order to push to — the buy may not be live yet")
-    else:
-        statuses = adapter.add_creative_assets(
-            order_id, [asset for _creative, asset in pushes], datetime.now(UTC), already_approved=True
-        )
-        failures: dict[str, CreativePushFailure] = {}
-        for creative, _asset in pushes:
-            failure = _record_push_status(creatives, creative, statuses)
-            if failure is not None:
-                failures[creative.creative_id] = failure
-        return failures
-    return {creative.creative_id: refusal for creative, _asset in pushes}
+        return PushNotAttempted("Adapter does not support creative upload")
+    if not order_id:
+        return PushNotAttempted("No ad server order to push to — the buy may not be live yet")
+    return _push_creatives(adapter, order_id, creative_repo, pushes)
 
 
 def _determine_media_buy_status(
@@ -1075,10 +1097,8 @@ def _execute_adapter_media_buy_creation(
         start_time: Resolved campaign start datetime
         end_time: Resolved campaign end datetime
         package_pricing_info: Pricing model info per package
-        adapter: The caller's adapter, which pushes the buy's creatives afterwards. Taken
-            rather than built here: GAM fills its placement targeting map (adcp#208) in
-            create_media_buy and the push reads it back on the same instance, so a second
-            instance would hand the push an empty map.
+        adapter: The caller's adapter, which also pushes the buy's creatives afterwards: one
+            adapter serves the whole request.
 
     Returns:
         AdapterCreateResult from the adapter
@@ -1172,7 +1192,7 @@ def _build_adapter_asset_from_creative(
     tenant_id: str,
     declarations: "Sequence[Any]" = (),
 ) -> tuple[dict[str, Any] | None, str | None]:
-    """Build the asset dict for adapter.creatives_manager.add_creative_assets.
+    """Build the asset dict for adapter.add_creative_assets.
 
     Returns (asset, None) on success, (None, error_message) when url/width/height
     cannot be extracted. Shared by execute_approved_media_buy and push_creative_to_existing_buy.
@@ -1769,11 +1789,12 @@ def execute_approved_media_buy(
         # is separate from this line.
         identity = identity_of(tenant_id, buy_principal_id, buy_account_id)
 
-        # One adapter for the order, the creative push and the approval below: GAM fills its
-        # placement targeting map in create_media_buy and the push reads it back on the same
-        # instance. Built before adapter_ran is set, so a failure here is "never attempted",
-        # and before the unit below opens: get_adapter reads the adapter config in a session of
-        # its own, which would close the unit's session and lose the enrichment written there.
+        # One adapter for the order, the creative push and the approval below. Built before
+        # adapter_ran is set: an adapter that cannot be built asked the ad server nothing, so the
+        # buy was never attempted and stays pending_approval for an operator to retry once the
+        # configuration is fixed. And built before the unit below opens: get_adapter reads the
+        # adapter config in a session of its own, which would close the unit's session and lose
+        # the enrichment written there.
         adapter = get_adapter(identity)
 
         if stored_order_id:
@@ -1892,22 +1913,24 @@ def execute_approved_media_buy(
                     return _mark_approval_failed(tenant_id, media_buy_id, error_msg, uow=uow2)
 
                 if pushes:
-                    logger.info(f"[APPROVAL] Uploading {len(pushes)} creatives to adapter")
+                    logger.info("[APPROVAL] Uploading %d creatives to adapter", len(pushes))
 
+                    assert uow2.creatives is not None
                     try:
                         # The manual-approval push path, so admin-approved buys enrich like the
-                        # other two GAM push sites (#1506). uow2 commits the writeback on block exit.
-                        failures = _push_cleared_creatives(
-                            adapter, order_id, CreativeRepository(session, tenant_id), pushes
-                        )
+                        # other two push sites (#1506). uow2 commits the writeback on block exit.
+                        # FIXME(#1566): a refused creative is logged only, by the push; the order is
+                        # still approved and the buy goes active.
+                        outcome = _push_cleared_creatives(adapter, order_id, uow2.creatives, pushes)
                     except Exception as creative_error:
                         # Creative upload failed - this is critical for GAM orders
                         error_msg = f"Failed to upload creatives to adapter: {str(creative_error)}"
                         logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
                         return _mark_approval_failed(tenant_id, media_buy_id, error_msg, uow=uow2)
-                    for refused_id, failure in failures.items():
-                        # FIXME(#1566): logged only; the order is still approved and the buy goes active.
-                        logger.error(log_safe(f"[APPROVAL] Failed to upload creative {refused_id}: {failure.reason}"))
+                    if isinstance(outcome, PushNotAttempted):
+                        logger.info(
+                            "[APPROVAL] No creative push for %s: %s", log_safe(media_buy_id), log_safe(outcome.reason)
+                        )
             else:
                 logger.info(
                     log_safe(f"[APPROVAL] No creative assignments found for {media_buy_id}, skipping creative upload")
@@ -1917,23 +1940,19 @@ def execute_approved_media_buy(
         # This is necessary because:
         # 1. GAM may still be processing inventory forecasts (NO_FORECAST_YET error)
         # 2. Creatives may have been uploaded after the initial approval attempt
-        logger.info(log_safe(f"[APPROVAL] Attempting to approve order {order_id} in GAM"))
+        logger.info("[APPROVAL] Attempting to approve order %s", log_safe(order_id))
         try:
-            if hasattr(adapter, "orders_manager") and adapter.orders_manager:
-                approval_success = adapter.orders_manager.approve_order(order_id)
-                if approval_success:
-                    logger.info(log_safe(f"[APPROVAL] Successfully approved GAM order {order_id}"))
-                else:
-                    # GAM approval failed - return failure so status can be updated
-                    error_msg = (
-                        f"Failed to approve order {order_id}, "
-                        f"it will remain in DRAFT status. This may be due to missing creatives or "
-                        f"GAM still processing inventory forecasts."
-                    )
-                    logger.warning(f"[APPROVAL] {error_msg}")
-                    return _mark_approval_failed(tenant_id, media_buy_id, error_msg)
+            if adapter.approve_order(order_id):
+                logger.info("[APPROVAL] Order %s approved, or the ad server has nothing to approve", log_safe(order_id))
             else:
-                logger.info("[APPROVAL] Adapter does not support order approval, skipping")
+                # The ad server refused the approval - return failure so status can be updated
+                error_msg = (
+                    f"Failed to approve order {order_id}, "
+                    f"it will remain in DRAFT status. This may be due to missing creatives or "
+                    f"GAM still processing inventory forecasts."
+                )
+                logger.warning(f"[APPROVAL] {error_msg}")
+                return _mark_approval_failed(tenant_id, media_buy_id, error_msg)
         except Exception as approval_error:
             # Approval exception - return failure
             error_msg = f"Failed to approve order {order_id}: {str(approval_error)}"
@@ -2017,6 +2036,13 @@ class CreativePushFailure:
 
     reason: str
     error: AdCPSalesAgentError | None = None
+
+
+@dataclass(frozen=True)
+class PushNotAttempted:
+    """Why a push after booking asked the ad server nothing (:func:`_push_cleared_creatives`)."""
+
+    reason: str
 
 
 def push_creative_to_existing_buy(
@@ -2109,21 +2135,26 @@ def push_creative_to_existing_buy(
             platform_order_id = _stored_order_id(packages)
             try:
                 # ``adapter`` was resolved above, outside every unit. See the comment at the top of the try.
-                failures = _push_cleared_creatives(adapter, platform_order_id, uow.creatives, [(creative, asset)])
+                outcome = _push_cleared_creatives(adapter, platform_order_id, uow.creatives, [(creative, asset)])
             except Exception as e:
                 logger.error(
-                    log_safe(f"[GATE-PUSH] Pushing creative {creative_id} to buy {media_buy_id} raised: {e}"),
+                    "[GATE-PUSH] Pushing creative %s to buy %s raised: %s",
+                    log_safe(creative_id),
+                    log_safe(media_buy_id),
+                    log_safe(e),
                     exc_info=True,
                 )
                 return CreativePushFailure(str(e), adcp_error_for(e))
-            failure = failures.get(creative_id)
+            if isinstance(outcome, PushNotAttempted):
+                return CreativePushFailure(outcome.reason)
+            failure = outcome.get(creative_id)
             if failure is not None:
                 return failure
             logger.info(
-                log_safe(
-                    f"[GATE-PUSH] Pushed creative {creative_id} to live buy "
-                    f"{media_buy_id} (platform order {platform_order_id})"
-                )
+                "[GATE-PUSH] Pushed creative %s to live buy %s (platform order %s)",
+                log_safe(creative_id),
+                log_safe(media_buy_id),
+                log_safe(platform_order_id),
             )
             return None
 
@@ -4363,30 +4394,17 @@ async def _create_media_buy_impl(
                                         )
                                     assert asset is not None
 
-                                    upload_result = adapter.add_creative_assets(
-                                        response.media_buy_id if response.media_buy_id else "",
-                                        [asset],
-                                        datetime.now(UTC),
+                                    # Every adapter is pushed the creatives a create names, whatever
+                                    # it declares for pushes after booking (supports_creative_trafficking).
+                                    # A refusal records no ad server id and is logged by the push; the
+                                    # assignment below keeps the creative pushable later.
+                                    # FIXME(#1566): logged only; the response carries no signal.
+                                    _push_creatives(
+                                        adapter,
+                                        response.media_buy_id or "",
+                                        creative_uow.creatives,
+                                        [(creative, asset)],
                                     )
-                                    failure = _record_push_status(
-                                        CreativeRepository(session, tenant.tenant_id), creative, upload_result
-                                    )
-                                    if failure is not None:
-                                        # Not created in GAM: no ad server id to record. Logged, as on
-                                        # the approval path; the assignment below keeps the creative
-                                        # pushable later.
-                                        # FIXME(#1566): logged only; the response carries no signal.
-                                        logger.error(
-                                            log_safe(
-                                                f"Failed to upload creative {creative_id} to GAM: {failure.reason}"
-                                            )
-                                        )
-                                    else:
-                                        logger.info(
-                                            log_safe(
-                                                f"Successfully uploaded creative {creative_id} to GAM: {upload_result}"
-                                            )
-                                        )
                                 except AdCPSalesAgentError:
                                     raise
                                 except Exception as upload_error:

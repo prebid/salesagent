@@ -9,15 +9,17 @@ import logging
 import math
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import Any
 
 from googleads import ad_manager
+from pydantic import TypeAdapter, ValidationError
+from zeep.helpers import serialize_object
 
 from src.adapters.gam.pricing_compatibility import PricingCompatibility
 from src.adapters.gam.utils.error_handler import map_gam_exception
-from src.adapters.gam.utils.fields import gam_field
 from src.adapters.gam.utils.formatters import format_datetime_for_gam
 from src.adapters.gam.utils.timeout_handler import timeout
+from src.adapters.gam_implementation_config_schema import GAMNumericId
 from src.core.errors.details import CapabilityRefusalDetails
 from src.core.exceptions import (
     AdCPAdapterError,
@@ -34,6 +36,25 @@ logger = logging.getLogger(__name__)
 # Line item type constants for GAM automation
 GUARANTEED_LINE_ITEM_TYPES = {"STANDARD", "SPONSORSHIP"}
 NON_GUARANTEED_LINE_ITEM_TYPES = {"NETWORK", "BULK", "PRICE_PRIORITY", "HOUSE"}
+
+#: The declared type of ``GAMImplementationConfig.native_style_id``, which the booking reads off
+#: the product's raw configuration.
+_NATIVE_STYLE_ID: TypeAdapter[str | None] = TypeAdapter(GAMNumericId | None)
+
+
+def _native_style_id(product: dict[str, Any] | None) -> str | None:
+    """The product's ``native_style_id``, parsed through its declared type; empty is unset.
+
+    Nothing in the application writes the field but the product form, so this read is the
+    first code that sees a hand-typed value. One GAM cannot take as a creative template id is
+    refused here with CONFIGURATION_ERROR (``docs/snippets/compliance-error-codes.mdx``
+    § CONFIGURATION_ERROR @ 3.2.7; ungraded at 3.2.7), rather than by GAM at ``createLineItems``.
+    """
+    raw = ((product or {}).get("implementation_config") or {}).get("native_style_id") or None
+    try:
+        return _NATIVE_STYLE_ID.validate_python(raw)
+    except ValidationError as exc:
+        raise AdCPConfigurationError(field="native_style_id", internal_detail=exc) from exc
 
 
 def _gam_placeholder(slot: dict[str, Any]) -> dict[str, Any]:
@@ -476,6 +497,12 @@ class GAMOrdersManager:
         serving_start = max(start_time, datetime.now(UTC))
         flight_duration_days = max(math.ceil((end_time - serving_start) / timedelta(days=1)), 1)
 
+        # Parsed for every package before the first line item is sent, so a malformed one is
+        # refused with no line item booked.
+        native_style_ids = {
+            package.package_id: _native_style_id(products_map.get(package.package_id)) for package in packages
+        }
+
         for package_index, package in enumerate(packages, start=1):
             # Get product-specific configuration
             product = products_map.get(package.package_id)
@@ -838,7 +865,7 @@ class GAMOrdersManager:
             # A native placeholder names the creative template its creatives are built against, and
             # the creative push reads it back off the line item; one the format did not name takes
             # the product's (GH #1516).
-            if native_style_id := impl_config.get("native_style_id"):
+            if native_style_id := native_style_ids[package.package_id]:
                 for placeholder in creative_placeholders:
                     if placeholder.get("creativeSizeType") == "NATIVE":
                         placeholder.setdefault("creativeTemplateId", native_style_id)
@@ -1097,9 +1124,13 @@ class GAMOrdersManager:
                 # Calculate new goal units based on pricing model
                 # Budget = (costPerUnit / 1000) * goal_units for CPM
                 # Budget = costPerUnit * goal_units for CPC
-                # Use helper function to handle both dict and object responses from GAM API
-                current_cost_per_unit_micro = gam_field(line_item, "costPerUnit", "microAmount", default=0)
-                current_cost_per_unit = float(cast(int, current_cost_per_unit_micro)) / 1_000_000
+                # GAM's answer (a Zeep object; a dict from a stand-in) is read once, by key, into
+                # the two values used here.
+                fields = serialize_object(line_item, dict)
+                cost_per_unit = fields.get("costPerUnit") or {}
+                primary_goal = fields.get("primaryGoal") or {}
+                current_cost_per_unit = int(cost_per_unit.get("microAmount") or 0) / 1_000_000
+                current_goal_units = int(primary_goal["units"]) if primary_goal.get("units") is not None else 100
 
                 if current_cost_per_unit <= 0:
                     logger.error(f"Invalid costPerUnit for line item {line_item_id}: {current_cost_per_unit}")
@@ -1114,7 +1145,7 @@ class GAMOrdersManager:
                     new_goal_units = int(new_budget / current_cost_per_unit)
                 elif pricing_model == "flat_rate":
                     # FLAT_RATE: Keep existing goal units (100% for sponsorship)
-                    new_goal_units = cast(int, gam_field(line_item, "primaryGoal", "units", default=100))
+                    new_goal_units = current_goal_units
                 else:
                     logger.error(f"Unsupported pricing model for budget update: {pricing_model}")
                     return False
